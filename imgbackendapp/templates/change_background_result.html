@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Background Changed Result</title>
+<style>
+body { font-family:'Segoe UI', sans-serif; background:#f0f4ff; padding:20px; }
+.container { max-width:800px; margin:auto; background:white; padding:30px; border-radius:15px; box-shadow:0 10px 25px rgba(0,0,0,0.1);}
+h1 { text-align:center; margin-bottom:20px; }
+.images { display:flex; gap:20px; flex-wrap:wrap; justify-content:center; margin-bottom:20px;}
+.images img { max-width:350px; border-radius:10px; box-shadow:0 5px 15px rgba(0,0,0,0.1);}
+.download-btn { display:inline-block; padding:12px 25px; background:#667eea; color:white; border-radius:10px; text-decoration:none; font-weight:600; margin-top:10px;}
+.download-btn:hover { background:#5a6bd6;}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>✨ Background Changed Successfully!</h1>
+    <div class="images">
+        <div>
+            <h3>Original Ornament</h3>
+            <img src="{{ original_url.url }}" alt="Original">
+        </div>
+        <div>
+            <h3>AI Generated</h3>
+            <img src="{{ generated_url }}" alt="Generated">
+            <a href="{{ generated_url }}" download="ornament_ai.jpg" class="download-btn">Download AI Image</a>
+        </div>
+    </div>
+</div>
+</body>
+</html>

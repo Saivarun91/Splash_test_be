@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Collection Details</title>
+</head>
+<body>
+<h1>{{ project.name }} - Collection Details</h1>
+<p><strong>Final Prompt:</strong> {{ collection.final_moodboard_prompt }}</p>
+
+<h3>Generated Images</h3>
+{% if collection.generated_images.all %}
+    {% for img in collection.generated_images.all %}
+        <img src="{{ img.image.url }}" width="200" style="margin:5px;">
+    {% endfor %}
+{% else %}
+    <p>No images generated yet.</p>
+{% endif %}
+
+<br>
+<a href="{% url 'probackendapp:dashboard' %}">Back to Dashboard</a>
+</body>
+</html>

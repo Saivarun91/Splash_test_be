@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Generate Product-on-Model Images</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+.container { max-width: 900px; margin: 30px auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+h2 { margin-bottom: 20px; }
+img { max-width: 150px; border-radius: 8px; margin: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); cursor: pointer; transition: 0.2s; }
+img:hover { transform: scale(1.05); }
+button { background: #007bff; color: #fff; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; margin-top: 15px; }
+button:hover { background: #0056b3; }
+.preview { display: flex; flex-wrap: wrap; }
+.selected { border: 3px solid #007bff !important; }
+#loading { margin-top: 15px; color: #007bff; display: none; }
+
+.generated-section { margin-top: 30px; }
+.generated-group { margin-bottom: 25px; }
+.generated-images { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.regen-btn {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: 0.3s;
+}
+.regen-btn:hover { background: #1e40af; }
+
+/* Modal styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5);
+    justify-content: center;
+    align-items: center;
+}
+.modal-content {
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    width: 400px;
+    text-align: center;
+}
+.modal textarea {
+    width: 100%;
+    height: 100px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 10px;
+    margin-top: 10px;
+}
+.modal button {
+    margin-top: 10px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.btn-cancel { background: #aaa; color: #fff; }
+.btn-submit { background: #2563eb; color: #fff; }
+
+/* Image View Modal */
+#viewModal {
+    display: none;
+    position: fixed;
+    z-index: 2000;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0,0,0,0.8);
+    justify-content: center;
+    align-items: center;
+}
+#viewModal img {
+    max-width: 90%;
+    max-height: 90%;
+    border-radius: 10px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+}
+#viewModal span.close-btn {
+    position: absolute;
+    top: 20px; right: 30px;
+    font-size: 2rem;
+    color: white;
+    cursor: pointer;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+    <h2>Generate Product-on-Model Images</h2>
+
+    <!-- Product Images -->
+    <div>
+        <h4>Uploaded Product Images</h4>
+        <div class="preview" id="product-images-container">
+            {% for img in product_images %}
+                <img src="{{ img.uploaded_image_url }}" data-path="{{ img.uploaded_image_path }}" alt="Product Image">
+            {% empty %}
+                <p>No product images uploaded yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Model Images -->
+    <div>
+        <h4>Select Model Image</h4>
+        <div class="preview" id="model-images-container">
+            {% for model in model_images %}
+                <img src="{{ model.cloud }}" data-path="{{ model.local }}" alt="Model Image">
+            {% empty %}
+                <p>No model images available.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Generate Button -->
+    <div>
+        <button id="generate-btn">Generate Composite Images for All Products</button>
+        <div id="loading">Generating images for all product images. Please wait...</div>
+    </div>
+
+    <!-- Generated Section -->
+    <div class="generated-section">
+        <h4>Generated Product-on-Model Images</h4>
+
+        {% if product_images %}
+            {% for p in product_images %}
+                <div class="generated-group">
+                    <p><strong>Original Product:</strong></p>
+                    <img src="{{ p.uploaded_image_url }}" alt="Product Image">
+
+                    {% if p.generated_images %}
+                        <p><strong>Generated Variants:</strong></p>
+                        <div class="generated-images">
+                            {% for g in p.generated_images %}
+                                {% with g.regenerated_images|last as last_regen %}
+                                <div style="text-align:center; margin-bottom: 15px;">
+                                    <img class="regen-display viewable"
+                                         src="{% if last_regen %}{{ last_regen.cloud_url }}{% else %}{{ g.cloud_url }}{% endif %}"
+                                         alt="{{ g.type }}"
+                                         data-original="{{ g.cloud_url }}"
+                                         data-regenerated="{% if last_regen %}{{ last_regen.cloud_url }}{% else %}{{ g.cloud_url }}{% endif %}"
+                                         style="max-width:150px;">
+                                    <br>
+                                    <button class="regen-btn"
+                                            data-product-path="{{ p.uploaded_image_path }}"
+                                            data-gen-path="{{ g.local_path }}"
+                                            data-collection="{{ collection.id }}"
+                                            style="margin-top:5px;">
+                                        🔁 Regenerate
+                                    </button>
+                                </div>
+                                {% endwith %}
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p style="color:gray;">No AI-generated images yet.</p>
+                    {% endif %}
+                </div>
+                <hr>
+            {% endfor %}
+        {% else %}
+            <p>No product images available.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Regeneration Modal -->
+<div id="regenModal" class="modal">
+    <div class="modal-content">
+        <h3>Regenerate Image</h3>
+        <textarea id="regenPrompt" placeholder="Enter a new creative prompt..."></textarea>
+        <div>
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-submit" onclick="submitRegeneration()">Regenerate</button>
+        </div>
+    </div>
+</div>
+
+<!-- View Image Modal -->
+<div id="viewModal">
+    <span class="close-btn">&times;</span>
+    <img src="" alt="View Image">
+</div>
+
+<script>
+let selectedModelPath = null;
+let selectedProductPath = null;
+let selectedGeneratedPath = null;
+let selectedCollectionId = null;
+
+// --- Model Image Selection ---
+document.querySelectorAll('#model-images-container img').forEach(img => {
+    img.addEventListener('click', function() {
+        document.querySelectorAll('#model-images-container img').forEach(i => i.classList.remove('selected'));
+        this.classList.add('selected');
+        selectedModelPath = this.getAttribute('data-path');
+    });
+});
+
+// --- Generate All Product Images ---
+document.getElementById('generate-btn').addEventListener('click', async function() {
+    if (!selectedModelPath) { alert("Please select a model image."); return; }
+    const productImages = Array.from(document.querySelectorAll('#product-images-container img'))
+        .map(img => img.getAttribute('data-path'));
+    if (!productImages.length) { alert("No product images found."); return; }
+
+    const csrftoken = "{{ csrf_token }}";
+    const collectionId = "{{ collection.id }}";
+    document.getElementById('loading').style.display = "block";
+
+    try {
+        const res = await fetch(`/probackendapp/generate-all-product-model-images/${collectionId}/`, {
+            method: "POST",
+            headers: { "X-CSRFToken": csrftoken, "Content-Type": "application/json" },
+            body: JSON.stringify({ model_local_path: selectedModelPath, product_paths: productImages })
+        });
+        const data = await res.json();
+        document.getElementById('loading').style.display = "none";
+        if (data.success) { alert("✅ All product-on-model images generated successfully!"); location.reload(); }
+        else { alert("⚠️ " + data.error); }
+    } catch (err) {
+        console.error(err);
+        document.getElementById('loading').style.display = "none";
+        alert("❌ Error generating images.");
+    }
+});
+
+// --- Regeneration Modal Handling ---
+document.querySelectorAll('.regen-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        selectedProductPath = btn.getAttribute('data-product-path');
+        selectedGeneratedPath = btn.getAttribute('data-gen-path');
+        selectedCollectionId = btn.getAttribute('data-collection');
+        document.getElementById('regenModal').style.display = 'flex';
+    });
+});
+
+function closeModal() {
+    document.getElementById('regenModal').style.display = 'none';
+    document.getElementById('regenPrompt').value = '';
+}
+
+async function submitRegeneration() {
+    const prompt = document.getElementById('regenPrompt').value.trim();
+    if (!prompt) { alert("Please enter a new prompt."); return; }
+
+    const payload = {
+        product_image_path: selectedProductPath,
+        generated_image_path: selectedGeneratedPath,
+        prompt: prompt
+    };
+
+    try {
+        const resp = await fetch(`/probackendapp/regenerate/${selectedCollectionId}/`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await resp.json();
+        if (data.success) {
+            alert("✅ Image regenerated successfully!");
+            closeModal();
+            // Update image dynamically
+            document.querySelectorAll(`.regen-btn[data-gen-path="${selectedGeneratedPath}"]`).forEach(btn => {
+                const container = btn.closest('div');
+                const img = container.querySelector('.regen-display');
+                img.src = data.url;
+                img.setAttribute('data-regenerated', data.url);
+            });
+        } else { alert("⚠️ " + data.error); }
+    } catch (err) {
+        alert("❌ Error: " + err);
+    }
+}
+
+// --- Image View Modal ---
+const viewModal = document.getElementById('viewModal');
+const viewImg = viewModal.querySelector('img');
+const closeBtn = viewModal.querySelector('.close-btn');
+
+document.querySelectorAll('.viewable').forEach(img => {
+    img.addEventListener('click', () => {
+        viewImg.src = img.src;
+        viewModal.style.display = 'flex';
+    });
+});
+
+closeBtn.addEventListener('click', () => viewModal.style.display = 'none');
+viewModal.addEventListener('click', (e) => {
+    if (e.target === viewModal) viewModal.style.display = 'none';
+});
+
+// Close regeneration modal if background clicked
+document.getElementById('regenModal').addEventListener('click', (e) => {
+    if (e.target.id === 'regenModal') closeModal();
+});
+</script>
+</body>
+</html>

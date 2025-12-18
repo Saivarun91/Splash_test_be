@@ -1,0 +1,363 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Upload Ornament | AI Background Generator</title>
+<style>
+:root {
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --muted: #6b7280;
+  --accent: #0f62ff;
+  --success: #065f46;
+  --error: #991b1b;
+  --info: #083663;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  background: var(--bg);
+  padding: 32px;
+}
+
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06);
+}
+
+h1 {
+  font-size: 24px;
+  color: #0b1220;
+  margin-bottom: 12px;
+}
+
+p.lead {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 24px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 350px;
+  gap: 20px;
+}
+
+@media (max-width: 760px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .right {
+    order: 2;
+    margin-top: 20px;
+  }
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #263247;
+  margin-bottom: 6px;
+}
+
+input[type="file"],
+input[type="text"],
+textarea,
+input[type="color"] {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+}
+
+textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.small {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 12px 18px;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 14px;
+  transition: 0.3s all ease;
+}
+
+.btn:hover {
+  background: #0d4fcc;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.messages {
+  margin-bottom: 16px;
+}
+
+.msg {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.msg.success {
+  background: #ecfdf5;
+  color: var(--success);
+  border: 1px solid #bbf7d0;
+}
+
+.msg.error {
+  background: #fff1f2;
+  color: var(--error);
+  border: 1px solid #fecaca;
+}
+
+.msg.info {
+  background: #eff6ff;
+  color: var(--info);
+  border: 1px solid #bfdbfe;
+}
+
+.errors {
+  color: var(--error);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.right {
+  background: #fbfdff;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-start;
+  border: 1px solid #eef2ff;
+}
+
+.preview {
+  width: 100%;
+  min-height: 300px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #f9fafb;
+  border: 1px dashed #d1d5db;
+  transition: 0.3s all ease;
+}
+
+.preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.meta {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.meta .note {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.field-errors {
+  font-size: 13px;
+  color: var(--error);
+}
+
+input[type="color"] {
+  cursor: pointer;
+  padding: 0;
+  height: 36px;
+  width: 36px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+}
+
+.generated-images {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.generated-images img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Upload Ornament — AI Background Generator</h1>
+<p class="lead">Upload an ornament image, pick a plain background color (or enter a hex / name), and optionally add instructions for Gemini.</p>
+
+<div class="messages">
+  {% for message in messages %}
+    <div class="msg {{ message.tags }}">{{ message }}</div>
+  {% endfor %}
+</div>
+
+<div class="grid">
+  <!-- Left: Form -->
+  <div class="left">
+    <form method="post" enctype="multipart/form-data" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="errors">
+          {% for err in form.non_field_errors %}<div>{{ err }}</div>{% endfor %}
+        </div>
+      {% endif %}
+
+      <div class="field">
+        <label for="{{ form.image.id_for_label }}">Ornament Image</label>
+        {{ form.image }}
+        {% if form.image.errors %}
+          <div class="field-errors">
+            {% for e in form.image.errors %}{{ e }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="field">
+        <label for="background_color_text">Background Color</label>
+        <div class="row">
+          <input type="color" id="background_color_picker">
+          <input type="text" name="background_color" id="background_color_text" value="white">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="prompt_text">Custom Prompt (optional)</label>
+        <textarea name="prompt" id="prompt_text"></textarea>
+      </div>
+
+      <div style="margin-top:6px;">
+        <button type="submit" class="btn">Upload & Generate</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Right: Preview -->
+  <aside class="right">
+    <div class="preview" id="imagePreview">
+      {% if ornament_doc %}
+        <img src="{{ ornament_doc.generated_image_url }}" alt="Generated Ornament">
+      {% else %}
+        <span class="small">No image selected</span>
+      {% endif %}
+    </div>
+
+    <div class="meta">
+      <div class="note">Background preview:</div>
+      <div id="bgSwatch" style="width:36px; height:24px; border-radius:6px; border:1px solid #e6e9ef; background:#ffffff"></div>
+    </div>
+
+    {% if ornament_doc %}
+      <div class="generated-images">
+        <div class="small">Original Ornament:</div>
+        <img src="{{ ornament_doc.uploaded_image_url }}" alt="Original Ornament">
+        <div class="small">Generated Ornament:</div>
+        <img src="{{ ornament_doc.generated_image_url }}" alt="Generated Ornament">
+      </div>
+    {% else %}
+      <div class="small">After generation, you'll see the generated image here.</div>
+    {% endif %}
+  </aside>
+</div>
+</div>
+
+<script>
+(function(){
+  const fileInput = document.querySelector('input[type="file"]');
+  const preview = document.getElementById('imagePreview');
+  const picker = document.getElementById('background_color_picker');
+  const bgText = document.getElementById('background_color_text');
+  const bgSwatch = document.getElementById('bgSwatch');
+
+  if(picker && bgText){
+    picker.addEventListener('input', (e)=> {
+      bgText.value = e.target.value;
+      bgSwatch.style.background = e.target.value;
+    });
+  }
+
+  bgText.addEventListener('input', (e)=>{
+    const v = e.target.value.trim();
+    if(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)){
+      if(picker) picker.value = v;
+      bgSwatch.style.background = v;
+    } else {
+      bgSwatch.style.background = v || '#ffffff';
+    }
+  });
+
+  if(fileInput){
+    fileInput.addEventListener('change', (ev)=>{
+      const f = ev.target.files && ev.target.files[0];
+      preview.innerHTML = '';
+      if(!f){
+        preview.innerHTML = '<span class="small">No image selected</span>';
+        return;
+      }
+      const url = URL.createObjectURL(f);
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = 'Ornament preview';
+      img.onload = ()=> URL.revokeObjectURL(url);
+      preview.appendChild(img);
+    });
+  }
+
+  bgSwatch.style.background = bgText.value || '#ffffff';
+})();
+</script>
+</body>
+</html>

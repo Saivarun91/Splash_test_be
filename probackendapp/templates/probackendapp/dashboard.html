@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+</head>
+<body>
+<h1>Project Dashboard</h1>
+<a href="{% url 'probackendapp:create_project' %}">+ Create New Project</a>
+<ul>
+{% for project in projects %}
+    <li>
+        <strong>{{ project.name }}</strong> - {{ project.about }}
+        <a href="{% url 'probackendapp:project_setup_description' project.id %}">Add Collection</a>
+    </li>
+{% empty %}
+    <li>No projects yet.</li>
+{% endfor %}
+</ul>
+</body>
+</html>

@@ -1,0 +1,168 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate Campaign Shot</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #fafafa;
+            font-family: "Poppins", sans-serif;
+        }
+        .container {
+            max-width: 900px;
+            margin-top: 50px;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+        }
+        h2 {
+            text-align: center;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 25px;
+        }
+        .form-label {
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+        .btn-primary {
+            background-color: #6f42c1;
+            border: none;
+            font-weight: 500;
+        }
+        .btn-primary:hover {
+            background-color: #59309d;
+        }
+        .generated-image {
+            margin-top: 40px;
+            text-align: center;
+        }
+        .generated-image img {
+            max-width: 100%;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+        }
+        .ornament-item {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #eee;
+        }
+        .add-btn {
+            background-color: #28a745;
+            color: white;
+            border: none;
+        }
+        .add-btn:hover {
+            background-color: #218838;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Generate Campaign Shot</h2>
+
+    {% if messages %}
+    <div>
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} mt-2">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="POST" enctype="multipart/form-data" id="campaignForm">
+        {% csrf_token %}
+
+        <!-- Model Type -->
+        <div class="mb-3">
+            <label class="form-label">Select Model Type</label>
+            <select name="model_type" id="modelTypeSelect" class="form-select" required>
+                <option value="ai_model" {% if model_type == "ai_model" %}selected{% endif %}>AI Model</option>
+                <option value="real_model" {% if model_type == "real_model" %}selected{% endif %}>Real Model</option>
+            </select>
+        </div>
+
+        <!-- Upload Real Model -->
+        <div class="mb-3 hidden" id="realModelDiv">
+            <label class="form-label">Upload Real Model Image</label>
+            <input type="file" name="model_image" accept="image/*" class="form-control">
+        </div>
+
+        <!-- Ornaments Section -->
+        <div id="ornamentSection">
+            <label class="form-label">Upload Ornaments</label>
+            <div class="ornament-item">
+                <input type="file" name="ornament_images" accept="image/*" class="form-control mb-2" required>
+                <input type="text" name="ornament_names" placeholder="Enter ornament name" class="form-control" required>
+            </div>
+        </div>
+        <button type="button" class="btn add-btn mb-3" id="addOrnamentBtn">+ Add Another Ornament</button>
+
+        <!-- Theme Images -->
+        <div class="mb-3">
+            <label class="form-label">Upload Theme Images (optional)</label>
+            <input type="file" name="theme_images" accept="image/*" multiple class="form-control">
+            <small class="text-muted">You can upload multiple theme reference images.</small>
+        </div>
+
+        <!-- Prompt -->
+        <div class="mb-3">
+            <label class="form-label">Campaign Description / Prompt</label>
+            <textarea name="prompt" class="form-control" rows="4" placeholder="Describe your campaign theme, mood, style, lighting, and details..." required>{{ prompt }}</textarea>
+        </div>
+
+        <div class="text-center">
+            <button type="submit" class="btn btn-primary px-4 py-2">Generate Campaign Image</button>
+        </div>
+    </form>
+
+    <!-- Generated Image Display -->
+    {% if generated_image_url %}
+    <div class="generated-image">
+        <h4 class="mt-4 mb-3">Generated Campaign Shot</h4>
+        <img src="{{ generated_image_url }}" alt="Generated Campaign Image">
+        <div class="mt-3">
+            <a href="{{ generated_image_url }}" target="_blank" class="btn btn-outline-secondary">View Full Image</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+    // Show/hide real model upload field
+    const modelSelect = document.getElementById('modelTypeSelect');
+    const realModelDiv = document.getElementById('realModelDiv');
+
+    function toggleRealModel() {
+        if(modelSelect.value === 'real_model') {
+            realModelDiv.classList.remove('hidden');
+        } else {
+            realModelDiv.classList.add('hidden');
+        }
+    }
+    modelSelect.addEventListener('change', toggleRealModel);
+    toggleRealModel(); // initial check
+
+    // Add more ornament upload sections dynamically
+    document.getElementById('addOrnamentBtn').addEventListener('click', function() {
+        const section = document.createElement('div');
+        section.classList.add('ornament-item');
+        section.innerHTML = `
+            <input type="file" name="ornament_images" accept="image/*" class="form-control mb-2" required>
+            <input type="text" name="ornament_names" placeholder="Enter ornament name" class="form-control" required>
+        `;
+        document.getElementById('ornamentSection').appendChild(section);
+    });
+</script>
+
+</body>
+</html>

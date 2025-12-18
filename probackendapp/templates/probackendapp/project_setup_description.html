@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ project.name }} - Add / Update Collection</title>
+</head>
+<body>
+    <h1>{{ project.name }} - Add / Update Collection</h1>
+
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        
+        <label>Description / Prompt:</label><br>
+        <textarea name="description" rows="4" required>{{ existing_description }}</textarea><br><br>
+        
+        <label>Upload reference image (optional):</label><br>
+        <input type="file" name="uploaded_image" accept="image/*"><br><br>
+
+        <button type="submit">Get Suggestions</button>
+    </form>
+
+    {% if collection_exists %}
+        <hr>
+        <p>
+            A collection already exists for this project.
+            <a href="{% url 'probackendapp:project_setup_select' project.id collection_id %}">
+                👉 View Your Suggestions
+            </a>
+        </p>
+    {% endif %}
+
+    <br>
+    <a href="{% url 'probackendapp:dashboard' %}">Back to Dashboard</a>
+</body>
+</html>
