@@ -9,6 +9,7 @@ from .models import Project, Collection, CollectionItem
 from django.shortcuts import render, redirect
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
 import os
 import requests
 import json
@@ -461,20 +462,26 @@ except ImportError:
 #         return Response({"error": str(e)})
 
 
-def generate_ai_images(request, collection_id):
-    if request.method != "POST":
-        return JsonResponse({"error": "Invalid request method."}, status=405)
+# Constants for image generation
+MAX_IMAGE_BYTES = 9 * 1024 * 1024  # 9MB maximum image size
+CLOUDINARY_UPLOAD_TIMEOUT = 120  # 120 seconds timeout for Cloudinary uploads
 
+def generate_ai_images_background(collection_id, user_id):
+    """
+    Background function for generating AI model images for a collection.
+    This function is called by Celery and doesn't use request object.
+    Returns a dict with success status and results.
+    """
     try:
         collection = Collection.objects.get(id=collection_id)
     except Collection.DoesNotExist:
-        return JsonResponse({"error": "Collection not found."}, status=404)
+        return {"success": False, "error": "Collection not found."}
 
     description = getattr(collection, "description", "") or ""
     generated_images = []
 
     if not has_genai:
-        return JsonResponse({"error": "Gemini SDK not available."}, status=500)
+        return {"success": False, "error": "Gemini SDK not available."}
 
     client = genai.Client(api_key=settings.GOOGLE_API_KEY)
     model_name = "gemini-2.5-flash-image-preview"
@@ -489,7 +496,6 @@ def generate_ai_images(request, collection_id):
         contents = [{"role": "user", "parts": [{"text": prompt_text}]}]
 
         try:
-            # NOTE: If the SDK supports a request timeout param, use it. If not, rely on internal timeout guards.
             resp = client.models.generate_content(
                 model=model_name,
                 contents=contents,
@@ -498,7 +504,6 @@ def generate_ai_images(request, collection_id):
                 ),
             )
         except Exception as gen_err:
-            # Log and continue — don't let one failure kill the whole loop
             print(f"❌ Error generating image (iteration {i+1}): {gen_err}")
             traceback.print_exc()
             continue
@@ -554,7 +559,6 @@ def generate_ai_images(request, collection_id):
         buf.seek(0)
 
         try:
-            # pass a timeout so upload doesn't hang indefinitely
             upload_result = cloudinary.uploader.upload(
                 buf,
                 folder="collection_ai_models",
@@ -582,8 +586,7 @@ def generate_ai_images(request, collection_id):
         try:
             from .history_utils import track_project_image_generation
             track_project_image_generation(
-                user_id=str(getattr(request, "user", None)
-                            and getattr(request.user, "id", "")),
+                user_id=str(user_id),
                 collection_id=str(collection.id),
                 image_type="project_ai_model_generation",
                 image_url=secure_url,
@@ -610,10 +613,38 @@ def generate_ai_images(request, collection_id):
         print(f"⚠️ Error collecting saved images: {e}")
         traceback.print_exc()
 
-    return JsonResponse({
+    return {
+        "success": True,
         "images": generated_images,
-        "saved_images": saved_images
-    })
+        "saved_images": saved_images,
+        "total_generated": len(generated_images)
+    }
+
+
+def generate_ai_images(request, collection_id):
+    """
+    Generate AI images for a collection using Celery for background processing.
+    Now uses Celery for background processing.
+    """
+    from .tasks import generate_ai_images_task
+
+    try:
+        # Get user_id from request
+        user_id = str(request.user.id) if hasattr(
+            request, 'user') and request.user else None
+
+        # Start Celery task
+        task = generate_ai_images_task.delay(collection_id, user_id)
+
+        return JsonResponse({
+            "success": True,
+            "message": "AI image generation started.",
+            "task_id": task.id
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
 
 # def save_generated_images(request, collection_id):
 #     if request.method != "POST":
@@ -1416,6 +1447,393 @@ def _check_ornament_type_match(product_ornament_type, master_analysis_text):
             return True
 
     return False
+
+
+def generate_single_product_model_image_background(collection_id, user_id, product_index, prompt_key, job_id=None):
+    """
+    Generate a single image for a specific product index and prompt key.
+    This is the core worker logic used by Celery so that each task
+    is responsible for exactly ONE image.
+    """
+    import os
+    import base64
+    import uuid
+    import json
+    import traceback
+    import cloudinary.uploader
+    from datetime import datetime
+    from google import genai
+    from google.genai import types
+    from django.conf import settings
+
+    from .job_models import ImageGenerationJob
+
+    try:
+        collection = Collection.objects.get(id=collection_id)
+        if not collection.items:
+            return {"success": False, "error": "No items found in collection."}
+
+        item = collection.items[0]
+
+        if not hasattr(item, "selected_model") or not item.selected_model:
+            return {"success": False, "error": "No model selected. Please select a model first."}
+
+        selected_model = item.selected_model
+        model_local_path = selected_model.get("local")
+        if not model_local_path or not os.path.exists(model_local_path):
+            return {"success": False, "error": "Selected model image not found on server."}
+
+        if not hasattr(item, "generated_prompts") or not item.generated_prompts:
+            return {"success": False, "error": "No generated prompts found."}
+
+        # Bound check for product index
+        if product_index < 0 or product_index >= len(item.product_images):
+            return {"success": False, "error": "Invalid product index."}
+
+        if prompt_key not in item.generated_prompts:
+            return {"success": False, "error": f"Prompt key '{prompt_key}' not found."}
+
+        # Read model image once
+        with open(model_local_path, "rb") as f:
+            model_bytes = f.read()
+        model_b64 = base64.b64encode(model_bytes).decode("utf-8")
+
+        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        model_name = "gemini-2.5-flash-image-preview"
+
+        # Prompt templates
+        from .prompt_initializer import get_prompt_from_db
+
+        default_white_bg = """remove the background from the product image and replace it with a clean, elegant white studio background.
+        Do NOT modify, alter, or redesign the product in any way — its color, shape, texture, and proportions must remain exactly the same.(important dont change the product image) 
+Generate a high-quality product photo on a clean, elegant white studio background. 
+The product should appear exactly as in the input image, only placed against a professional white background. 
+Ensure balanced, soft studio lighting with natural shadows and realistic reflections. 
+Highlight product clarity and detail. 
+Follow this specific style prompt: {prompt_text}"""
+
+        default_bg_replace = """Use the provided ornament product image as the hero subject of a professional product photography shot. 
+Do NOT redraw, reinterpret, or change the ornament in any way. Do NOT modify the ornament's shape, texture, color, size, material, reflections, orientation, or proportions. The ornament must appear exactly as in the original product image.
+
+CAMERA ANGLE AND PERSPECTIVE (CRITICAL): Follow the EXACT camera angle and perspective described in the style reference below. If the style reference specifies a camera angle (e.g., "elevated diagonal perspective", "overhead 90-degree angle", "flat-lay top-down view"), you MUST use that EXACT angle. Do NOT default to a flat-lay view unless explicitly specified in the style reference.
+
+The ornament must stay clearly visible, well-framed, and the dominant focal point of the composition.
+
+Surround the ornament with carefully chosen supporting elements and objects that enhance its appeal, such as coordinated fabrics, jewelry props, trays, soft decor pieces, or festive details, while keeping the scene clean and premium. 
+All added elements must support the ornament, not compete with it.
+
+Place the ornament on a realistic premium surface such as silk fabric, velvet, marble, or textured stone, maintaining full physical contact between the ornament and the surface with grounded shadows directly beneath it (unless the style reference specifies a different placement or arrangement).
+
+Create a studio-quality product photography environment with:
+- soft diffused lighting (adjust based on style reference)
+- gentle warm highlights
+- clean, natural shadow falloff
+- high surface and material realism
+- crisp focus on the ornament and slightly softer focus on surrounding elements
+
+Background and props may add mood and storytelling but must remain visually secondary to the ornament. 
+The ornament must always remain the sharpest, brightest, and most visually dominant element in the frame.
+
+MASTER ANALYSIS FOLLOWING (CRITICAL): If the style prompt below is a comprehensive master theme analysis, you MUST follow it EXACTLY without missing a single detail. The master analysis contains specific information about:
+- Exact camera angle and perspective (e.g., "elevated diagonal perspective", "photographed from an overhead 90-degree angle", "flat-lay top-down view") - FOLLOW THIS EXACTLY
+- Exact placement and positioning of ornaments (e.g., "rests diagonally", "gracefully drapes", "positioned elegantly beside", "commands attention") - FOLLOW THIS EXACTLY
+- Precise lighting conditions (e.g., "soft, warm ambient lighting", "shallow depth of field", "soft diffused top lighting") - FOLLOW THIS EXACTLY
+- Specific surface materials and textures (e.g., "light beige, rectangular jewelry box", "soft, neutral surface", "silk fabric, velvet, marble") - FOLLOW THIS EXACTLY
+- Exact artistic style and mood (e.g., "sophisticated minimalism", "opulent heritage", "serene luxury") - FOLLOW THIS EXACTLY
+- All supporting elements and props mentioned (e.g., flowers, decorative pieces, fabrics, vintage treasure chest, ceremonial fabric) - FOLLOW THIS EXACTLY
+- Follow EVERY detail from the master analysis exactly as described - do not generalize or simplify any aspect.
+
+The style reference below contains the EXACT description including camera angle, placement, lighting, materials, and all visual elements. Follow it PRECISELY:
+{prompt_text}
+"""
+
+        default_model = """CRITICAL MODEL PRESERVATION REQUIREMENTS - MANDATORY:
+
+Use the uploaded model image as the absolute identity reference. The generated model MUST look EXACTLY the same as the uploaded model with ZERO changes to:
+
+FACIAL STRUCTURE (MANDATORY - EXACT MATCH):
+- Exact facial bone structure: jawline, cheekbones, chin shape, forehead shape
+- Exact facial proportions: face width, face length, facial symmetry
+- Exact eye structure: eye shape, eye size, eye spacing, eyelid shape, eyebrow shape and position
+- Exact nose structure: nose shape, nose size, nostril shape, bridge height
+- Exact mouth structure: lip shape, lip size, lip thickness, mouth width
+- Exact facial features positioning: distance between features, feature alignment
+
+AGE PRESERVATION (MANDATORY - EXACT MATCH):
+- Exact age appearance: maintain the exact same age look as the uploaded model
+- Exact skin characteristics: skin texture, skin tone, skin undertones, complexion
+- Exact facial maturity: maintain the same level of facial maturity and age markers
+- Do NOT make the model look younger or older - maintain EXACT age appearance
+
+ADDITIONAL PRESERVATION REQUIREMENTS:
+- Exact skin tone, skin texture, complexion, undertones, and skin characteristics
+- Exact hair: hair color, hair texture, hair style, hair length, hairline, and any highlights or natural variations
+- Exact body proportions: height, build, body shape, muscle definition, and physical characteristics
+- Exact facial expressions style and natural features
+- Exact distinctive characteristics and unique features
+- Do NOT beautify, stylize, enhance, or alter the model in ANY way
+- The model's identity must remain 100% identical to the original uploaded model image
+
+PRODUCT PRESERVATION:
+Place ONLY the given uploaded product (ornament/jewelry) on the model. The product must remain 100% identical to the original product image with NO changes in design, shape, stone layout, metal finish, color, texture, reflections, or micro detailing. Do NOT reinterpret, redraw, enhance, or modify the product in any way.
+
+INTEGRATION:
+Ensure natural and physically accurate product fitting on the model with correct scale, proportion, weight placement, and gravity behavior. Match the original lighting interaction between the product and the model's skin for seamless realism.
+
+QUALITY STANDARDS:
+The final image must appear as a high-end professional fashion product photography shoot with:
+- soft studio lighting
+- natural shadow falloff
+- balanced highlights
+- clean depth separation
+- sharp focus on the product and model
+
+STYLE REFERENCE:
+Follow the pose, framing, and environmental styling ONLY as described in the style reference below, without changing the product or the model identity.
+
+Use this style reference strictly for framing, mood, and environment (NOT for modifying the product or model):
+{prompt_text}
+"""
+
+        default_campaign = """CRITICAL MODEL PRESERVATION REQUIREMENTS - MANDATORY:
+
+Create a professional campaign-style image where the uploaded model MUST look EXACTLY the same as the uploaded model image with ZERO changes to:
+
+FACIAL STRUCTURE (MANDATORY - EXACT MATCH):
+- Exact facial bone structure: jawline, cheekbones, chin shape, forehead shape
+- Exact facial proportions: face width, face length, facial symmetry
+- Exact eye structure: eye shape, eye size, eye spacing, eyelid shape, eyebrow shape and position
+- Exact nose structure: nose shape, nose size, nostril shape, bridge height
+- Exact mouth structure: lip shape, lip size, lip thickness, mouth width
+- Exact facial features positioning: distance between features, feature alignment
+
+AGE PRESERVATION (MANDATORY - EXACT MATCH):
+- Exact age appearance: maintain the exact same age look as the uploaded model
+- Exact skin characteristics: skin texture, skin tone, skin undertones, complexion
+- Exact facial maturity: maintain the same level of facial maturity and age markers
+- Do NOT make the model look younger or older - maintain EXACT age appearance
+
+ADDITIONAL PRESERVATION REQUIREMENTS:
+- Exact skin tone, skin texture, complexion, undertones, and skin characteristics
+- Exact hair: hair color, hair texture, hair style, hair length, hairline, and any highlights or natural variations
+- Exact body proportions: height, build, body shape, muscle definition, and physical characteristics
+- Exact facial expressions style and natural features
+- Exact distinctive characteristics and unique features
+- Do NOT beautify, stylize, enhance, or alter the model in ANY way
+- The model's identity must remain 100% identical to the original uploaded model image
+
+PRODUCT PRESERVATION:
+The model is wearing ONLY the given product, keeping the product exactly as it appears in the original product image — no changes in color, shape, or design.
+
+STYLING:
+Use a lifestyle or editorial-style background that enhances the brand aesthetic while maintaining focus on the product. 
+Ensure cinematic yet natural studio lighting, soft shadows, and high-end magazine-quality realism.
+
+STYLE REFERENCE:
+Follow this specific style prompt: {prompt_text}"""
+
+        prompt_templates = {
+            "white_background": get_prompt_from_db("white_background_template", default_white_bg),
+            "background_replace": get_prompt_from_db("background_replace_template", default_bg_replace),
+            "model_image": get_prompt_from_db("model_image_template", default_model),
+            "campaign_image": get_prompt_from_db("campaign_image_template", default_campaign),
+        }
+
+        # Logger
+        import logging
+        from celery.utils.log import get_task_logger
+
+        try:
+            logger = get_task_logger(__name__)
+        except Exception:
+            logger = logging.getLogger(__name__)
+
+        product = item.product_images[product_index]
+        product_path = product.uploaded_image_path
+        if not os.path.exists(product_path):
+            msg = f"[JOB {job_id}] Product image path does not exist: {product_path}"
+            logger.warning(msg)
+            print(msg)
+            return {"success": False, "error": "Product image path does not exist."}
+
+        with open(product_path, "rb") as f:
+            product_bytes = f.read()
+        product_b64 = base64.b64encode(product_bytes).decode("utf-8")
+
+        prompt_text = item.generated_prompts.get(prompt_key, "")
+        if not prompt_text or not prompt_text.strip():
+            return {"success": False, "error": f"Prompt for key '{prompt_key}' is empty."}
+
+        # Build prompt as in bulk generator (reuse templates/logic where possible)
+        custom_prompt = prompt_text
+        template = prompt_templates.get(prompt_key, "")
+        if template:
+            custom_prompt = template.format(prompt_text=prompt_text)
+
+        contents = [
+            {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}},
+            {"inline_data": {"mime_type": "image/jpeg", "data": product_b64}},
+            {"text": custom_prompt},
+        ]
+
+        config = types.GenerateContentConfig(
+            response_modalities=[types.Modality.IMAGE]
+        )
+
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=config,
+        )
+
+        if not resp.candidates:
+            return {"success": False, "error": "No candidates returned from Gemini API."}
+
+        candidate = resp.candidates[0]
+        generated_bytes = None
+
+        if candidate.content and getattr(candidate.content, "parts", None):
+            for part in candidate.content.parts:
+                if part.inline_data and part.inline_data.data:
+                    data = part.inline_data.data
+                    generated_bytes = data if isinstance(data, bytes) else base64.b64decode(data)
+                    break
+
+        if not generated_bytes:
+            return {"success": False, "error": "No image bytes returned from Gemini API."}
+
+        # Save locally
+        output_dir = os.path.join("media", "composite_images", str(collection_id))
+        os.makedirs(output_dir, exist_ok=True)
+        local_path = os.path.join(output_dir, f"{uuid.uuid4()}_{prompt_key}.png")
+
+        with open(local_path, "wb") as f:
+            f.write(generated_bytes)
+
+        # Upload to Cloudinary
+        cloud_upload = cloudinary.uploader.upload(
+            local_path,
+            folder=f"ai_studio/composite/{collection_id}/{uuid.uuid4()}/",
+            use_filename=True,
+            unique_filename=False,
+            resource_type="image",
+        )
+
+        # Reload collection to avoid race conditions from concurrent tasks
+        collection.reload()
+        item = collection.items[0]
+        product = item.product_images[product_index]
+        
+        # Store result in product
+        new_image_data = {
+            "type": prompt_key,
+            "prompt": prompt_text,
+            "local_path": local_path,
+            "cloud_url": cloud_upload["secure_url"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "model_used": {
+                "type": selected_model.get("type"),
+                "local": selected_model.get("local"),
+                "cloud": selected_model.get("cloud"),
+                "name": selected_model.get("name", ""),
+            },
+        }
+        
+        # Ensure generated_images list exists
+        if not hasattr(product, 'generated_images') or product.generated_images is None:
+            product.generated_images = []
+        
+        product.generated_images.append(new_image_data)
+        
+        # Explicitly mark the field as modified for MongoEngine
+        collection.items[0].product_images[product_index] = product
+        
+        # Save with explicit update
+        collection.save()
+        
+        # Verify save worked
+        collection.reload()
+        item = collection.items[0]
+        saved_product = item.product_images[product_index]
+        if len(saved_product.generated_images) == 0:
+            logger.error(f"[JOB {job_id}] WARNING: Image not saved to collection! product_index={product_index}, prompt_key={prompt_key}")
+            print(f"[JOB {job_id}] WARNING: Image not saved to collection! product_index={product_index}, prompt_key={prompt_key}")
+
+        # Track history (re-use existing utility)
+        try:
+            from .history_utils import track_project_image_generation
+
+            track_project_image_generation(
+                user_id=str(user_id),
+                collection_id=str(collection.id),
+                image_type=f"project_{prompt_key}",
+                image_url=cloud_upload["secure_url"],
+                prompt=prompt_text,
+                local_path=local_path,
+                metadata={
+                    "model_used": selected_model.get("type"),
+                    "product_url": product.uploaded_image_url,
+                    "model_name": selected_model.get("name", ""),
+                    "generation_type": prompt_key,
+                },
+            )
+        except Exception as history_error:
+            print(f"Error tracking project image generation history: {history_error}")
+
+        # Progressive job tracking
+        if job_id:
+            try:
+                # Verify job is still active before tracking (prevents old jobs from adding images)
+                job = ImageGenerationJob.objects(job_id=job_id).first()
+                if not job:
+                    logger.warning(f"[JOB {job_id}] Job not found, skipping job tracking")
+                    print(f"[JOB {job_id}] Job not found, skipping job tracking")
+                elif job.status not in ["pending", "running"]:
+                    logger.warning(f"[JOB {job_id}] Job is {job.status}, not tracking image (job may have been cancelled or completed)")
+                    print(f"[JOB {job_id}] Job is {job.status}, not tracking image (job may have been cancelled or completed)")
+                else:
+                    image_info = {
+                        "cloud_url": cloud_upload["secure_url"],
+                        "local_path": local_path,
+                        "collection_id": str(collection.id),
+                        "product_index": product_index,
+                        "prompt_key": prompt_key,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    ImageGenerationJob.objects(job_id=job_id).update_one(
+                        inc__completed_images=1,
+                        push__images=image_info,
+                        set__status="running",
+                    )
+
+                    # Re-fetch to check completion
+                    job = ImageGenerationJob.objects(job_id=job_id).first()
+                    if job and job.completed_images >= job.total_images:
+                        job.status = "completed"
+                        job.save()
+            except Exception as job_error:
+                print(f"Error updating ImageGenerationJob {job_id}: {job_error}")
+
+        return {
+            "success": True,
+            "cloud_url": cloud_upload["secure_url"],
+            "local_path": local_path,
+            "prompt_key": prompt_key,
+            "product_index": product_index,
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        if job_id:
+            try:
+                job = ImageGenerationJob.objects(job_id=job_id).first()
+                if job and job.status != "completed":
+                    job.status = "failed"
+                    job.error = str(e)
+                    job.save()
+            except Exception:
+                pass
+        return {"success": False, "error": str(e)}
 
 
 def generate_all_product_model_images_background(collection_id, user_id):

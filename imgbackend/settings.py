@@ -46,7 +46,7 @@ SECRET_KEY = 'django-insecure-5lq_q+khpb)*(zl57h+0ha*2ptm%_ruj9unofbc4v*z(^=af4@
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '[::1]',"api.gosplash.ai","tarnika-frontend.vercel.app"]
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '[::1]', "api.gosplash.ai", "tarnika-frontend.vercel.app"]
 
 # user = os.environ["MONGO_USER"]
 # password = os.environ["MONGO_PASSWORD"]
@@ -88,9 +88,13 @@ INSTALLED_APPS = [
 
 CELERY_BROKER_URL = "redis://127.0.0.1:6379/0"
 CELERY_RESULT_BACKEND = "django-db"
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+
+# Use multiple worker processes to take advantage of multi-core VPS.
+# You can override this at runtime with the -c flag on the worker.
+CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "4"))
 
 
 MIDDLEWARE = [

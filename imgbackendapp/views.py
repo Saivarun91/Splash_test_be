@@ -1061,8 +1061,9 @@ def change_background(request):
                     'images_background_change_with_image',
                     "Replace the background using the uploaded background image."
                 )
+                # print("bg_prompt", bg_prompt)
                 final_prompt = f"{user_prompt} {bg_prompt}"
-
+                print("final_prompt", final_prompt)
             # Priority 2 → BACKGROUND COLOR (ONLY IF NO IMAGE)
             elif bg_color:
                 color_prompt = get_prompt_from_db(
@@ -1092,11 +1093,15 @@ def change_background(request):
             # ========================================================
             #                GEMINI IMAGE GENERATION
             # ========================================================
+            # ========================================================
+            #                GEMINI 3 PRO IMAGE GENERATION
+            # ========================================================
             if has_genai:
                 client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-                model_name = "gemini-2.5-flash-image-preview"
 
-                # Build Gemini parts
+                # ✅ Gemini 3 Pro Image (Nano Banana Pro)
+                model_name = "gemini-3-pro-image-preview"
+
                 parts = []
 
                 # ORNAMENT (main subject)
@@ -1108,7 +1113,7 @@ def change_background(request):
                 })
                 parts.append({"text": "This is the ornament whose background must be changed."})
 
-                # BACKGROUND IMAGE (high priority)
+                # BACKGROUND IMAGE (highest priority)
                 if bg_b64:
                     parts.append({
                         "inline_data": {
@@ -1116,9 +1121,9 @@ def change_background(request):
                             "data": bg_b64
                         }
                     })
-                    parts.append({"text": "Use this image as the new background."})
+                    parts.append({"text": "Use this image strictly as the new background."})
 
-                # PROMPT LAST
+                # PROMPT LAST (important for Gemini)
                 parts.append({"text": base_prompt})
 
                 contents = [{"parts": parts}]
@@ -1127,23 +1132,26 @@ def change_background(request):
                     response_modalities=[types.Modality.IMAGE]
                 )
 
-                # Send request to Gemini
                 resp = client.models.generate_content(
                     model=model_name,
                     contents=contents,
                     config=config
                 )
 
-                # Extract generated image
                 candidate = resp.candidates[0]
+                generated_bytes = None
+
                 for part in candidate.content.parts:
                     if getattr(part, "inline_data", None):
                         data = part.inline_data.data
-                        generated_bytes = data if isinstance(data, bytes) else base64.b64decode(data)
+                        generated_bytes = (
+                            data if isinstance(data, bytes)
+                            else base64.b64decode(data)
+                        )
                         break
 
                 if not generated_bytes:
-                    raise Exception("Gemini response had no image inline_data")
+                    raise Exception("Gemini 3 Pro returned no image data")
 
             else:
                 # -----------------------------

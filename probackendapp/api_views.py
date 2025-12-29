@@ -1,6 +1,8 @@
 import re
+import logging
 from cloudinary.utils import cloudinary_url
 from .models import Project, ProjectInvite, ProjectMember, ImageGenerationHistory
+from .job_models import ImageGenerationJob
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import get_object_or_404
 from mongoengine.errors import DoesNotExist
@@ -11,6 +13,8 @@ from datetime import datetime, timezone
 import cloudinary
 import cloudinary.uploader
 import jwt
+
+logger = logging.getLogger(__name__)
 from .models import Project, Collection, CollectionItem, ProjectRole, ProjectMember, UploadedImage, PromptMaster
 from users.models import User
 from .views import (
@@ -1749,13 +1753,30 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 # -------------------------
 
 
-@csrf_exempt
 @api_view(['POST'])
 @csrf_exempt
 @authenticate
 def api_generate_ai_images(request, collection_id):
-    """API wrapper for generate AI images"""
-    return generate_ai_images(request, collection_id)
+    """API wrapper for generate AI images - now uses Celery"""
+    from .tasks import generate_ai_images_task
+
+    try:
+        # Get user_id from request
+        user_id = str(request.user.id) if hasattr(
+            request, 'user') and request.user else None
+
+        # Start Celery task
+        task = generate_ai_images_task.delay(collection_id, user_id)
+
+        return Response({
+            "success": True,
+            "message": "AI image generation started.",
+            "task_id": task.id
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"success": False, "error": str(e)}, status=500)
 
 
 @csrf_exempt
@@ -1781,21 +1802,111 @@ def api_upload_product_images(request, collection_id):
 @csrf_exempt
 @authenticate
 def api_generate_all_product_model_images(request, collection_id):
-    """API wrapper for generate all product model images - now uses Celery"""
-    from .tasks import generate_images_task
+    """
+    API wrapper for generate all product model images.
+    Now splits work into many single-image Celery tasks using a job_id so that
+    results can be retrieved progressively.
+    """
+    from .tasks import generate_single_image_task
+    from .models import Collection
+    from celery import group
+    import uuid
 
     try:
-        # Get user_id from request
-        user_id = str(request.user.id) if hasattr(
-            request, 'user') and request.user else None
+        user = getattr(request, "user", None)
+        user_id = str(user.id) if user else None
 
-        # Start Celery task
-        task = generate_images_task.delay(collection_id, user_id)
+        # Soft per-tenant concurrency limit (max 3 active jobs per user)
+        if user_id:
+            active_jobs = ImageGenerationJob.objects(
+                user=user,
+                status__in=["pending", "running"],
+            ).count()
+            if active_jobs >= 3:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Too many active image generation jobs. Please wait for existing jobs to finish.",
+                    },
+                    status=429,
+                )
 
+        collection = Collection.objects.get(id=collection_id)
+        if not collection.items:
+            return Response(
+                {"success": False, "error": "No items found in collection."},
+                status=400,
+            )
+
+        item = collection.items[0]
+
+        # Cancel any other running jobs for this collection to prevent mixing batches
+        # This ensures only the latest batch's images are shown
+        other_running_jobs = ImageGenerationJob.objects(
+            collection=collection,
+            status__in=["pending", "running"],
+        )
+        for old_job in other_running_jobs:
+            old_job.status = "failed"
+            old_job.error = "Cancelled: New batch started"
+            old_job.save()
+            logger.info(f"Cancelled old job {old_job.job_id} for collection {collection_id}")
+
+        # Clear existing generated images from all products before starting new batch
+        # This ensures only images from the current batch are shown
+        for product in item.product_images:
+            if hasattr(product, 'generated_images'):
+                product.generated_images = []
+        
+        # Save the collection to persist the cleared images
+        collection.save()
+
+        # Determine how many images will be generated (products x prompt keys)
+        prompt_keys = list((item.generated_prompts or {}).keys())
+        total_images = len(item.product_images) * len(prompt_keys)
+        if total_images == 0:
+            return Response(
+                {"success": False, "error": "No products or prompts available for generation."},
+                status=400,
+            )
+
+        job_id = uuid.uuid4().hex
+
+        # Create job document for tracking
+        job = ImageGenerationJob(
+            job_id=job_id,
+            user=user,
+            project=collection.project,
+            collection=collection,
+            total_images=total_images,
+            completed_images=0,
+            status="running",
+        )
+        job.save()
+
+        # Build a Celery group of single-image tasks
+        task_sigs = []
+        for idx in range(len(item.product_images)):
+            for key in prompt_keys:
+                task_sigs.append(
+                    generate_single_image_task.s(
+                        job_id,
+                        str(collection_id),
+                        user_id,
+                        idx,
+                        key,
+                    )
+                )
+
+        result_group = group(task_sigs).apply_async()
+
+        # Return job_id for progressive polling; include group id for backward compatibility
         return Response({
             "success": True,
             "message": "Image generation started.",
-            "task_id": task.id
+            "job_id": job_id,
+            "task_id": result_group.id,
+            "total_images": total_images,
         })
     except Exception as e:
         import traceback
@@ -1832,6 +1943,112 @@ def get_task_status(request, task_id):
             response_data["success"] = None  # In progress
 
         return Response(response_data)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"success": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+@api_view(['GET'])
+@authenticate
+def api_job_images(request, job_id):
+    """
+    Return the current state of a bulk generation job without blocking.
+    This is used by the frontend to fetch images progressively as they finish.
+    
+    Also returns the latest collection data so frontend can display images immediately.
+    """
+    try:
+        job = ImageGenerationJob.objects(job_id=job_id).first()
+        if not job:
+            return Response(
+                {"success": False, "error": "Job not found."},
+                status=404,
+            )
+
+        # Also fetch the latest collection data so frontend can display images
+        collection_data = None
+        try:
+            collection = Collection.objects.get(id=job.collection.id)
+            # Build collection data similar to api_collection_detail
+            if collection.items:
+                item = collection.items[0]
+                collection_data = {
+                    'id': str(collection.id),
+                    'product_images': []
+                }
+                for product_img in item.product_images:
+                    product_data = {
+                        'uploaded_image_url': product_img.uploaded_image_url,
+                        'uploaded_image_path': product_img.uploaded_image_path,
+                        'generated_images': product_img.generated_images or []
+                    }
+                    collection_data['product_images'].append(product_data)
+        except Exception as coll_error:
+            print(f"Error fetching collection data for job {job_id}: {coll_error}")
+
+        return Response(
+            {
+                "success": True,
+                "job_id": job.job_id,
+                "status": job.status,
+                "total_images": job.total_images,
+                "completed_images": job.completed_images,
+                "images": job.images or [],
+                "collection_data": collection_data,  # Include latest collection state
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            }
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"success": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+@api_view(['GET'])
+@authenticate
+def api_collection_images_status(request, collection_id):
+    """
+    Quick endpoint to check if a collection has generated images.
+    Useful for frontend polling to see when images are ready.
+    """
+    try:
+        collection = Collection.objects.get(id=collection_id)
+        if not collection.items:
+            return Response({
+                "success": True,
+                "has_images": False,
+                "total_products": 0,
+                "total_generated_images": 0,
+            })
+        
+        item = collection.items[0]
+        total_products = len(item.product_images) if item.product_images else 0
+        total_generated = sum(
+            len(p.generated_images) if p.generated_images else 0
+            for p in item.product_images
+        )
+        
+        return Response({
+            "success": True,
+            "has_images": total_generated > 0,
+            "total_products": total_products,
+            "total_generated_images": total_generated,
+            "products": [
+                {
+                    "index": idx,
+                    "uploaded_image_url": p.uploaded_image_url,
+                    "generated_count": len(p.generated_images) if p.generated_images else 0,
+                    "generated_images": p.generated_images or []
+                }
+                for idx, p in enumerate(item.product_images)
+            ]
+        })
+    except DoesNotExist:
+        return Response({"success": False, "error": "Collection not found"}, status=404)
     except Exception as e:
         import traceback
         traceback.print_exc()

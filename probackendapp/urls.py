@@ -79,8 +79,12 @@ urlpatterns = [
          api_views.api_remove_product_image, name="api_remove_product_image"),
     path("api/collections/<str:collection_id>/generate-all-product-model-images/",
          api_views.api_generate_all_product_model_images, name="api_generate_all_product_model_images"),
+    path("api/collections/<str:collection_id>/images-status/",
+         api_views.api_collection_images_status, name="api_collection_images_status"),
     path("api/task-status/<str:task_id>/",
          api_views.get_task_status, name="get_task_status"),
+    path("api/jobs/<str:job_id>/images/",
+         api_views.api_job_images, name="api_job_images"),
     path("api/collections/<str:collection_id>/regenerate/",
          api_views.api_regenerate_product_model_image, name="api_regenerate_product_model_image"),
 
