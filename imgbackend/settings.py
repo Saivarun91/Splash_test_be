@@ -87,10 +87,21 @@ INSTALLED_APPS = [
 
 
 CELERY_BROKER_URL = "redis://127.0.0.1:6379/0"
-CELERY_RESULT_BACKEND = "django-db"
+# Use MongoDB as result backend to store task results
+# Construct MongoDB URL for Celery from existing URI
+mongodb_db_name = 'tarnika'
+# Replace the query string part and add database name
+celery_mongodb_uri = uri.replace('/?', f'/{mongodb_db_name}?')
+CELERY_RESULT_BACKEND = celery_mongodb_uri
+CELERY_MONGODB_BACKEND_SETTINGS = {
+    'database': mongodb_db_name,
+    'taskmeta_collection': 'celery_taskmeta',
+}
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+# Prevent automatic deletion of task results
+CELERY_TASK_RESULT_EXPIRES = None
 
 # Use multiple worker processes to take advantage of multi-core VPS.
 # You can override this at runtime with the -c flag on the worker.

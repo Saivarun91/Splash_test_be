@@ -627,14 +627,17 @@ def generate_ai_images(request, collection_id):
     Now uses Celery for background processing.
     """
     from .tasks import generate_ai_images_task
+    from .utils import enqueue_task_with_load_balancing
 
     try:
         # Get user_id from request
         user_id = str(request.user.id) if hasattr(
             request, 'user') and request.user else None
 
-        # Start Celery task
-        task = generate_ai_images_task.delay(collection_id, user_id)
+        # Start Celery task using load-based queue selection
+        task = enqueue_task_with_load_balancing(
+            generate_ai_images_task, collection_id, user_id
+        )
 
         return JsonResponse({
             "success": True,
@@ -3007,14 +3010,17 @@ def generate_all_product_model_images(request, collection_id):
     Now uses Celery for background processing.
     """
     from .tasks import generate_images_task
+    from .utils import enqueue_task_with_load_balancing
 
     try:
         # Get user_id from request
         user_id = str(request.user.id) if hasattr(
             request, 'user') and request.user else None
 
-        # Start Celery task
-        task = generate_images_task.delay(collection_id, user_id)
+        # Start Celery task using load-based queue selection
+        task = enqueue_task_with_load_balancing(
+            generate_images_task, collection_id, user_id
+        )
 
         return Response({
             "success": True,

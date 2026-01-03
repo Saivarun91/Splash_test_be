@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import re
+import hashlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -263,3 +264,75 @@ def get_prompt_from_db(prompt_key, default_prompt=None, **format_kwargs):
         return default_prompt
 
     return None
+
+
+def get_queue_for_user(user_id, num_queues=20):
+    """
+    Select a queue for a user based on consistent hashing of user_id.
+    This ensures tasks from the same user are routed to the same queue,
+    while distributing users across available queues.
+    
+    Args:
+        user_id: User identifier (string or number)
+        num_queues: Total number of queues (default: 20)
+    
+    Returns:
+        Queue name string (e.g., 'queue_0', 'queue_1', ..., 'queue_19')
+    """
+    # Convert user_id to string for consistent hashing
+    user_str = str(user_id)
+    
+    # Hash the user_id to get a consistent integer
+    hash_value = int(hashlib.md5(user_str.encode('utf-8')).hexdigest(), 16)
+    
+    # Map hash to queue index (0 to num_queues-1)
+    queue_index = hash_value % num_queues
+    
+    return f'queue_{queue_index}'
+
+
+def enqueue_task_to_user_queue(task, user_id, *args, **kwargs):
+    """
+    Helper function to enqueue a Celery task to the user's assigned queue.
+    Uses consistent hashing based on user_id (legacy method).
+    
+    Args:
+        task: Celery task (e.g., generate_ai_images_task)
+        user_id: User identifier for queue routing
+        *args: Positional arguments for the task
+        **kwargs: Keyword arguments for the task
+    
+    Returns:
+        AsyncResult: The result of apply_async
+    """
+    queue_name = get_queue_for_user(user_id) if user_id else 'queue_0'
+    return task.apply_async(args=args, kwargs=kwargs, queue=queue_name)
+
+
+def enqueue_task_with_load_balancing(task, *args, **kwargs):
+    """
+    Enqueue a Celery task using dynamic load-based queue selection.
+    Selects the queue with the lowest (pending + running) count.
+    Atomically increments the pending counter before enqueueing.
+    
+    Args:
+        task: Celery task (e.g., generate_ai_images_task)
+        *args: Positional arguments for the task
+        **kwargs: Keyword arguments for the task
+    
+    Returns:
+        AsyncResult: The result of apply_async
+    """
+    from probackendapp.queue_load_manager import (
+        select_best_queue,
+        increment_pending
+    )
+    
+    # Select the least-loaded queue
+    queue_name = select_best_queue()
+    
+    # Increment pending counter BEFORE enqueueing (atomic operation)
+    increment_pending(queue_name)
+    
+    # Enqueue the task to the selected queue
+    return task.apply_async(args=args, kwargs=kwargs, queue=queue_name)

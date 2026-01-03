@@ -1759,14 +1759,17 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 def api_generate_ai_images(request, collection_id):
     """API wrapper for generate AI images - now uses Celery"""
     from .tasks import generate_ai_images_task
+    from .utils import enqueue_task_with_load_balancing
 
     try:
         # Get user_id from request
         user_id = str(request.user.id) if hasattr(
             request, 'user') and request.user else None
 
-        # Start Celery task
-        task = generate_ai_images_task.delay(collection_id, user_id)
+        # Start Celery task using load-based queue selection
+        task = enqueue_task_with_load_balancing(
+            generate_ai_images_task, collection_id, user_id
+        )
 
         return Response({
             "success": True,
@@ -1809,6 +1812,7 @@ def api_generate_all_product_model_images(request, collection_id):
     """
     from .tasks import generate_single_image_task
     from .models import Collection
+    from .utils import get_queue_for_user
     from celery import group
     import uuid
 
@@ -1884,20 +1888,33 @@ def api_generate_all_product_model_images(request, collection_id):
         )
         job.save()
 
-        # Build a Celery group of single-image tasks
+        # Use load-based queue selection for optimal distribution
+        from probackendapp.queue_load_manager import (
+            select_best_queue,
+            increment_pending
+        )
+        
+        # Select the least-loaded queue for this batch
+        queue_name = select_best_queue()
+        
+        # Build a Celery group of single-image tasks, all routed to the selected queue
         task_sigs = []
         for idx in range(len(item.product_images)):
             for key in prompt_keys:
-                task_sigs.append(
-                    generate_single_image_task.s(
-                        job_id,
-                        str(collection_id),
-                        user_id,
-                        idx,
-                        key,
-                    )
+                task_sig = generate_single_image_task.s(
+                    job_id,
+                    str(collection_id),
+                    user_id,
+                    idx,
+                    key,
                 )
+                # Set queue for this task
+                task_sig.set(queue=queue_name)
+                task_sigs.append(task_sig)
+                # Increment pending counter for each task BEFORE enqueueing
+                increment_pending(queue_name)
 
+        # Apply the group asynchronously
         result_group = group(task_sigs).apply_async()
 
         # Return job_id for progressive polling; include group id for backward compatibility

@@ -56,3 +56,5 @@ class ImageGenerationJob(Document):
         return super().save(*args, **kwargs)
 
 
+
+
