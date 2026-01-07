@@ -77,6 +77,8 @@ urlpatterns = [
          api_views.api_upload_product_images, name="api_upload_product_images"),
     path("api/collections/<str:collection_id>/products/",
          api_views.api_remove_product_image, name="api_remove_product_image"),
+    path("api/collections/<str:collection_id>/products/generation-selections/",
+         api_views.api_update_product_generation_selections, name="api_update_product_generation_selections"),
     path("api/collections/<str:collection_id>/generate-all-product-model-images/",
          api_views.api_generate_all_product_model_images, name="api_generate_all_product_model_images"),
     path("api/collections/<str:collection_id>/images-status/",

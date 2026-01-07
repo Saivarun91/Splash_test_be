@@ -172,7 +172,13 @@ def api_project_detail(request, project_id):
                     product_data = {
                         'uploaded_image_url': product_img.uploaded_image_url,
                         'uploaded_image_path': product_img.uploaded_image_path,
-                        'generated_images': product_img.generated_images or []
+                        'generated_images': product_img.generated_images or [],
+                        'generation_selections': product_img.generation_selections if hasattr(product_img, 'generation_selections') and product_img.generation_selections else {
+                            'plainBg': False,
+                            'bgReplace': False,
+                            'model': False,
+                            'campaign': False
+                        }
                     }
                     item_data['product_images'].append(product_data)
 
@@ -338,7 +344,13 @@ def api_collection_detail(request, collection_id):
                 product_data = {
                     'uploaded_image_url': product_img.uploaded_image_url,
                     'uploaded_image_path': product_img.uploaded_image_path,
-                    'generated_images': product_img.generated_images or []
+                    'generated_images': product_img.generated_images or [],
+                    'generation_selections': product_img.generation_selections if hasattr(product_img, 'generation_selections') and product_img.generation_selections else {
+                        'plainBg': False,
+                        'bgReplace': False,
+                        'model': False,
+                        'campaign': False
+                    }
                 }
                 item_data['product_images'].append(product_data)
 
@@ -1809,12 +1821,22 @@ def api_generate_all_product_model_images(request, collection_id):
     API wrapper for generate all product model images.
     Now splits work into many single-image Celery tasks using a job_id so that
     results can be retrieved progressively.
+    
+    Accepts optional image_type_selections in request body:
+    {
+        "image_type_selections": {
+            "0": {"plainBg": true, "bgReplace": false, "model": true, "campaign": false},
+            "1": {"plainBg": true, "bgReplace": true, "model": true, "campaign": true}
+        }
+    }
+    If not provided, generates all 4 types for all products (backward compatibility).
     """
     from .tasks import generate_single_image_task
     from .models import Collection
     from .utils import get_queue_for_user
     from celery import group
     import uuid
+    import json
 
     try:
         user = getattr(request, "user", None)
@@ -1844,6 +1866,61 @@ def api_generate_all_product_model_images(request, collection_id):
 
         item = collection.items[0]
 
+        # Parse request body for image type selections
+        try:
+            body_data = json.loads(request.body) if request.body else {}
+            image_type_selections = body_data.get('image_type_selections', {})
+        except (json.JSONDecodeError, AttributeError):
+            image_type_selections = {}
+        
+        # If no selections in request, try to get from stored generation_selections in products
+        if not image_type_selections:
+            stored_selections = {}
+            for idx, product in enumerate(item.product_images):
+                if hasattr(product, 'generation_selections') and product.generation_selections:
+                    stored_selections[str(idx)] = {
+                        'plainBg': product.generation_selections.get('plainBg', False),
+                        'bgReplace': product.generation_selections.get('bgReplace', False),
+                        'model': product.generation_selections.get('model', False),
+                        'campaign': product.generation_selections.get('campaign', False)
+                    }
+            if stored_selections:
+                image_type_selections = stored_selections
+
+        # Map frontend keys to backend keys
+        # Frontend: plainBg, bgReplace, model, campaign
+        # Backend: white_background, background_replace, model_image, campaign_image
+        key_mapping = {
+            'plainBg': 'white_background',
+            'bgReplace': 'background_replace',
+            'model': 'model_image',
+            'campaign': 'campaign_image'
+        }
+
+        # Get available prompt keys from generated_prompts
+        available_prompt_keys = list((item.generated_prompts or {}).keys())
+        
+        # If no selections provided, generate all types for all products (backward compatibility)
+        if not image_type_selections:
+            selected_keys = available_prompt_keys
+        else:
+            # Build set of selected keys based on selections
+            selected_keys_set = set()
+            for product_idx_str, selections in image_type_selections.items():
+                try:
+                    product_idx = int(product_idx_str)
+                    if product_idx < 0 or product_idx >= len(item.product_images):
+                        continue
+                    
+                    # Check each selection and add corresponding backend key
+                    for frontend_key, backend_key in key_mapping.items():
+                        if selections.get(frontend_key, False) and backend_key in available_prompt_keys:
+                            selected_keys_set.add(backend_key)
+                except (ValueError, TypeError):
+                    continue
+            
+            selected_keys = list(selected_keys_set) if selected_keys_set else available_prompt_keys
+
         # Cancel any other running jobs for this collection to prevent mixing batches
         # This ensures only the latest batch's images are shown
         other_running_jobs = ImageGenerationJob.objects(
@@ -1865,12 +1942,25 @@ def api_generate_all_product_model_images(request, collection_id):
         # Save the collection to persist the cleared images
         collection.save()
 
-        # Determine how many images will be generated (products x prompt keys)
-        prompt_keys = list((item.generated_prompts or {}).keys())
-        total_images = len(item.product_images) * len(prompt_keys)
+        # Determine how many images will be generated
+        # If selections provided, count only selected types per product
+        if image_type_selections:
+            total_images = 0
+            for product_idx in range(len(item.product_images)):
+                product_idx_str = str(product_idx)
+                if product_idx_str in image_type_selections:
+                    selections = image_type_selections[product_idx_str]
+                    for frontend_key, backend_key in key_mapping.items():
+                        if selections.get(frontend_key, False) and backend_key in available_prompt_keys:
+                            total_images += 1
+                # If product not in selections, skip it (only generate for products with explicit selections)
+        else:
+            # No selections: generate all types for all products (backward compatibility)
+            total_images = len(item.product_images) * len(selected_keys)
+        
         if total_images == 0:
             return Response(
-                {"success": False, "error": "No products or prompts available for generation."},
+                {"success": False, "error": "No image types selected for generation. Please select at least one image type."},
                 status=400,
             )
 
@@ -1900,7 +1990,27 @@ def api_generate_all_product_model_images(request, collection_id):
         # Build a Celery group of single-image tasks, all routed to the selected queue
         task_sigs = []
         for idx in range(len(item.product_images)):
-            for key in prompt_keys:
+            product_idx_str = str(idx)
+            
+            # Determine which keys to generate for this product
+            if image_type_selections:
+                # If selections are provided, only generate for products with explicit selections
+                if product_idx_str in image_type_selections:
+                    # Use selections for this specific product
+                    selections = image_type_selections[product_idx_str]
+                    product_selected_keys = []
+                    for frontend_key, backend_key in key_mapping.items():
+                        if selections.get(frontend_key, False) and backend_key in available_prompt_keys:
+                            product_selected_keys.append(backend_key)
+                else:
+                    # Product not in selections: skip it
+                    continue
+            else:
+                # No selections provided: generate all types for all products (backward compatibility)
+                product_selected_keys = selected_keys
+            
+            # Create tasks only for selected keys
+            for key in product_selected_keys:
                 task_sig = generate_single_image_task.s(
                     job_id,
                     str(collection_id),
@@ -1924,6 +2034,7 @@ def api_generate_all_product_model_images(request, collection_id):
             "job_id": job_id,
             "task_id": result_group.id,
             "total_images": total_images,
+            "selected_types": selected_keys,
         })
     except Exception as e:
         import traceback
@@ -3295,6 +3406,86 @@ def api_remove_product_image(request, collection_id):
 
     except Exception as e:
         print("Error removing product image:", str(e))
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(['PUT'])
+@csrf_exempt
+@authenticate
+def api_update_product_generation_selections(request, collection_id):
+    """
+    Update generation selections for product images.
+    Body:
+    {
+        "image_type_selections": {
+            "0": {"plainBg": true, "bgReplace": false, "model": true, "campaign": false},
+            "1": {"plainBg": true, "bgReplace": true, "model": true, "campaign": true}
+        }
+    }
+    """
+    try:
+        data = json.loads(request.body)
+        image_type_selections = data.get("image_type_selections", {})
+
+        if not image_type_selections:
+            return Response({"error": "image_type_selections is required"}, status=400)
+
+        collection = Collection.objects(id=collection_id).first()
+        if not collection:
+            return Response({"error": "Collection not found"}, status=404)
+
+        if not collection.items:
+            return Response({"error": "No items found in this collection"}, status=404)
+
+        item = collection.items[0]
+
+        if not hasattr(item, "product_images") or not item.product_images:
+            return Response({"error": "No product images found in this collection"}, status=404)
+
+        # Update generation_selections for each product
+        updated_count = 0
+        for product_idx_str, selections in image_type_selections.items():
+            try:
+                product_idx = int(product_idx_str)
+                if product_idx < 0 or product_idx >= len(item.product_images):
+                    continue
+                
+                product = item.product_images[product_idx]
+                
+                # Validate selections structure
+                if not isinstance(selections, dict):
+                    continue
+                
+                # Update generation_selections
+                product.generation_selections = {
+                    "plainBg": bool(selections.get("plainBg", False)),
+                    "bgReplace": bool(selections.get("bgReplace", False)),
+                    "model": bool(selections.get("model", False)),
+                    "campaign": bool(selections.get("campaign", False))
+                }
+                
+                # Mark the product as modified
+                item.product_images[product_idx] = product
+                updated_count += 1
+                
+            except (ValueError, TypeError, IndexError) as e:
+                print(f"Error updating product {product_idx_str}: {e}")
+                continue
+
+        # Save the collection
+        collection.save()
+
+        return Response({
+            "success": True,
+            "message": f"Generation selections updated for {updated_count} product(s)",
+            "updated_count": updated_count
+        })
+
+    except json.JSONDecodeError:
+        return Response({"error": "Invalid JSON in request body"}, status=400)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return Response({"error": str(e)}, status=500)
 
 

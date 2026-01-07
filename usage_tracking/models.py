@@ -13,4 +13,8 @@ class OrgUsageSnapshotDaily(Document):
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)
 
-    meta = {"collection": "org_usage_snapshot_daily"}
+    meta = {
+        "collection": "org_usage_snapshot_daily",
+        "strict": False,  # Allow extra fields for backward compatibility
+        "allow_inheritance": False
+    }

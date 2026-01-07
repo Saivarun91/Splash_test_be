@@ -39,7 +39,9 @@ class Project(Document):
 
     meta = {
         'collection': 'projectsUpdated',
-        'ordering': ['-created_at']
+        'ordering': ['-created_at'],
+        'strict': False,  # Allow extra fields for backward compatibility
+        'allow_inheritance': False
     }
 
 
@@ -68,8 +70,13 @@ class ProductImage(EmbeddedDocument):
     uploaded_at = DateTimeField(default=datetime.utcnow)
     # Store the type of ornament (e.g., "short_necklace", "long_necklace", "stud_earrings", etc.)
     ornament_type = StringField()
+    generation_selections = DictField(default=lambda: {"plainBg": False, "bgReplace": False, "model": False, "campaign": False})
+    meta = {
+        'strict': False,  # Allow unknown fields to prevent errors with legacy data
+        'allow_inheritance': False
+    }
 
-
+    
 class UploadedImage(EmbeddedDocument):
     """Embedded document for uploaded images with both local and cloud storage"""
     local_path = StringField(required=True)
@@ -166,7 +173,9 @@ class Collection(Document):
 
     meta = {
         'collection': 'collections',
-        'ordering': ['-created_at']
+        'ordering': ['-created_at'],
+        'strict': False,  # Allow extra fields for backward compatibility
+        'allow_inheritance': False
     }
 
 # -----------------------------
@@ -188,7 +197,9 @@ class GeneratedImage(Document):
 
     meta = {
         'collection': 'generated_images',
-        'ordering': ['-created_at']
+        'ordering': ['-created_at'],
+        'strict': False,  # Allow extra fields for backward compatibility
+        'allow_inheritance': False
     }
 
 
@@ -231,7 +242,9 @@ class ImageGenerationHistory(Document):
 
     meta = {
         'collection': 'image_generation_history',
-        'ordering': ['-created_at']
+        'ordering': ['-created_at'],
+        'strict': False,  # Allow extra fields for backward compatibility
+        'allow_inheritance': False
     }
 
 
@@ -248,7 +261,9 @@ class ProjectInvite(Document):
 
     meta = {
         'collection': 'project_invites',
-        'ordering': ['-created_at']
+        'ordering': ['-created_at'],
+        'strict': False,  # Allow extra fields for backward compatibility
+        'allow_inheritance': False
     }
 
     def __str__(self):
@@ -302,5 +317,7 @@ class PromptMaster(Document):
     meta = {
         'collection': 'prompt_master',
         'ordering': ['category', 'prompt_key'],
-        'indexes': ['prompt_key', 'category', 'is_active']
+        'indexes': ['prompt_key', 'category', 'is_active'],
+        'strict': False,  # Allow extra fields for backward compatibility
+        'allow_inheritance': False
     }

@@ -41,7 +41,7 @@ def register_user(request):
         password = data.get("password")
         full_name = data.get("full_name")
         username = data.get("username")
-
+        role = data.get("role")
         if not email or not password:
             return Response({"error": "Email and password required"}, status=400)
 
@@ -54,7 +54,7 @@ def register_user(request):
             password=hashed_pw,
             full_name=full_name,
             username=username,
-            role=Role.USER,  # Default
+            role=Role[role.upper()],  # Default
         )
         user.save()
 
@@ -178,6 +178,38 @@ def get_user_profile(request):
     """Get current user's profile information"""
     try:
         user = request.user
+        
+        # Reload user to ensure organization reference is loaded
+        user.reload()
+        
+        # Prepare organization data
+        organization_data = None
+        organization_id = None
+        
+        if user.organization:
+            try:
+                # Try to access as a dereferenced Document
+                if hasattr(user.organization, 'id'):
+                    # Organization is a Document instance
+                    organization_id = str(user.organization.id)
+                    organization_data = {
+                        "id": organization_id,
+                        "name": user.organization.name if hasattr(user.organization, 'name') else None,
+                        "credit_balance": user.organization.credit_balance if hasattr(user.organization, 'credit_balance') else None
+                    }
+                else:
+                    # Organization is just an ObjectId
+                    organization_id = str(user.organization)
+                    organization_data = {
+                        "id": organization_id
+                    }
+            except Exception as e:
+                # If dereferencing fails, just use the ID
+                organization_id = str(user.organization) if user.organization else None
+                if organization_id:
+                    organization_data = {
+                        "id": organization_id
+                    }
 
         return JsonResponse({
             "success": True,
@@ -187,6 +219,9 @@ def get_user_profile(request):
                 "full_name": user.full_name or "",
                 "username": user.username or "",
                 "role": user.role.value,
+                "organization": organization_data,
+                "organization_id": organization_id,
+                "organization_role": user.organization_role or None,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
             }

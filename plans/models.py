@@ -14,4 +14,8 @@ class Plan(Document):
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)
 
-    meta = {"collection": "plans"}
+    meta = {
+        "collection": "plans",
+        "strict": False,  # Allow extra fields for backward compatibility
+        "allow_inheritance": False
+    }

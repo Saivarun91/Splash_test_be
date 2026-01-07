@@ -14,6 +14,8 @@ class User(Document):
     full_name = StringField()
     username = StringField(unique=True)
     role = EnumField(Role, default=Role.USER)
+    organization = ReferenceField("Organization", required=False)
+    organization_role = StringField(required=False)  # owner, editor, chief_editor, etc.
 
     # Use string reference to avoid circular import
     projects = ListField(ReferenceField("Project"), default=list)
@@ -21,7 +23,11 @@ class User(Document):
     created_at = DateTimeField(default=datetime.datetime.utcnow)
     updated_at = DateTimeField(default=datetime.datetime.utcnow)
 
-    meta = {"collection": "users"}
+    meta = {
+        "collection": "users",
+        "strict": False,  # Allow extra fields for backward compatibility
+        "allow_inheritance": False
+    }
 
     def __str__(self):
         return self.email

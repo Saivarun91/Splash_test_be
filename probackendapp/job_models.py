@@ -49,6 +49,8 @@ class ImageGenerationJob(Document):
     meta = {
         "collection": "image_generation_jobs",
         "ordering": ["-created_at"],
+        "strict": False,  # Allow extra fields for backward compatibility
+        "allow_inheritance": False
     }
 
     def save(self, *args, **kwargs):

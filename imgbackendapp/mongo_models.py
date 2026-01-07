@@ -69,4 +69,8 @@ class OrnamentMongo(Document):
     created_at = DateTimeField(default=datetime.datetime.utcnow)
     updated_at = DateTimeField(default=datetime.datetime.utcnow)
 
-    meta = {"collection": "jewellery"}
+    meta = {
+        "collection": "jewellery",
+        "strict": False,  # Allow extra fields for backward compatibility
+        "allow_inheritance": False
+    }

@@ -472,10 +472,43 @@ def generate_ai_images_background(collection_id, user_id):
     This function is called by Celery and doesn't use request object.
     Returns a dict with success status and results.
     """
+    # === Credit Check and Deduction ===
+    from CREDITS.utils import deduct_credits, get_user_organization
+    from users.models import User
+    
+    # Credits per image generation: 2 credits for new image generation
+    CREDITS_PER_IMAGE = 2
+    # This function generates 4 AI model images, so total credits = 4 * 2 = 8
+    TOTAL_IMAGES_TO_GENERATE = 4
+    TOTAL_CREDITS_NEEDED = TOTAL_IMAGES_TO_GENERATE * CREDITS_PER_IMAGE
+    
+    # Get user
+    user = User.objects(id=user_id).first()
+    if not user:
+        return {"success": False, "error": "User not found"}
+    
+    # Get collection first to access project
     try:
         collection = Collection.objects.get(id=collection_id)
     except Collection.DoesNotExist:
         return {"success": False, "error": "Collection not found."}
+    
+    # Check if user has organization - if not, allow generation without credit deduction
+    organization = get_user_organization(user)
+    if organization:
+        # Check and deduct credits before generation (for all 4 images)
+        credit_result = deduct_credits(
+            organization=organization,
+            user=user,
+            amount=TOTAL_CREDITS_NEEDED,
+            reason=f"AI model images generation ({TOTAL_IMAGES_TO_GENERATE} images)",
+            project=collection.project if hasattr(collection, 'project') else None,
+            metadata={"type": "generate_ai_images_background", "total_images": TOTAL_IMAGES_TO_GENERATE}
+        )
+        
+        if not credit_result['success']:
+            return {"success": False, "error": credit_result['message']}
+    # If no organization, allow generation to proceed without credit deduction
 
     description = getattr(collection, "description", "") or ""
     generated_images = []
@@ -835,7 +868,13 @@ def upload_product_images_api(request, collection_id):
                 uploaded_image_path=local_path,
                 generated_images=[],
                 ornament_type=ornament_types[index] if index < len(
-                    ornament_types) else None
+                    ornament_types) else None,
+                generation_selections={
+                    "plainBg": False,
+                    "bgReplace": False,
+                    "model": False,
+                    "campaign": False
+                }
             )
 
             new_product_images.append(product_img)
@@ -1472,7 +1511,37 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
     from .job_models import ImageGenerationJob
 
     try:
+        # === Credit Check and Deduction ===
+        from CREDITS.utils import deduct_credits, get_user_organization
+        from users.models import User, Role
+        
+        # Credits per image generation: 2 credits for new image generation
+        CREDITS_PER_IMAGE = 2
+        
+        # Get user
+        user = User.objects(id=user_id).first()
+        if not user:
+            return {"success": False, "error": "User not found"}
+        
+        # Get collection first to access project
         collection = Collection.objects.get(id=collection_id)
+        
+        # Check if user has organization - if not, allow generation without credit deduction
+        organization = get_user_organization(user)
+        if organization:
+            # Check and deduct credits before generation
+            credit_result = deduct_credits(
+                organization=organization,
+                user=user,
+                amount=CREDITS_PER_IMAGE,
+                reason=f"Product model image generation - {prompt_key}",
+                project=collection.project if hasattr(collection, 'project') else None,
+                metadata={"type": "product_model_image", "prompt_key": prompt_key, "product_index": product_index}
+            )
+            
+            if not credit_result['success']:
+                return {"success": False, "error": credit_result['message']}
+        # If no organization, allow generation to proceed without credit deduction
         if not collection.items:
             return {"success": False, "error": "No items found in collection."}
 
@@ -1483,6 +1552,9 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
 
         selected_model = item.selected_model
         model_local_path = selected_model.get("local")
+        model_cloud_url = selected_model.get("cloud")
+        
+        # Check if model local path exists, if not try to download from cloud URL
         if not model_local_path or not os.path.exists(model_local_path):
             return {"success": False, "error": "Selected model image not found on server."}
 
@@ -1652,8 +1724,33 @@ Follow this specific style prompt: {prompt_text}"""
             logger = logging.getLogger(__name__)
 
         product = item.product_images[product_index]
-        product_path = product.uploaded_image_path
-        if not os.path.exists(product_path):
+        
+        # Check if product has uploaded_image_path
+        if not hasattr(product, 'uploaded_image_path') or not product.uploaded_image_path:
+            # Fallback to uploaded_image_url if path is not available
+            if hasattr(product, 'uploaded_image_url') and product.uploaded_image_url:
+                # Try to download from URL if path doesn't exist
+                product_path = None
+                try:
+                    response = requests.get(product.uploaded_image_url, timeout=10)
+                    if response.status_code == 200:
+                        # Save temporarily
+                        temp_dir = os.path.join("media", "temp_products", str(collection_id))
+                        os.makedirs(temp_dir, exist_ok=True)
+                        product_path = os.path.join(temp_dir, f"product_{product_index}_{uuid.uuid4()}.jpg")
+                        with open(product_path, "wb") as f:
+                            f.write(response.content)
+                    else:
+                        return {"success": False, "error": f"Could not download product image from URL: {product.uploaded_image_url}"}
+                except Exception as download_error:
+                    logger.error(f"[JOB {job_id}] Error downloading product image: {download_error}")
+                    return {"success": False, "error": f"Could not access product image: {str(download_error)}"}
+            else:
+                return {"success": False, "error": "Product image path or URL not found."}
+        else:
+            product_path = product.uploaded_image_path
+        
+        if not product_path or not os.path.exists(product_path):
             msg = f"[JOB {job_id}] Product image path does not exist: {product_path}"
             logger.warning(msg)
             print(msg)
@@ -1723,8 +1820,24 @@ Follow this specific style prompt: {prompt_text}"""
         )
 
         # Reload collection to avoid race conditions from concurrent tasks
-        collection.reload()
+        try:
+            collection.reload()
+        except Exception as reload_error:
+            logger.warning(f"[JOB {job_id}] Could not reload collection: {reload_error}. Continuing with existing reference.")
+        
+        # Re-validate item and product after reload
+        if not collection.items or len(collection.items) == 0:
+            return {"success": False, "error": "Collection items not found after reload."}
+        
         item = collection.items[0]
+        
+        # Validate product_index is still valid
+        if not hasattr(item, "product_images") or not item.product_images:
+            return {"success": False, "error": "No product images found in collection."}
+        
+        if product_index < 0 or product_index >= len(item.product_images):
+            return {"success": False, "error": f"Invalid product index {product_index} after reload. Collection has {len(item.product_images)} products."}
+        
         product = item.product_images[product_index]
         
         # Store result in product
@@ -1755,12 +1868,18 @@ Follow this specific style prompt: {prompt_text}"""
         collection.save()
         
         # Verify save worked
-        collection.reload()
-        item = collection.items[0]
-        saved_product = item.product_images[product_index]
-        if len(saved_product.generated_images) == 0:
-            logger.error(f"[JOB {job_id}] WARNING: Image not saved to collection! product_index={product_index}, prompt_key={prompt_key}")
-            print(f"[JOB {job_id}] WARNING: Image not saved to collection! product_index={product_index}, prompt_key={prompt_key}")
+        try:
+            collection.reload()
+            if collection.items and len(collection.items) > 0:
+                item = collection.items[0]
+                if hasattr(item, "product_images") and item.product_images and product_index < len(item.product_images):
+                    saved_product = item.product_images[product_index]
+                    if hasattr(saved_product, 'generated_images') and saved_product.generated_images:
+                        if len(saved_product.generated_images) == 0:
+                            logger.error(f"[JOB {job_id}] WARNING: Image not saved to collection! product_index={product_index}, prompt_key={prompt_key}")
+                            print(f"[JOB {job_id}] WARNING: Image not saved to collection! product_index={product_index}, prompt_key={prompt_key}")
+        except Exception as verify_error:
+            logger.warning(f"[JOB {job_id}] Could not verify save: {verify_error}")
 
         # Track history (re-use existing utility)
         try:
@@ -1869,9 +1988,30 @@ def generate_all_product_model_images_background(collection_id, user_id):
 
         selected_model = item.selected_model
         model_local_path = selected_model.get("local")
-
+        model_cloud_url = selected_model.get("cloud")
+        
+        # Check if model local path exists, if not try to download from cloud URL
         if not model_local_path or not os.path.exists(model_local_path):
-            return {"success": False, "error": "Selected model image not found on server."}
+            if model_cloud_url:
+                # Try to download from cloud URL
+                try:
+                    print(f"Model local path not found, downloading from cloud URL: {model_cloud_url}")
+                    response = requests.get(model_cloud_url, timeout=30)
+                    if response.status_code == 200:
+                        # Save temporarily
+                        temp_dir = os.path.join("media", "temp_models", str(collection_id))
+                        os.makedirs(temp_dir, exist_ok=True)
+                        model_local_path = os.path.join(temp_dir, f"model_{uuid.uuid4()}.jpg")
+                        with open(model_local_path, "wb") as f:
+                            f.write(response.content)
+                        print(f"Model downloaded successfully to: {model_local_path}")
+                    else:
+                        return {"success": False, "error": f"Could not download model image from URL: {model_cloud_url}"}
+                except Exception as download_error:
+                    print(f"Error downloading model image: {download_error}")
+                    return {"success": False, "error": f"Could not access model image: {str(download_error)}"}
+            else:
+                return {"success": False, "error": "Selected model image not found on server and no cloud URL available."}
 
         if not hasattr(item, "generated_prompts") or not item.generated_prompts:
             return {"success": False, "error": "No generated prompts found."}
@@ -3050,6 +3190,33 @@ def regenerate_product_model_image(request, collection_id):
     from datetime import datetime
     from google import genai
     from google.genai import types
+
+    # Get user from authentication middleware
+    user = request.user
+    
+    # === Credit Check and Deduction ===
+    from CREDITS.utils import deduct_credits, get_user_organization
+    from users.models import Role
+    
+    # Credits per image regeneration: 1 credit for regenerating an existing image
+    CREDITS_PER_REGENERATION = 1
+    
+    # Check if user has organization - if not, allow generation without credit deduction
+    organization = get_user_organization(user)
+    if organization:
+        # Check and deduct credits before regeneration
+        credit_result = deduct_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_REGENERATION,
+            reason="Product model image regeneration",
+            project=None,
+            metadata={"type": "regenerate_product_model_image", "collection_id": collection_id}
+        )
+        
+        if not credit_result['success']:
+            return Response({"success": False, "error": credit_result['message']}, status=400)
+    # If no organization, allow generation to proceed without credit deduction
 
     try:
         data = json.loads(request.body)

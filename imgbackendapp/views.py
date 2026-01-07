@@ -1000,6 +1000,29 @@ def change_background(request):
     user = request.user
     user_id = str(user.id)
 
+    # === Credit Check and Deduction ===
+    from CREDITS.utils import deduct_credits, get_user_organization
+    from users.models import Role
+    
+    # Credits per image generation: 2 credits for new image generation
+    CREDITS_PER_IMAGE = 2
+    
+    # Check if user has organization - if not, allow generation without credit deduction
+    organization = get_user_organization(user)
+    if organization:
+        # Check and deduct credits before generation
+        credit_result = deduct_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_IMAGE,
+            reason="Background change image generation",
+            metadata={"type": "change_background"}
+        )
+        
+        if not credit_result['success']:
+            return Response({"error": credit_result['message']}, status=400)
+    # If no organization, allow generation to proceed without credit deduction
+
     print("POST keys:", request.POST.keys())
     print("FILES keys:", request.FILES.keys())
 
@@ -1229,6 +1252,29 @@ def generate_model_with_ornament(request):
     user = request.user
     user_id = str(user.id)
 
+    # === Credit Check and Deduction ===
+    from CREDITS.utils import deduct_credits, get_user_organization
+    from users.models import Role
+    
+    # Credits per image generation: 2 credits for new image generation
+    CREDITS_PER_IMAGE = 2
+    
+    # Check if user has organization - if not, allow generation without credit deduction
+    organization = get_user_organization(user)
+    if organization:
+        # Check and deduct credits before generation
+        credit_result = deduct_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_IMAGE,
+            reason="Model with ornament image generation",
+            metadata={"type": "generate_model_with_ornament"}
+        )
+        
+        if not credit_result['success']:
+            return Response({"error": credit_result['message']}, status=400)
+    # If no organization, allow generation to proceed without credit deduction
+
     try:
         ornament_img = request.FILES.get('ornament_image')
         pose_img = request.FILES.get('pose_style')
@@ -1417,6 +1463,29 @@ def generate_real_model_with_ornament(request):
     # Get user from authentication middleware
     user = request.user
     user_id = str(user.id)
+
+    # === Credit Check and Deduction ===
+    from CREDITS.utils import deduct_credits, get_user_organization
+    from users.models import Role
+    
+    # Credits per image generation: 2 credits for new image generation
+    CREDITS_PER_IMAGE = 2
+    
+    # Check if user has organization - if not, allow generation without credit deduction
+    organization = get_user_organization(user)
+    if organization:
+        # Check and deduct credits before generation
+        credit_result = deduct_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_IMAGE,
+            reason="Real model with ornament image generation",
+            metadata={"type": "generate_real_model_with_ornament"}
+        )
+        
+        if not credit_result['success']:
+            return Response({"error": credit_result['message']}, status=400)
+    # If no organization, allow generation to proceed without credit deduction
 
     try:
         model_img = request.FILES.get('model_image')
@@ -1618,6 +1687,29 @@ def generate_campaign_shot_advanced(request):
     user_id = str(user.id)
 
     try:
+        # === Credit Check and Deduction ===
+        from CREDITS.utils import deduct_credits, get_user_organization
+        from users.models import Role
+        
+        # Credits per image generation: 2 credits for new image generation
+        CREDITS_PER_IMAGE = 2
+        
+        # Check if user has organization - if not, allow generation without credit deduction
+        organization = get_user_organization(user)
+        if organization:
+            # Check and deduct credits before generation
+            credit_result = deduct_credits(
+                organization=organization,
+                user=user,
+                amount=CREDITS_PER_IMAGE,
+                reason="Campaign shot image generation",
+                metadata={"type": "campaign_shot_advanced", "model_type": request.POST.get('model_type', 'ai')}
+            )
+            
+            if not credit_result['success']:
+                return Response({"error": credit_result['message']}, status=400)
+        # If no organization, allow generation to proceed without credit deduction
+        
         model_type = request.POST.get('model_type')
         model_img = request.FILES.get(
             'model_image') if model_type == 'real_model' else None
@@ -2031,6 +2123,29 @@ def regenerate_image(request):
     # Get user from authentication middleware
     user = request.user
     user_id = str(user.id)
+
+    # === Credit Check and Deduction ===
+    from CREDITS.utils import deduct_credits, get_user_organization
+    from users.models import Role
+    
+    # Credits per image regeneration: 1 credit for regenerating an existing image
+    CREDITS_PER_REGENERATION = 1
+    
+    # Check if user has organization - if not, allow generation without credit deduction
+    organization = get_user_organization(user)
+    if organization:
+        # Check and deduct credits before regeneration
+        credit_result = deduct_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_REGENERATION,
+            reason="Image regeneration",
+            metadata={"type": "regenerate_image"}
+        )
+        
+        if not credit_result['success']:
+            return Response({"error": credit_result['message']}, status=400)
+    # If no organization, allow generation to proceed without credit deduction
 
     try:
         # Get parameters

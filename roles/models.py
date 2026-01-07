@@ -5,6 +5,8 @@ import enum
 
 class OrgRoleType(enum.Enum):
     OWNER = "owner"
+    CHIEF_EDITOR = "chief_editor"
+    EDITOR = "editor"
     ADMIN = "admin"
     MEMBER = "member"
 
@@ -18,4 +20,8 @@ class OrgRole(Document):
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)
 
-    meta = {"collection": "org_roles"}
+    meta = {
+        "collection": "org_roles",
+        "strict": False,  # Allow extra fields for backward compatibility
+        "allow_inheritance": False
+    }
