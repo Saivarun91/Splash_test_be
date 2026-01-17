@@ -6,13 +6,14 @@ from organization.models import Organization
 from users.models import User
 from datetime import datetime
 
-
 def deduct_credits(organization, user, amount, reason="Image generation", project=None, metadata=None):
     try:
-        from CREDITS.models import Organization, CreditLedger
+        from CREDITS.models import CreditLedger
 
-        # ATOMIC: only deduct if enough balance
-        updated = Organization.objects(
+        OrgModel = organization.__class__   # <-- THIS fixes your import issue
+
+        # ✅ ATOMIC conditional decrement
+        updated = OrgModel.objects(
             id=organization.id,
             credit_balance__gte=amount
         ).update_one(
@@ -20,9 +21,7 @@ def deduct_credits(organization, user, amount, reason="Image generation", projec
             set__updated_at=datetime.utcnow()
         )
 
-        # If no document was updated → insufficient credits OR race lost
         if updated == 0:
-            # Reload to show latest balance
             organization.reload()
             return {
                 'success': False,
@@ -30,10 +29,10 @@ def deduct_credits(organization, user, amount, reason="Image generation", projec
                 'balance_after': organization.credit_balance
             }
 
-        # Reload once after atomic update
+        # Reload after atomic update
         organization.reload()
 
-        # Ledger entry (non-critical, after balance is safe)
+        # ✅ Ledger entry
         CreditLedger(
             user=user,
             organization=organization,
@@ -44,7 +43,8 @@ def deduct_credits(organization, user, amount, reason="Image generation", projec
             reason=reason,
             metadata=metadata or {},
             created_by=user,
-            updated_by=user
+            updated_by=user,
+            updated_at=datetime.utcnow()
         ).save()
 
         return {
