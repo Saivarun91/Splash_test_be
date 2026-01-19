@@ -748,6 +748,7 @@ def generate_real_model_with_ornament(request):
         ornament_img = request.FILES.get('ornament_image')
         pose_img = request.FILES.get('pose_style')
         prompt = request.POST.get('prompt', '')
+        print("prompt from request : ", prompt)
         measurements = request.POST.get('measurements', '')
         ornament_type = request.POST.get('ornament_type', '')
         ornament_measurements = request.POST.get(
@@ -861,6 +862,9 @@ def generate_real_model_with_ornament(request):
                 measurements_text=measurements_text,
                 user_prompt=prompt
             )
+            if prompt:
+                user_prompt = f"{user_prompt} Additional user instructions: {prompt}"   
+            print("user_prompt final : ", user_prompt)  # for debugging
             # Add dimension to prompt
             dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
             if dimension and dimension not in user_prompt:
@@ -978,7 +982,7 @@ def generate_campaign_shot_advanced(request):
         ornaments = request.FILES.getlist('ornament_images')
         ornament_names = request.POST.getlist('ornament_names')
         theme_images = request.FILES.getlist('theme_images')
-        prompt = request.POST.get('prompt', '')
+        prompt = request.POST.get('prompt')
         dimension = request.POST.get('dimension', '1:1').strip()
 
         # === Validation ===
@@ -1030,8 +1034,7 @@ def generate_campaign_shot_advanced(request):
         if not settings.GOOGLE_API_KEY or settings.GOOGLE_API_KEY == 'your_api_key_here':
             raise Exception("GOOGLE_API_KEY not configured")
         if not has_genai:
-            raise Exception(
-                "Gemini SDK not available. Please install or configure it.")
+            raise Exception("Gemini SDK not available. Please install or configure it.")
 
         # === Build Gemini request ===
         client = genai.Client(api_key=settings.GOOGLE_API_KEY)
@@ -1085,14 +1088,17 @@ def generate_campaign_shot_advanced(request):
                 default_prompt,
                 user_prompt=prompt
             )
+            print("user_prompt from database : ", user_prompt)
+            if prompt:
+                user_prompt = f"{user_prompt} {prompt}"
+            # print("user_prompt : ", user_prompt)
         # Add dimension to prompt
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
-        print("user_prompt : ", user_prompt)
+        print("user_prompt final : ", user_prompt)  # for debugging
 
         parts.append({"text": user_prompt})
-
         # Wrap parts in contents array
         contents = [{"parts": parts}]
 
