@@ -61,7 +61,7 @@ def upload_ornament(request):
             # Get prompt from database
             from probackendapp.prompt_initializer import get_prompt_from_db
             extra_prompt_text = f" {extra_prompt}" if extra_prompt else ""
-            dimension_text = f" Generate the image in {dimension} aspect ratio (width:height)." if dimension else ""
+            dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
             default_prompt = f"Remove the background from this ornament image and replace it with a plain {bg_color} background.{extra_prompt_text}{dimension_text}"
             text_prompt = get_prompt_from_db(
                 'images_white_background',
@@ -343,7 +343,7 @@ def change_background(request):
                 final_prompt = f"{user_prompt} {default_prompt}"
 
             # Add dimension to prompt
-            dimension_text = f" Generate the image in {dimension} aspect ratio (width:height)." if dimension else ""
+            dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
             final_prompt_with_dimension = f"{final_prompt}{dimension_text}"
             
             # Wrap prompt for Gemini
@@ -624,7 +624,7 @@ def generate_model_with_ornament(request):
                 user_prompt=prompt
             )
             # Add dimension to prompt
-            dimension_text = f" Generate the image in {dimension} aspect ratio (width:height)." if dimension else ""
+            dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
             if dimension and dimension not in user_prompt:
                 user_prompt = f"{user_prompt}{dimension_text}"
             print("user_prompt", user_prompt)
@@ -862,7 +862,7 @@ def generate_real_model_with_ornament(request):
                 user_prompt=prompt
             )
             # Add dimension to prompt
-            dimension_text = f" Generate the image in {dimension} aspect ratio (width:height)." if dimension else ""
+            dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
             if dimension and dimension not in user_prompt:
                 user_prompt = f"{user_prompt}{dimension_text}"
 
@@ -1086,7 +1086,7 @@ def generate_campaign_shot_advanced(request):
                 user_prompt=prompt
             )
         # Add dimension to prompt
-        dimension_text = f" Generate the image in {dimension} aspect ratio (width:height)." if dimension else ""
+        dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
         print("user_prompt : ", user_prompt)
