@@ -37,6 +37,10 @@ cloudinary.config(
 DEFAULT_GOOGLE_API_KEY = "AIzaSyBDxOUjKGoEd2STxXXMJmnSd1MF0hCMx0E"
 GOOGLE_API_KEY = config('GOOGLE_API_KEY', default=DEFAULT_GOOGLE_API_KEY)
 
+# Razorpay Configuration
+RAZORPAY_KEY_ID = config('RAZORPAY_KEY_ID', default='')
+RAZORPAY_KEY_SECRET = config('RAZORPAY_KEY_SECRET', default='')
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -83,6 +87,9 @@ INSTALLED_APPS = [
     'imgbackendapp',
     'probackendapp',
     "users",
+    'organization',
+    'CREDITS',
+    'payments',
     'django_celery_results',
 ]
 

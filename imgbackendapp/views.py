@@ -368,7 +368,7 @@ def change_background(request):
                 client = genai.Client(api_key=settings.GOOGLE_API_KEY)
 
                 # ✅ Gemini 3 Pro Image (Nano Banana Pro)
-                model_name = "gemini-3-pro-image-preview"
+                model_name = "gemini-2.5-flash-image"
 
                 parts = []
 

@@ -31,6 +31,11 @@ urlpatterns = [
     
     # Admin-only: Remove user from organization
     path('<str:organization_id>/users/<str:user_id>/remove/', views.remove_user_from_organization, name='remove_user_from_organization'),
+    
+    # Organization owner endpoints
+    path('<str:organization_id>/images/', views.get_organization_images, name='get_organization_images'),
+    path('<str:organization_id>/stats/', views.get_organization_stats, name='get_organization_stats'),
+    path('<str:organization_id>/members/', views.get_organization_members, name='get_organization_members'),
 ]
 
 

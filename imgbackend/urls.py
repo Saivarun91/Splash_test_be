@@ -15,6 +15,8 @@ urlpatterns = [
     path('api/organizations/', include('organization.urls'), name='organizations'),
     # Credit management endpoints
     path('api/credits/', include('CREDITS.urls'), name='credits'),
+    # Payment endpoints
+    path('api/payments/', include('payments.urls'), name='payments'),
     # Admin dashboard endpoints
     path('api/admin/dashboard/stats', admin_views.admin_dashboard_stats, name='admin_dashboard_stats'),
     path('api/admin/dashboard/images', admin_views.admin_dashboard_images, name='admin_dashboard_images'),

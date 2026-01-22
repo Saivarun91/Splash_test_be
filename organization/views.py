@@ -14,7 +14,9 @@ from common.middleware import authenticate
 from CREDITS.utils import add_credits, deduct_credits
 from datetime import datetime
 from django.contrib.auth.hashers import make_password
-from probackendapp.models import Project
+from probackendapp.models import Project, ImageGenerationHistory
+from imgbackendapp.mongo_models import OrnamentMongo
+from mongoengine import Q
 
 
 def is_admin(user):
@@ -333,18 +335,28 @@ def get_organization(request, organization_id):
             })
 
         # Get projects for this organization
+        # Query projects directly by organization instead of using organization.projects
+        organization_projects = Project.objects(organization=organization)
         projects_list = []
-        for project_ref in organization.projects:
+        
+        for project in organization_projects:
             try:
-                # Dereference the project (MongoEngine ReferenceField)
-                if hasattr(project_ref, 'id'):
-                    # Already dereferenced
-                    project = project_ref
-                else:
-                    # Need to dereference - get the project by ID
-                    project = Project.objects(id=project_ref).first()
-                    if not project:
-                        continue
+                # Get image count for this project
+                project_images_count = ImageGenerationHistory.objects(project=project).count()
+                
+                # Get team members
+                team_members_data = []
+                if project.team_members:
+                    for member in project.team_members:
+                        try:
+                            user_obj = member.user
+                            team_members_data.append({
+                                'user_name': user_obj.full_name or user_obj.username or '',
+                                'email': user_obj.email,
+                                'role': member.role
+                            })
+                        except (DoesNotExist, AttributeError):
+                            continue
 
                 projects_list.append({
                     'id': str(project.id),
@@ -352,10 +364,13 @@ def get_organization(request, organization_id):
                     'about': project.about,
                     'status': project.status,
                     'created_at': project.created_at.isoformat() if project.created_at else None,
+                    'updated_at': project.updated_at.isoformat() if project.updated_at else None,
                     'organization': str(project.organization.id) if project.organization else None,
                     'organization_id': str(project.organization.id) if project.organization else None,
+                    'totalImages': project_images_count,
+                    'members': team_members_data
                 })
-            except (DoesNotExist, AttributeError, TypeError):
+            except (DoesNotExist, AttributeError, TypeError) as e:
                 # Skip projects that no longer exist or have issues
                 continue
 
@@ -568,6 +583,386 @@ def remove_user_from_organization(request, organization_id, user_id):
         return JsonResponse({
             'success': True,
             'message': 'User removed from organization successfully'
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Get Organization Images
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_organization_images(request, organization_id):
+    """Get all images generated under an organization - owner/admin only"""
+    try:
+        organization = Organization.objects(id=organization_id).first()
+        if not organization:
+            return JsonResponse({'error': 'Organization not found'}, status=404)
+
+        # Check permission - only owner or admin can view
+        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
+            return JsonResponse({'error': 'Only organization owner or admin can view images'}, status=403)
+
+        # Get query parameters
+        image_type = request.GET.get('image_type')  # Optional filter
+        start_date = request.GET.get('start_date')
+        end_date = request.GET.get('end_date')
+        limit = int(request.GET.get('limit', 100))
+        offset = int(request.GET.get('offset', 0))
+
+        # Get all organization members
+        organization_members = organization.members if organization.members else []
+        member_ids = [str(member.id) for member in organization_members]
+        
+        # Also include the owner
+        if organization.owner:
+            owner_id = str(organization.owner.id)
+            if owner_id not in member_ids:
+                member_ids.append(owner_id)
+
+        # Get all projects for this organization
+        organization_projects = Project.objects(organization=organization)
+        project_ids = [str(p.id) for p in organization_projects]
+
+        # Build query for project-based images (ImageGenerationHistory)
+        project_query = Q(project__in=organization_projects)
+
+        if image_type:
+            project_query &= Q(image_type=image_type)
+
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                project_query &= Q(created_at__gte=start_dt)
+            except:
+                pass
+
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                project_query &= Q(created_at__lte=end_dt)
+            except:
+                pass
+
+        # Get project-based images
+        project_images = ImageGenerationHistory.objects(project_query).order_by('-created_at')
+        project_total = ImageGenerationHistory.objects(project_query).count()
+
+        # Build query for individual images (OrnamentMongo)
+        # Filter by organization members
+        individual_query = None
+        
+        if member_ids:
+            # Query by user_id (string field)
+            individual_query = Q(user_id__in=member_ids)
+            
+            # Also check created_by reference field
+            member_refs = []
+            for mid in member_ids:
+                user = User.objects(id=mid).first()
+                if user:
+                    member_refs.append(user)
+            
+            if member_refs:
+                # Combine queries: user_id in member_ids OR created_by in member_refs
+                individual_query = individual_query | Q(created_by__in=member_refs)
+        else:
+            # If no members, return empty result for individual images
+            individual_query = Q(id__in=[])  # Empty query
+
+        if individual_query is not None:
+            if image_type:
+                # Map image types to OrnamentMongo types
+                type_mapping = {
+                    'white_background': 'white_background',
+                    'background_change': 'background_change',
+                    'model_with_ornament': 'model_with_ornament',
+                    'real_model_with_ornament': 'real_model_with_ornament',
+                    'campaign_shot_advanced': 'campaign_shot_advanced'
+                }
+                if image_type in type_mapping:
+                    individual_query &= Q(type=type_mapping[image_type])
+
+            if start_date:
+                try:
+                    start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                    individual_query &= Q(created_at__gte=start_dt)
+                except:
+                    pass
+
+            if end_date:
+                try:
+                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    individual_query &= Q(created_at__lte=end_dt)
+                except:
+                    pass
+
+            # Get individual images
+            individual_images = OrnamentMongo.objects(individual_query).order_by('-created_at')
+            individual_total = OrnamentMongo.objects(individual_query).count()
+        else:
+            individual_images = []
+            individual_total = 0
+
+        # Combine and format response
+        images_list = []
+        
+        # Add project-based images
+        for img in project_images:
+            images_list.append({
+                'id': str(img.id),
+                'image_url': img.image_url,
+                'image_type': img.image_type,
+                'prompt': img.prompt,
+                'original_prompt': img.original_prompt,
+                'user_id': img.user_id,
+                'project_id': str(img.project.id) if img.project else None,
+                'collection_id': str(img.collection.id) if img.collection else None,
+                'created_at': img.created_at.isoformat() if img.created_at else None,
+                'metadata': img.metadata or {},
+                'source': 'project'  # Indicate this is from a project
+            })
+        
+        # Add individual images
+        for img in individual_images:
+            images_list.append({
+                'id': str(img.id),
+                'image_url': img.generated_image_url,
+                'image_type': img.type,
+                'prompt': img.prompt,
+                'original_prompt': img.original_prompt,
+                'user_id': img.user_id or (str(img.created_by.id) if img.created_by else None),
+                'project_id': None,
+                'collection_id': None,
+                'created_at': img.created_at.isoformat() if img.created_at else None,
+                'metadata': {
+                    'uploaded_image_url': img.uploaded_image_url,
+                    'model_image_url': img.model_image_url,
+                    'parent_image_id': str(img.parent_image_id) if img.parent_image_id else None
+                },
+                'source': 'individual'  # Indicate this is an individual image
+            })
+
+        # Sort all images by created_at (newest first)
+        images_list.sort(key=lambda x: x['created_at'] or '', reverse=True)
+        
+        # Apply pagination
+        total_count = project_total + individual_total
+        paginated_images = images_list[offset:offset + limit]
+
+        return JsonResponse({
+            'organization_id': str(organization.id),
+            'organization_name': organization.name,
+            'total_count': total_count,
+            'project_images_count': project_total,
+            'individual_images_count': individual_total,
+            'images': paginated_images
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Get Organization Stats
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_organization_stats(request, organization_id):
+    """Get organization statistics - owner/admin only"""
+    try:
+        organization = Organization.objects(id=organization_id).first()
+        if not organization:
+            return JsonResponse({'error': 'Organization not found'}, status=404)
+
+        # Check permission
+        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
+            return JsonResponse({'error': 'Only organization owner or admin can view stats'}, status=403)
+
+        # Get all organization members
+        organization_members = organization.members if organization.members else []
+        member_ids = [str(member.id) for member in organization_members]
+        
+        # Also include the owner
+        if organization.owner:
+            owner_id = str(organization.owner.id)
+            if owner_id not in member_ids:
+                member_ids.append(owner_id)
+
+        # Get projects
+        projects = Project.objects(organization=organization)
+        project_ids = [str(p.id) for p in projects]
+
+        # Get project-based images
+        project_images_count = ImageGenerationHistory.objects(project__in=projects).count()
+
+        # Get individual images count
+        individual_images_count = 0
+        if member_ids:
+            member_refs = []
+            for mid in member_ids:
+                user = User.objects(id=mid).first()
+                if user:
+                    member_refs.append(user)
+            
+            if member_refs:
+                individual_query = Q(user_id__in=member_ids) | Q(created_by__in=member_refs)
+                individual_images_count = OrnamentMongo.objects(individual_query).count()
+
+        # Total images (project + individual)
+        total_images = project_images_count + individual_images_count
+
+        # Get images by type (project-based)
+        images_by_type = {}
+        for img_type in ['white_background', 'background_change', 'model_with_ornament', 'campaign_shot_advanced']:
+            count = ImageGenerationHistory.objects(project__in=projects, image_type=img_type).count()
+            # Also count individual images of this type
+            if member_ids:
+                member_refs = []
+                for mid in member_ids:
+                    user = User.objects(id=mid).first()
+                    if user:
+                        member_refs.append(user)
+                if member_refs:
+                    individual_count = OrnamentMongo.objects(
+                        (Q(user_id__in=member_ids) | Q(created_by__in=member_refs)) & Q(type=img_type)
+                    ).count()
+                    count += individual_count
+            if count > 0:
+                images_by_type[img_type] = count
+
+        # Get member count
+        member_count = len(organization.members) if organization.members else 0
+
+        # Get recent activity (last 30 days)
+        from datetime import timedelta
+        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        recent_project_images = ImageGenerationHistory.objects(
+            project__in=projects,
+            created_at__gte=thirty_days_ago
+        ).count()
+        
+        # Get recent individual images (last 30 days)
+        recent_individual_images = 0
+        if member_ids:
+            member_refs = []
+            for mid in member_ids:
+                user = User.objects(id=mid).first()
+                if user:
+                    member_refs.append(user)
+            if member_refs:
+                recent_individual_images = OrnamentMongo.objects(
+                    (Q(user_id__in=member_ids) | Q(created_by__in=member_refs)) &
+                    Q(created_at__gte=thirty_days_ago)
+                ).count()
+        
+        recent_images = recent_project_images + recent_individual_images
+
+        return JsonResponse({
+            'organization_id': str(organization.id),
+            'organization_name': organization.name,
+            'stats': {
+                'total_projects': len(projects),
+                'total_images': total_images,
+                'project_images': project_images_count,
+                'individual_images': individual_images_count,
+                'recent_images_30d': recent_images,
+                'total_members': member_count,
+                'credit_balance': organization.credit_balance,
+                'images_by_type': images_by_type
+            }
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Get Organization Members
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_organization_members(request, organization_id):
+    """Get all members of an organization - owner/admin only"""
+    try:
+        organization = Organization.objects(id=organization_id).first()
+        if not organization:
+            return JsonResponse({'error': 'Organization not found'}, status=404)
+
+        # Check permission
+        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
+            return JsonResponse({'error': 'Only organization owner or admin can view members'}, status=403)
+
+        members_list = []
+        for member in organization.members:
+            # Get user's project count
+            user_projects = Project.objects(organization=organization, created_by=member)
+            projects_count = user_projects.count()
+            
+            # Get user's images count (project-based + individual)
+            project_images_count = ImageGenerationHistory.objects(
+                project__in=user_projects,
+                user_id=str(member.id)
+            ).count()
+            
+            # Get individual images count
+            individual_images_count = OrnamentMongo.objects(
+                Q(user_id=str(member.id)) | Q(created_by=member)
+            ).count()
+            
+            total_images = project_images_count + individual_images_count
+            
+            members_list.append({
+                'id': str(member.id),
+                'email': member.email,
+                'full_name': member.full_name or '',
+                'username': member.username or '',
+                'organization_role': member.organization_role or 'member',
+                'created_at': member.created_at.isoformat() if member.created_at else None,
+                'projects_count': projects_count,
+                'images_generated': total_images
+            })
+        
+        # Also include owner if not in members list
+        if organization.owner:
+            owner_in_members = any(str(m.id) == str(organization.owner.id) for m in organization.members)
+            if not owner_in_members:
+                owner = organization.owner
+                owner_projects = Project.objects(organization=organization, created_by=owner)
+                owner_projects_count = owner_projects.count()
+                
+                owner_project_images = ImageGenerationHistory.objects(
+                    project__in=owner_projects,
+                    user_id=str(owner.id)
+                ).count()
+                
+                owner_individual_images = OrnamentMongo.objects(
+                    Q(user_id=str(owner.id)) | Q(created_by=owner)
+                ).count()
+                
+                owner_total_images = owner_project_images + owner_individual_images
+                
+                members_list.append({
+                    'id': str(owner.id),
+                    'email': owner.email,
+                    'full_name': owner.full_name or '',
+                    'username': owner.username or '',
+                    'organization_role': 'owner',
+                    'created_at': owner.created_at.isoformat() if owner.created_at else None,
+                    'projects_count': owner_projects_count,
+                    'images_generated': owner_total_images
+                })
+
+        return JsonResponse({
+            'organization_id': str(organization.id),
+            'organization_name': organization.name,
+            'members': members_list,
+            'total_members': len(members_list)
         }, status=200)
 
     except Exception as e:

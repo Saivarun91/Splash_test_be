@@ -104,6 +104,31 @@ def login_user(request):
         # Generate JWT token with user info
         token = generate_jwt(user)
 
+        # Prepare organization data
+        organization_data = None
+        organization_id = None
+        
+        if user.organization:
+            try:
+                user.reload()  # Ensure organization is loaded
+                if hasattr(user.organization, 'id'):
+                    organization_id = str(user.organization.id)
+                    organization_data = {
+                        "id": organization_id,
+                        "name": user.organization.name if hasattr(user.organization, 'name') else None,
+                    }
+                else:
+                    organization_id = str(user.organization)
+                    organization_data = {
+                        "id": organization_id
+                    }
+            except Exception as e:
+                organization_id = str(user.organization) if user.organization else None
+                if organization_id:
+                    organization_data = {
+                        "id": organization_id
+                    }
+
         return JsonResponse(
             {
                 "message": "Login successful",
@@ -112,9 +137,11 @@ def login_user(request):
                     "id": str(user.id),
                     "email": user.email,
                     "role": user.role.value,
-                    # "sub_role": user.sub_role.value if user.sub_role else None,
                     "full_name": user.full_name,
                     "username": user.username,
+                    "organization": organization_data,
+                    "organization_id": organization_id,
+                    "organization_role": user.organization_role or None,
                 },
             },
             status=200,
