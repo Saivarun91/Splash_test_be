@@ -7,4 +7,7 @@ urlpatterns = [
     path("invite/", views.invite_user, name="invite_user"),
     path("profile/", views.get_user_profile, name="get_user_profile"),
     path("profile/update/", views.update_user_profile, name="update_user_profile"),
+    path("profile/complete/", views.complete_profile, name="complete_profile"),
+    path("forgot-password/", views.forgot_password, name="forgot_password"),
+    path("reset-password/", views.reset_password, name="reset_password"),
 ]

@@ -10,7 +10,9 @@ import jwt
 import datetime
 from datetime import timedelta
 from django.conf import settings
+import secrets
 from common.middleware import authenticate
+from common.email_utils import send_registration_email, send_password_reset_email, generate_random_password
 
 SECRET_KEY = settings.SECRET_KEY
 
@@ -55,8 +57,17 @@ def register_user(request):
             full_name=full_name,
             username=username,
             role=role,  # Default
+            
+            profile_completed=False,  # User needs to complete profile
         )
         user.save()
+
+        # Send registration email
+        try:
+            send_registration_email(user.email, user.full_name or user.username)
+        except Exception as e:
+            print(f"Failed to send registration email: {e}")
+            # Don't fail registration if email fails
 
         # Generate JWT after registration (optional)
         token = generate_jwt(user)
@@ -69,7 +80,7 @@ def register_user(request):
                     "id": str(user.id),
                     "email": user.email,
                     "role": user.role.value,
-
+                    "profile_completed": user.profile_completed,
                 },
             },
             status=201,
@@ -142,12 +153,14 @@ def login_user(request):
                     "organization": organization_data,
                     "organization_id": organization_id,
                     "organization_role": user.organization_role or None,
+                    "profile_completed": user.profile_completed,
                 },
             },
             status=200,
         )
 
     except Exception as e:
+        print("LOGIN ERROR:", str(e))
         return JsonResponse({"error": str(e)}, status=500)
 
 
@@ -249,6 +262,7 @@ def get_user_profile(request):
                 "organization": organization_data,
                 "organization_id": organization_id,
                 "organization_role": user.organization_role or None,
+                "profile_completed": user.profile_completed,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
             }
@@ -293,11 +307,187 @@ def update_user_profile(request):
                 "full_name": user.full_name or "",
                 "username": user.username or "",
                 "role": user.role.value,
+                "profile_completed": user.profile_completed,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
             }
         }, status=200)
     except NotUniqueError:
         return Response({"error": "Username already exists"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# =====================
+# Complete Profile
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def complete_profile(request):
+    """Complete user profile - allows setting password and updating profile info"""
+    try:
+        user = request.user
+        data = json.loads(request.body)
+
+        # Update allowed fields
+        if 'full_name' in data:
+            user.full_name = data['full_name']
+
+        if 'username' in data:
+            # Check if username is unique (if changed)
+            existing_user = User.objects(username=data['username']).first()
+            if existing_user and str(existing_user.id) != str(user.id):
+                return JsonResponse({"error": "Username already exists"}, status=400)
+            user.username = data['username']
+
+        # Password is required during profile completion
+        if 'new_password' not in data or not data['new_password']:
+            return JsonResponse({"error": "Password is required to complete your profile"}, status=400)
+        
+        new_password = data['new_password']
+        if len(new_password) < 8:
+            return JsonResponse({"error": "Password must be at least 8 characters long"}, status=400)
+        user.password = make_password(new_password)
+
+        # Mark profile as completed
+        user.profile_completed = True
+        user.updated_at = datetime.datetime.utcnow()
+        user.save()
+
+        # Reload to get organization data
+        user.reload()
+        
+        # Prepare organization data
+        organization_data = None
+        organization_id = None
+        
+        if user.organization:
+            try:
+                if hasattr(user.organization, 'id'):
+                    organization_id = str(user.organization.id)
+                    organization_data = {
+                        "id": organization_id,
+                        "name": user.organization.name if hasattr(user.organization, 'name') else None,
+                    }
+                else:
+                    organization_id = str(user.organization)
+                    organization_data = {
+                        "id": organization_id
+                    }
+            except Exception as e:
+                organization_id = str(user.organization) if user.organization else None
+                if organization_id:
+                    organization_data = {
+                        "id": organization_id
+                    }
+
+        return JsonResponse({
+            "success": True,
+            "message": "Profile completed successfully",
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "full_name": user.full_name or "",
+                "username": user.username or "",
+                "role": user.role.value,
+                "organization": organization_data,
+                "organization_id": organization_id,
+                "organization_role": user.organization_role or None,
+                "profile_completed": user.profile_completed,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+                "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+            }
+        }, status=200)
+    except NotUniqueError:
+        return JsonResponse({"error": "Username already exists"}, status=400)
+    except Exception as e:
+        
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# =====================
+# Forgot Password
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+def forgot_password(request):
+    """Send password reset email to user"""
+    try:
+        data = json.loads(request.body)
+        email = data.get("email")
+
+        if not email:
+            return JsonResponse({"error": "Email is required"}, status=400)
+
+        user = User.objects(email=email).first()
+        if not user:
+            # Don't reveal if email exists for security
+            return JsonResponse({
+                "message": "If the email exists, a password reset link has been sent."
+            }, status=200)
+
+        # Generate reset token
+        reset_token = secrets.token_urlsafe(32)
+        user.reset_password_token = reset_token
+        user.reset_password_token_expiry = datetime.datetime.utcnow() + timedelta(hours=24)
+        user.save()
+
+        # Send reset email
+        try:
+            send_password_reset_email(user.email, reset_token, user.full_name or user.username)
+        except Exception as e:
+            print(f"Failed to send password reset email: {e}")
+            return JsonResponse({"error": "Failed to send reset email. Please try again later."}, status=500)
+
+        return JsonResponse({
+            "message": "If the email exists, a password reset link has been sent."
+        }, status=200)
+
+    except Exception as e:
+        print("FORGOT PASSWORD ERROR:", str(e))
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# =====================
+# Reset Password
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+def reset_password(request):
+    """Reset password using token from email"""
+    try:
+        data = json.loads(request.body)
+        token = data.get("token")
+        new_password = data.get("new_password")
+
+        if not token or not new_password:
+            return JsonResponse({"error": "Token and new password are required"}, status=400)
+
+        if len(new_password) < 8:
+            return JsonResponse({"error": "Password must be at least 8 characters long"}, status=400)
+
+        user = User.objects(reset_password_token=token).first()
+        if not user:
+            return JsonResponse({"error": "Invalid or expired reset token"}, status=400)
+
+        # Check if token is expired
+        if user.reset_password_token_expiry and user.reset_password_token_expiry < datetime.datetime.utcnow():
+            user.reset_password_token = None
+            user.reset_password_token_expiry = None
+            user.save()
+            return JsonResponse({"error": "Reset token has expired. Please request a new one."}, status=400)
+
+        # Update password
+        user.password = make_password(new_password)
+        user.reset_password_token = None
+        user.reset_password_token_expiry = None
+        user.updated_at = datetime.datetime.utcnow()
+        user.save()
+
+        return JsonResponse({
+            "message": "Password reset successfully. You can now log in with your new password."
+        }, status=200)
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)

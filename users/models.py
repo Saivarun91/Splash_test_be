@@ -16,6 +16,9 @@ class User(Document):
     role = EnumField(Role, default=Role.USER)
     organization = ReferenceField("Organization", required=False)
     organization_role = StringField(required=False)  # owner, editor, chief_editor, etc.
+    profile_completed = BooleanField(default=False)  # Track if user has completed profile setup
+    reset_password_token = StringField(required=False)  # Token for password reset
+    reset_password_token_expiry = DateTimeField(required=False)  # Expiry for reset token
 
     # Use string reference to avoid circular import
     projects = ListField(ReferenceField("Project"), default=list)

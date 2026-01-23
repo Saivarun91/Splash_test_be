@@ -14,6 +14,7 @@ from common.middleware import authenticate
 from CREDITS.utils import add_credits, deduct_credits
 from datetime import datetime
 from django.contrib.auth.hashers import make_password
+from common.email_utils import send_organization_invite_email, generate_random_password
 from probackendapp.models import Project, ImageGenerationHistory
 from imgbackendapp.mongo_models import OrnamentMongo
 from mongoengine import Q
@@ -269,6 +270,147 @@ def add_user_to_organization(request):
                 'organization_role': organization_role,
                 'updated_at': user.updated_at.isoformat() if user.updated_at else None,
                 'organization_reference_saved': org_ref_id == org_id if org_ref_id else False
+            }
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Organization Owner: Add User to Organization
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def add_organization_user(request, organization_id):
+    """Organization owner can add users to their organization by email and role"""
+    try:
+        organization = Organization.objects(id=organization_id).first()
+        if not organization:
+            return JsonResponse({'error': 'Organization not found'}, status=404)
+
+        # Check if user is organization owner or admin
+        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
+            return JsonResponse({'error': 'Only organization owner or admin can add users'}, status=403)
+
+        data = json.loads(request.body)
+        user_email = data.get('email')
+        organization_role = data.get('role', 'member')
+
+        if not user_email:
+            return JsonResponse({'error': 'Email is required'}, status=400)
+
+        # Validate organization role
+        valid_roles = ['owner', 'chief_editor', 'creative_head', 'member']
+        if organization_role not in valid_roles:
+            return JsonResponse({'error': f'Invalid role. Must be one of: {", ".join(valid_roles)}'}, status=400)
+
+        # Check if user already exists
+        user = User.objects(email=user_email).first()
+        user_created = False
+
+        if not user:
+            # Create new user with random 16-digit password
+            random_password = generate_random_password(16)
+            hashed_password = make_password(random_password)
+
+            # Generate username from email
+            username = user_email.split('@')[0]
+            base_username = username
+            counter = 1
+            while User.objects(username=username).first():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            # Create user
+            user = User(
+                email=user_email,
+                password=hashed_password,
+                username=username,
+                role=Role.USER,
+                organization=organization,
+                organization_role=organization_role,
+                profile_completed=False,  # User needs to complete profile
+            )
+            try:
+                user.save()
+                user_created = True
+            except NotUniqueError:
+                return JsonResponse({'error': 'User with this email or username already exists'}, status=400)
+
+            # Send email with password
+            try:
+                send_organization_invite_email(
+                    user_email,
+                    random_password,
+                    organization.name,
+                    organization_role,
+                    request.user.full_name or request.user.username,
+                    is_new_user=True
+                )
+            except Exception as e:
+                print(f"Failed to send organization invite email: {e}")
+                # Don't fail if email fails, but log it
+        else:
+            # User exists, just add to organization
+            if user.organization and str(user.organization.id) == str(organization.id):
+                return JsonResponse({'error': 'User is already a member of this organization'}, status=400)
+
+            user.organization = organization
+            user.organization_role = organization_role
+            user.profile_completed = False  # Reset profile completion if user is being added to new org
+            user.updated_at = datetime.utcnow()
+            user.save()
+
+            # Send notification email to existing user
+            try:
+                send_organization_invite_email(
+                    user_email,
+                    None,  # No password for existing users
+                    organization.name,
+                    organization_role,
+                    request.user.full_name or request.user.username,
+                    is_new_user=False
+                )
+            except Exception as e:
+                print(f"Failed to send organization notification email: {e}")
+                # Don't fail if email fails, but log it
+
+        # Add to members list if not already
+        if user not in organization.members:
+            organization.members.append(user)
+            organization.save()
+
+        # Create OrgRole entry
+        role_mapping = {
+            'owner': OrgRoleType.BUSSINESS_OWNER,
+            'chief_editor': OrgRoleType.CHIEF_EDITOR,
+            'creative_head': OrgRoleType.CREATIVE_HEAD,
+            'member': OrgRoleType.MEMBER,
+        }
+        role_enum = role_mapping.get(organization_role, OrgRoleType.MEMBER)
+
+        # Delete existing OrgRole if any
+        OrgRole.objects(user=user, organization=organization).delete()
+
+        org_role = OrgRole(
+            user=user,
+            organization=organization,
+            role=role_enum,
+            created_by=request.user,
+            updated_by=request.user
+        )
+        org_role.save()
+
+        return JsonResponse({
+            'success': True,
+            'message': 'User added to organization successfully',
+            'user_created': user_created,
+            'user': {
+                'id': str(user.id),
+                'email': user.email,
+                'organization_role': organization_role,
             }
         }, status=200)
 
