@@ -1,10 +1,32 @@
 """
 Utility functions for credit management
 """
-from .models import CreditLedger
+from .models import CreditLedger, CreditSettings
 from organization.models import Organization
 from users.models import User
 from datetime import datetime
+
+
+def get_credit_settings():
+    """
+    Get current credit deduction settings.
+    Returns default values if settings don't exist.
+    
+    Returns:
+        dict: {'credits_per_image_generation': int, 'credits_per_regeneration': int}
+    """
+    try:
+        settings = CreditSettings.get_settings()
+        return {
+            'credits_per_image_generation': settings.credits_per_image_generation,
+            'credits_per_regeneration': settings.credits_per_regeneration
+        }
+    except Exception as e:
+        # Return defaults on error
+        return {
+            'credits_per_image_generation': 2,
+            'credits_per_regeneration': 1
+        }
 
 def deduct_credits(organization, user, amount, reason="Image generation", project=None, metadata=None):
     try:

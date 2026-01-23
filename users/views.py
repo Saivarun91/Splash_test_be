@@ -54,7 +54,7 @@ def register_user(request):
             password=hashed_pw,
             full_name=full_name,
             username=username,
-            role=Role[role.upper()],  # Default
+            role=role,  # Default
         )
         user.save()
 

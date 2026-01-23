@@ -6,6 +6,7 @@ class PaymentTransaction(Document):
     """Track payment transactions for organizations"""
     organization = ReferenceField("Organization", required=True)
     user = ReferenceField("User", required=True)  # User who initiated payment
+    plan = ReferenceField("Plan")  # Plan subscription (if this is a plan purchase)
     
     # Payment details
     amount = FloatField(required=True)  # Amount in INR

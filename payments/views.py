@@ -6,7 +6,8 @@ from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
 from common.middleware import authenticate
 from organization.models import Organization
-from users.models import User
+from users.models import User, Role
+from plans.models import Plan
 from .models import PaymentTransaction
 from CREDITS.utils import add_credits
 import json
@@ -14,7 +15,13 @@ import traceback
 from django.conf import settings
 import hmac
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
+from calendar import monthrange
+
+
+def is_admin(user):
+    """Check if user is admin"""
+    return user.role == Role.ADMIN
 
 # Import razorpay with error handling
 try:
@@ -58,18 +65,32 @@ def create_razorpay_order(request):
         organization_id = data.get('organization_id')
         amount = float(data.get('amount', 0))
         credits = int(data.get('credits', 0))
+        plan_id = data.get('plan_id')  # Optional - for plan subscriptions
         
-        if not organization_id or amount <= 0 or credits <= 0:
-            return JsonResponse({'error': 'organization_id, amount, and credits are required'}, status=400)
+        if not organization_id or amount <= 0:
+            return JsonResponse({'error': 'organization_id and amount are required'}, status=400)
+        
+        # If plan_id is provided, get plan details
+        plan = None
+        if plan_id:
+            plan = Plan.objects(id=plan_id).first()
+            if not plan:
+                return JsonResponse({'error': 'Plan not found'}, status=404)
+            # Use plan's credits if credits not specified
+            if credits <= 0:
+                credits = plan.credits_per_month
+        
+        if credits <= 0:
+            return JsonResponse({'error': 'credits are required'}, status=400)
         
         # Get organization
         organization = Organization.objects(id=organization_id).first()
         if not organization:
             return JsonResponse({'error': 'Organization not found'}, status=404)
         
-        # Check permission - only owner can purchase credits
+        # Check permission - only owner can purchase credits/plans
         if not is_organization_owner(request.user, organization):
-            return JsonResponse({'error': 'Only organization owner can purchase credits'}, status=403)
+            return JsonResponse({'error': 'Only organization owner can purchase credits/plans'}, status=403)
         
         # Create Razorpay order
         client = get_razorpay_client()
@@ -84,16 +105,22 @@ def create_razorpay_order(request):
         if len(receipt_id) > 40:
             receipt_id = receipt_id[:40]
         
+        order_notes = {
+            'organization_id': str(organization.id),
+            'organization_name': organization.name,
+            'user_id': str(request.user.id),
+            'credits': credits
+        }
+        
+        if plan_id:
+            order_notes['plan_id'] = str(plan_id)
+            order_notes['plan_name'] = plan.name
+        
         order_data = {
             'amount': int(amount * 100),  # Convert to paise
             'currency': 'INR',
             'receipt': receipt_id,
-            'notes': {
-                'organization_id': str(organization.id),
-                'organization_name': organization.name,
-                'user_id': str(request.user.id),
-                'credits': credits
-            }
+            'notes': order_notes
         }
         
         razorpay_order = client.order.create(data=order_data)
@@ -102,13 +129,15 @@ def create_razorpay_order(request):
         payment_transaction = PaymentTransaction(
             organization=organization,
             user=request.user,
+            plan=plan,
             amount=amount,
             credits=credits,
             razorpay_order_id=razorpay_order['id'],
             status='pending',
             metadata=json.dumps({
                 'razorpay_order': razorpay_order,
-                'created_by': str(request.user.id)
+                'created_by': str(request.user.id),
+                'plan_id': str(plan_id) if plan_id else None
             })
         )
         payment_transaction.save()
@@ -200,6 +229,12 @@ def verify_razorpay_payment(request):
             )
             
             if result['success']:
+                # If this is a plan subscription, update organization's plan
+                if payment_transaction.plan:
+                    organization = payment_transaction.organization
+                    organization.plan = payment_transaction.plan
+                    organization.save()
+                
                 # Update payment transaction
                 payment_transaction.razorpay_payment_id = payment_id
                 payment_transaction.razorpay_signature = signature
@@ -212,7 +247,8 @@ def verify_razorpay_payment(request):
                     'message': 'Payment verified and credits added successfully',
                     'credits_added': payment_transaction.credits,
                     'balance_after': result['balance_after'],
-                    'payment_id': payment_id
+                    'payment_id': payment_id,
+                    'plan_id': str(payment_transaction.plan.id) if payment_transaction.plan else None
                 }, status=200)
             else:
                 payment_transaction.status = 'failed'
@@ -256,6 +292,10 @@ def get_payment_history(request):
         
         transactions_list = []
         for txn in transactions:
+            plan_name = None
+            if txn.plan:
+                plan_name = txn.plan.name
+            
             transactions_list.append({
                 'id': str(txn.id),
                 'amount': txn.amount,
@@ -263,6 +303,8 @@ def get_payment_history(request):
                 'status': txn.status,
                 'razorpay_order_id': txn.razorpay_order_id,
                 'razorpay_payment_id': txn.razorpay_payment_id,
+                'plan_id': str(txn.plan.id) if txn.plan else None,
+                'plan_name': plan_name,
                 'created_at': txn.created_at.isoformat() if txn.created_at else None,
                 'updated_at': txn.updated_at.isoformat() if txn.updated_at else None
             })
@@ -272,6 +314,140 @@ def get_payment_history(request):
             'organization_name': organization.name,
             'transactions': transactions_list,
             'total_count': len(transactions_list)
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Admin: Get All Payment Transactions
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_all_payments(request):
+    """Get all payment transactions - admin only"""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can view all payments'}, status=403)
+    
+    try:
+        # Get query parameters
+        organization_id = request.GET.get('organization_id')
+        status_filter = request.GET.get('status')
+        
+        # Build query
+        query = {}
+        if organization_id:
+            organization = Organization.objects(id=organization_id).first()
+            if not organization:
+                return JsonResponse({'error': 'Organization not found'}, status=404)
+            query['organization'] = organization
+        
+        if status_filter:
+            query['status'] = status_filter
+        
+        # Get payment transactions
+        transactions = PaymentTransaction.objects(**query).order_by('-created_at')
+        
+        transactions_list = []
+        for txn in transactions:
+            plan_name = None
+            if txn.plan:
+                plan_name = txn.plan.name
+            
+            transactions_list.append({
+                'id': str(txn.id),
+                'organization_id': str(txn.organization.id),
+                'organization_name': txn.organization.name,
+                'user_id': str(txn.user.id),
+                'user_email': txn.user.email if hasattr(txn.user, 'email') else 'N/A',
+                'plan_id': str(txn.plan.id) if txn.plan else None,
+                'plan_name': plan_name,
+                'amount': txn.amount,
+                'credits': txn.credits,
+                'currency': txn.currency,
+                'status': txn.status,
+                'razorpay_order_id': txn.razorpay_order_id,
+                'razorpay_payment_id': txn.razorpay_payment_id,
+                'created_at': txn.created_at.isoformat() if txn.created_at else None,
+                'updated_at': txn.updated_at.isoformat() if txn.updated_at else None,
+            })
+        
+        return JsonResponse({
+            'success': True,
+            'transactions': transactions_list,
+            'total_count': len(transactions_list)
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Admin: Get Revenue Statistics
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_revenue_stats(request):
+    """Get revenue statistics - admin only"""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can view revenue statistics'}, status=403)
+    
+    try:
+        # Get current month start and end dates
+        now = datetime.utcnow()
+        current_month_start = datetime(now.year, now.month, 1)
+        current_month_end = datetime(now.year, now.month, monthrange(now.year, now.month)[1], 23, 59, 59)
+        
+        # Get all completed payment transactions
+        all_completed = PaymentTransaction.objects(status='completed')
+        
+        # Calculate total revenue (all time)
+        total_revenue = sum(txn.amount for txn in all_completed)
+        
+        # Calculate monthly revenue (current month)
+        monthly_transactions = all_completed.filter(
+            created_at__gte=current_month_start,
+            created_at__lte=current_month_end
+        )
+        monthly_revenue = sum(txn.amount for txn in monthly_transactions)
+        
+        # Get previous month for comparison
+        if now.month == 1:
+            prev_month_start = datetime(now.year - 1, 12, 1)
+            prev_month_end = datetime(now.year - 1, 12, monthrange(now.year - 1, 12)[1], 23, 59, 59)
+        else:
+            prev_month_start = datetime(now.year, now.month - 1, 1)
+            prev_month_end = datetime(now.year, now.month - 1, monthrange(now.year, now.month - 1)[1], 23, 59, 59)
+        
+        prev_month_transactions = all_completed.filter(
+            created_at__gte=prev_month_start,
+            created_at__lte=prev_month_end
+        )
+        prev_month_revenue = sum(txn.amount for txn in prev_month_transactions)
+        
+        # Calculate growth percentage
+        growth_percentage = 0
+        if prev_month_revenue > 0:
+            growth_percentage = ((monthly_revenue - prev_month_revenue) / prev_month_revenue) * 100
+        elif monthly_revenue > 0:
+            growth_percentage = 100
+        
+        # Count transactions
+        total_transactions = all_completed.count()
+        monthly_transactions_count = monthly_transactions.count()
+        
+        return JsonResponse({
+            'success': True,
+            'total_revenue': round(total_revenue, 2),
+            'monthly_revenue': round(monthly_revenue, 2),
+            'prev_month_revenue': round(prev_month_revenue, 2),
+            'growth_percentage': round(growth_percentage, 2),
+            'total_transactions': total_transactions,
+            'monthly_transactions': monthly_transactions_count,
+            'currency': 'INR'
         }, status=200)
         
     except Exception as e:

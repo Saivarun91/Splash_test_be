@@ -474,11 +474,12 @@ def generate_ai_images_background(collection_id, user_id):
     Returns a dict with success status and results.
     """
     # === Credit Check and Deduction ===
-    from CREDITS.utils import deduct_credits, get_user_organization
+    from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
     from users.models import User
 
-    # Credits per image generation: 2 credits for new image generation
-    CREDITS_PER_IMAGE = 2
+    # Get dynamic credit settings
+    credit_settings = get_credit_settings()
+    CREDITS_PER_IMAGE = credit_settings['credits_per_image_generation']
     # This function generates 4 AI model images, so total credits = 4 * 2 = 8
     TOTAL_IMAGES_TO_GENERATE = 4
     TOTAL_CREDITS_NEEDED = TOTAL_IMAGES_TO_GENERATE * CREDITS_PER_IMAGE
@@ -1515,11 +1516,12 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
 
     try:
         # === Credit Check and Deduction ===
-        from CREDITS.utils import deduct_credits, get_user_organization
+        from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
         from users.models import User, Role
 
-        # Credits per image generation: 2 credits for new image generation
-        CREDITS_PER_IMAGE = 2
+        # Get dynamic credit settings
+        credit_settings = get_credit_settings()
+        CREDITS_PER_IMAGE = credit_settings['credits_per_image_generation']
 
         # Get user
         user = User.objects(id=user_id).first()
@@ -3221,11 +3223,12 @@ def regenerate_product_model_image(request, collection_id):
     user = request.user
 
     # === Credit Check and Deduction ===
-    from CREDITS.utils import deduct_credits, get_user_organization
+    from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
     from users.models import Role
 
-    # Credits per image regeneration: 1 credit for regenerating an existing image
-    CREDITS_PER_REGENERATION = 1
+    # Get dynamic credit settings
+    credit_settings = get_credit_settings()
+    CREDITS_PER_REGENERATION = credit_settings['credits_per_regeneration']
 
     # Check if user has organization - if not, allow generation without credit deduction
     organization = get_user_organization(user)
