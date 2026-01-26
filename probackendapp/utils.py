@@ -291,21 +291,21 @@ def get_queue_for_user(user_id, num_queues=20):
     return f'queue_{queue_index}'
 
 
-def enqueue_task_to_user_queue(task, user_id, *args, **kwargs):
+def enqueue_task_to_user_queue(task, queue_user_id, *args, **kwargs):
     """
     Helper function to enqueue a Celery task to the user's assigned queue.
-    Uses consistent hashing based on user_id (legacy method).
+    Uses consistent hashing based on a routing user id (legacy method).
 
     Args:
         task: Celery task (e.g., generate_ai_images_task)
-        user_id: User identifier for queue routing
+        queue_user_id: User identifier for queue routing (used only for queue selection)
         *args: Positional arguments for the task
         **kwargs: Keyword arguments for the task
 
     Returns:
         AsyncResult: The result of apply_async
     """
-    queue_name = get_queue_for_user(user_id) if user_id else 'queue_0'
+    queue_name = get_queue_for_user(queue_user_id) if queue_user_id else 'queue_0'
     return task.apply_async(args=args, kwargs=kwargs, queue=queue_name)
 
 

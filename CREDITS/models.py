@@ -6,6 +6,9 @@ class CreditSettings(Document):
     """Global credit deduction settings - singleton pattern"""
     credits_per_image_generation = IntField(default=2, required=True)
     credits_per_regeneration = IntField(default=1, required=True)
+    # Global AI image model name used for Gemini-based image generation
+    # Defaults to gemini-3-pro-image-preview but can be changed from the admin portal
+    default_image_model_name = StringField(default="gemini-3-pro-image-preview")
     updated_by = ReferenceField("User")
     updated_at = DateTimeField(default=datetime.utcnow)
     

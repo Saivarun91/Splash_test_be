@@ -11,7 +11,7 @@ class PaymentTransaction(Document):
     # Payment details
     amount = FloatField(required=True)  # Amount in INR
     credits = IntField(required=True)  # Credits purchased
-    currency = StringField(default="INR")
+    currency = StringField()
     
     # Razorpay details
     razorpay_order_id = StringField(required=True, unique=True)

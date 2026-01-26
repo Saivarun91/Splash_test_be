@@ -1,5 +1,5 @@
 """
-Utility functions for credit management
+Utility functions for credit management and global AI model settings.
 """
 from .models import CreditLedger, CreditSettings
 from organization.models import Organization
@@ -9,24 +9,51 @@ from datetime import datetime
 
 def get_credit_settings():
     """
-    Get current credit deduction settings.
+    Get current credit deduction and global image model settings.
     Returns default values if settings don't exist.
-    
+
     Returns:
-        dict: {'credits_per_image_generation': int, 'credits_per_regeneration': int}
+        dict: {
+            'credits_per_image_generation': int,
+            'credits_per_regeneration': int,
+            'default_image_model_name': str,
+        }
     """
     try:
         settings = CreditSettings.get_settings()
         return {
             'credits_per_image_generation': settings.credits_per_image_generation,
-            'credits_per_regeneration': settings.credits_per_regeneration
+            'credits_per_regeneration': settings.credits_per_regeneration,
+            'default_image_model_name': getattr(
+                settings,
+                'default_image_model_name',
+                'gemini-3-pro-image-preview'
+            ),
         }
-    except Exception as e:
-        # Return defaults on error
+    except Exception:
+        # Return sane defaults on error
         return {
             'credits_per_image_generation': 2,
-            'credits_per_regeneration': 1
+            'credits_per_regeneration': 1,
+            'default_image_model_name': 'gemini-3-pro-image-preview',
         }
+
+
+def get_image_model_name(default_model: str = "gemini-3-pro-image-preview") -> str:
+    """
+    Get the active AI model name for image generation.
+
+    This reads from CreditSettings.default_image_model_name, falling back to
+    the provided default_model if not configured.
+    """
+    try:
+        settings = CreditSettings.get_settings()
+        model_name = getattr(settings, "default_image_model_name", None)
+        if not model_name:
+            return default_model
+        return model_name
+    except Exception:
+        return default_model
 
 def deduct_credits(organization, user, amount, reason="Image generation", project=None, metadata=None):
     try:
