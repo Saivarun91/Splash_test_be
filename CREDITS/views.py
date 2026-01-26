@@ -318,6 +318,11 @@ def get_credit_settings_public(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
+                'default_image_model_name': getattr(
+                    settings,
+                    'default_image_model_name',
+                    'gemini-3-pro-image-preview'
+                ),
             }
         }, status=200)
     except Exception as e:
@@ -342,6 +347,11 @@ def get_credit_settings(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
+                'default_image_model_name': getattr(
+                    settings,
+                    'default_image_model_name',
+                    'gemini-3-pro-image-preview'
+                ),
                 'updated_at': settings.updated_at.isoformat() if settings.updated_at else None,
                 'updated_by': settings.updated_by.email if settings.updated_by else None,
             }
@@ -366,6 +376,7 @@ def update_credit_settings(request):
         
         credits_per_image = data.get('credits_per_image_generation')
         credits_per_regeneration = data.get('credits_per_regeneration')
+        default_image_model_name = data.get('default_image_model_name')
         
         if credits_per_image is None or credits_per_regeneration is None:
             return JsonResponse({'error': 'Both credits_per_image_generation and credits_per_regeneration are required'}, status=400)
@@ -377,6 +388,8 @@ def update_credit_settings(request):
         settings = CreditSettings.get_settings()
         settings.credits_per_image_generation = int(credits_per_image)
         settings.credits_per_regeneration = int(credits_per_regeneration)
+        if default_image_model_name:
+            settings.default_image_model_name = str(default_image_model_name)
         settings.updated_by = request.user
         settings.updated_at = datetime.utcnow()
         settings.save()
@@ -387,6 +400,11 @@ def update_credit_settings(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
+                'default_image_model_name': getattr(
+                    settings,
+                    'default_image_model_name',
+                    'gemini-3-pro-image-preview'
+                ),
                 'updated_at': settings.updated_at.isoformat() if settings.updated_at else None,
                 'updated_by': settings.updated_by.email if settings.updated_by else None,
             }

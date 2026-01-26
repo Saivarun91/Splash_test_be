@@ -118,7 +118,7 @@ def create_razorpay_order(request):
         
         order_data = {
             'amount': int(amount * 100),  # Convert to paise
-            'currency': 'INR',
+            'currency': 'USD',
             'receipt': receipt_id,
             'notes': order_notes
         }
@@ -132,6 +132,7 @@ def create_razorpay_order(request):
             plan=plan,
             amount=amount,
             credits=credits,
+            currency=order_data['currency'],
             razorpay_order_id=razorpay_order['id'],
             status='pending',
             metadata=json.dumps({
