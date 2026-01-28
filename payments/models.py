@@ -3,8 +3,8 @@ from datetime import datetime
 
 
 class PaymentTransaction(Document):
-    """Track payment transactions for organizations"""
-    organization = ReferenceField("Organization", required=True)
+    """Track payment transactions for organizations and individual users"""
+    organization = ReferenceField("Organization", required=False)  # Optional for single users
     user = ReferenceField("User", required=True)  # User who initiated payment
     plan = ReferenceField("Plan")  # Plan subscription (if this is a plan purchase)
     
