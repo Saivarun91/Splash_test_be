@@ -147,6 +147,7 @@ def login_user(request):
                 "user": {
                     "id": str(user.id),
                     "email": user.email,
+                    "preferred_language": getattr(user, 'preferred_language', 'en') or 'en',
                     "role": user.role.value,
                     "full_name": user.full_name,
                     "username": user.username,
@@ -263,6 +264,7 @@ def get_user_profile(request):
                 "organization_id": organization_id,
                 "organization_role": user.organization_role or None,
                 "profile_completed": user.profile_completed,
+                "preferred_language": getattr(user, 'preferred_language', 'en') or 'en',
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
             }
@@ -294,6 +296,13 @@ def update_user_profile(request):
                 return Response({"error": "Username already exists"}, status=400)
             user.username = data['username']
 
+        if 'preferred_language' in data:
+            # Validate language code
+            if data['preferred_language'] in ['en', 'es']:
+                user.preferred_language = data['preferred_language']
+            else:
+                return Response({"error": "Invalid language code"}, status=400)
+
         # Update timestamp
         user.updated_at = datetime.datetime.utcnow()
         user.save()
@@ -308,6 +317,7 @@ def update_user_profile(request):
                 "username": user.username or "",
                 "role": user.role.value,
                 "profile_completed": user.profile_completed,
+                "preferred_language": getattr(user, 'preferred_language', 'en') or 'en',
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
             }

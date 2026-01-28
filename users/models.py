@@ -17,6 +17,7 @@ class User(Document):
     organization = ReferenceField("Organization", required=False)
     organization_role = StringField(required=False)  # owner, editor, chief_editor, etc.
     profile_completed = BooleanField(default=False)  # Track if user has completed profile setup
+    preferred_language = StringField(default='en')  # User's preferred language (en, es, etc.)
     reset_password_token = StringField(required=False)  # Token for password reset
     reset_password_token_expiry = DateTimeField(required=False)  # Expiry for reset token
 

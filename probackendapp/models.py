@@ -2,6 +2,7 @@ from mongoengine import Document, StringField, DateTimeField, ListField, Referen
 from datetime import datetime
 from users.models import User
 import enum
+from datetime import timezone
 # -----------------------------
 # Project Model
 # -----------------------------
@@ -19,7 +20,7 @@ class ProjectMember(EmbeddedDocument):
     user = ReferenceField("User", required=True)
     role = StringField(
         choices=[r.value for r in ProjectRole], default=ProjectRole.VIEWER.value)
-    joined_at = DateTimeField(default=datetime.utcnow)
+    joined_at = DateTimeField(default=datetime.now(timezone.utc))
 
 # Project model
 
@@ -30,8 +31,8 @@ class Project(Document):
     organization = ReferenceField("Organization", required=False)  # Optional: projects can belong to an organization
     created_by = ReferenceField("User")
     updated_by = ReferenceField("User")
-    created_at = DateTimeField(default=datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
     status = StringField(default="progress")
     team_members = ListField(EmbeddedDocumentField(ProjectMember))
 
@@ -68,7 +69,7 @@ class ProductImage(EmbeddedDocument):
     # For each product, store multiple generated versions as a list of dicts
     generated_images = ListField(DictField())
     # Track when this product image was uploaded
-    uploaded_at = DateTimeField(default=datetime.utcnow)
+    uploaded_at = DateTimeField(default=datetime.now(timezone.utc))
     # Store the type of ornament (e.g., "short_necklace", "long_necklace", "stud_earrings", etc.)
     ornament_type = StringField()
     generation_selections = DictField(default=lambda: {"plainBg": False, "bgReplace": False, "model": False, "campaign": False})
@@ -84,7 +85,7 @@ class UploadedImage(EmbeddedDocument):
     cloud_url = URLField(required=True)
     original_filename = StringField(required=True)
     uploaded_by = StringField(required=True)  # User ID who uploaded
-    uploaded_at = DateTimeField(default=datetime.utcnow)
+    uploaded_at = DateTimeField(default=datetime.now(timezone.utc))
     file_size = IntField()
     # 'theme', 'background', 'pose', 'location', 'color'
     category = StringField(required=True)
@@ -163,8 +164,8 @@ class Collection(Document):
     description = StringField()
     created_by = ReferenceField("User")
     updated_by = ReferenceField("User")
-    created_at = DateTimeField(default=datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
     target_audience = StringField()
     campaign_season = StringField()
     items = ListField(EmbeddedDocumentField(CollectionItem))
@@ -190,8 +191,8 @@ class GeneratedImage(Document):
     image_path = StringField(required=True)  # store local path or URL
     created_by = ReferenceField("User")
     updated_by = ReferenceField("User")
-    created_at = DateTimeField(default=datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
 
     def __str__(self):
         return f"Image for {self.collection.project.name} Collection"
@@ -231,8 +232,8 @@ class ImageGenerationHistory(Document):
     updated_by = ReferenceField("User")
 
     # Timestamps
-    created_at = DateTimeField(default=datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
 
     # Additional metadata
     # Store any additional info like model type, settings, etc.
@@ -257,8 +258,8 @@ class ProjectInvite(Document):
     accepted = BooleanField(default=False)
     created_by = ReferenceField("User")
     updated_by = ReferenceField("User")
-    created_at = DateTimeField(default=datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
 
     meta = {
         'collection': 'project_invites',
@@ -306,8 +307,8 @@ class PromptMaster(Document):
     updated_by = ReferenceField(User)
 
     # Timestamps
-    created_at = DateTimeField(default=datetime.utcnow)
-    updated_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
 
     # Additional metadata
     metadata = DictField()
