@@ -193,3 +193,67 @@ def get_user_organization(user):
         return None
 
 
+def deduct_user_credits(user, amount, reason="Image generation", project=None, metadata=None):
+    """
+    Deduct credits from a single user (not in any organization).
+    
+    Args:
+        user: User instance
+        amount: Number of credits to deduct
+        reason: Reason for credit deduction
+        project: Optional project reference
+        metadata: Optional metadata dict
+    
+    Returns:
+        dict: {'success': bool, 'message': str, 'balance_after': int}
+    """
+    try:
+        from CREDITS.models import CreditLedger
+        
+        # Reload user to get latest balance
+        user.reload()
+        
+        # Check if user has sufficient credits
+        if (user.credit_balance or 0) < amount:
+            return {
+                'success': False,
+                'message': f'Insufficient credits. Available: {user.credit_balance or 0}, Required: {amount}',
+                'balance_after': user.credit_balance or 0
+            }
+        
+        # Deduct credits atomically
+        User.objects(id=user.id).update_one(
+            dec__credit_balance=amount,
+            set__updated_at=datetime.utcnow()
+        )
+        
+        # Reload after atomic update
+        user.reload()
+        
+        # Create ledger entry (organization is None for single users)
+        CreditLedger(
+            user=user,
+            organization=None,  # Single user, no organization
+            project=project,
+            change_type="debit",
+            credits_changed=amount,
+            balance_after=user.credit_balance or 0,
+            reason=reason,
+            metadata=metadata or {},
+            created_by=user,
+            updated_by=user,
+            updated_at=datetime.utcnow()
+        ).save()
+        
+        return {
+            'success': True,
+            'message': 'Credits deducted successfully',
+            'balance_after': user.credit_balance or 0
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f'Error deducting credits: {str(e)}',
+            'balance_after': user.credit_balance if user else 0
+        }

@@ -35,7 +35,7 @@ class CreditSettings(Document):
 
 class CreditLedger(Document):
     user = ReferenceField("User", required=True)
-    organization = ReferenceField("Organization", required=True)
+    organization = ReferenceField("Organization", required=False)  # Optional for single users
     project = ReferenceField("Project", required=False)
     change_type = StringField(choices=["debit", "credit"], required=True)
     credits_changed = IntField(required=True)
@@ -54,4 +54,5 @@ class CreditLedger(Document):
     }
     
     def __str__(self):
-        return f"{self.organization.name} - {self.change_type} - {self.credits_changed}"
+        org_name = self.organization.name if self.organization else "Individual User"
+        return f"{org_name} - {self.change_type} - {self.credits_changed}"

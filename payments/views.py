@@ -59,16 +59,16 @@ def is_organization_owner(user, organization):
 @csrf_exempt
 @authenticate
 def create_razorpay_order(request):
-    """Create a Razorpay order for credit purchase"""
+    """Create a Razorpay order for credit purchase (organization or single user)"""
     try:
         data = json.loads(request.body)
-        organization_id = data.get('organization_id')
+        organization_id = data.get('organization_id')  # Optional for single users
         amount = float(data.get('amount', 0))
         credits = int(data.get('credits', 0))
         plan_id = data.get('plan_id')  # Optional - for plan subscriptions
         
-        if not organization_id or amount <= 0:
-            return JsonResponse({'error': 'organization_id and amount are required'}, status=400)
+        if amount <= 0:
+            return JsonResponse({'error': 'amount is required and must be greater than 0'}, status=400)
         
         # If plan_id is provided, get plan details
         plan = None
@@ -83,34 +83,51 @@ def create_razorpay_order(request):
         if credits <= 0:
             return JsonResponse({'error': 'credits are required'}, status=400)
         
-        # Get organization
-        organization = Organization.objects(id=organization_id).first()
-        if not organization:
-            return JsonResponse({'error': 'Organization not found'}, status=404)
+        organization = None
+        is_single_user = False
         
-        # Check permission - only owner can purchase credits/plans
-        if not is_organization_owner(request.user, organization):
-            return JsonResponse({'error': 'Only organization owner can purchase credits/plans'}, status=403)
+        if organization_id:
+            # Organization payment
+            organization = Organization.objects(id=organization_id).first()
+            if not organization:
+                return JsonResponse({'error': 'Organization not found'}, status=404)
+            
+            # Check permission - only owner can purchase credits/plans
+            if not is_organization_owner(request.user, organization):
+                return JsonResponse({'error': 'Only organization owner can purchase credits/plans'}, status=403)
+        else:
+            # Single user payment
+            is_single_user = True
         
         # Create Razorpay order
         client = get_razorpay_client()
         
         # Generate a shorter receipt ID (max 40 chars for Razorpay)
-        # Format: org_<org_id_short>_<timestamp_short>
-        org_id_short = str(organization.id)[:8]  # First 8 chars of org ID
-        timestamp_short = str(int(datetime.utcnow().timestamp()))[-8:]  # Last 8 digits of timestamp
-        receipt_id = f'org_{org_id_short}_{timestamp_short}'
+        if organization:
+            # Format: org_<org_id_short>_<timestamp_short>
+            org_id_short = str(organization.id)[:8]  # First 8 chars of org ID
+            timestamp_short = str(int(datetime.utcnow().timestamp()))[-8:]  # Last 8 digits of timestamp
+            receipt_id = f'org_{org_id_short}_{timestamp_short}'
+        else:
+            # Format: user_<user_id_short>_<timestamp_short>
+            user_id_short = str(request.user.id)[:8]  # First 8 chars of user ID
+            timestamp_short = str(int(datetime.utcnow().timestamp()))[-8:]  # Last 8 digits of timestamp
+            receipt_id = f'user_{user_id_short}_{timestamp_short}'
         
         # Ensure receipt is max 40 characters
         if len(receipt_id) > 40:
             receipt_id = receipt_id[:40]
         
         order_notes = {
-            'organization_id': str(organization.id),
-            'organization_name': organization.name,
             'user_id': str(request.user.id),
             'credits': credits
         }
+        
+        if organization:
+            order_notes['organization_id'] = str(organization.id)
+            order_notes['organization_name'] = organization.name
+        else:
+            order_notes['user_name'] = request.user.full_name or request.user.username
         
         if plan_id:
             order_notes['plan_id'] = str(plan_id)
@@ -118,7 +135,7 @@ def create_razorpay_order(request):
         
         order_data = {
             'amount': int(amount * 100),  # Convert to paise
-            'currency': 'USD',
+            'currency': 'INR',
             'receipt': receipt_id,
             'notes': order_notes
         }
@@ -127,7 +144,7 @@ def create_razorpay_order(request):
         
         # Create payment transaction record
         payment_transaction = PaymentTransaction(
-            organization=organization,
+            organization=organization,  # None for single users
             user=request.user,
             plan=plan,
             amount=amount,
@@ -143,15 +160,20 @@ def create_razorpay_order(request):
         )
         payment_transaction.save()
         
-        return JsonResponse({
+        response_data = {
             'success': True,
             'order_id': razorpay_order['id'],
             'amount': amount,
             'currency': 'INR',
             'key_id': getattr(settings, 'RAZORPAY_KEY_ID', ''),
             'credits': credits,
-            'organization_id': str(organization.id)
-        }, status=200)
+            'is_single_user': is_single_user
+        }
+        
+        if organization:
+            response_data['organization_id'] = str(organization.id)
+        
+        return JsonResponse(response_data, status=200)
         
     except Exception as e:
         error_trace = traceback.format_exc()
@@ -216,45 +238,63 @@ def verify_razorpay_payment(request):
                 payment_transaction.save()
                 return JsonResponse({'error': f'Payment not successful. Status: {payment["status"]}'}, status=400)
             
-            # Payment successful - add credits to organization
-            result = add_credits(
-                payment_transaction.organization,
-                request.user,
-                payment_transaction.credits,
-                reason=f"Credit purchase via Razorpay - Order: {order_id}",
-                metadata={
-                    'payment_id': payment_id,
-                    'order_id': order_id,
-                    'amount': payment_transaction.amount
-                }
-            )
-            
-            if result['success']:
-                # If this is a plan subscription, update organization's plan
-                if payment_transaction.plan:
-                    organization = payment_transaction.organization
-                    organization.plan = payment_transaction.plan
-                    organization.save()
+            # Payment successful - add credits to organization or user
+            if payment_transaction.organization:
+                # Organization payment
+                result = add_credits(
+                    payment_transaction.organization,
+                    request.user,
+                    payment_transaction.credits,
+                    reason=f"Credit purchase via Razorpay - Order: {order_id}",
+                    metadata={
+                        'payment_id': payment_id,
+                        'order_id': order_id,
+                        'amount': payment_transaction.amount
+                    }
+                )
                 
-                # Update payment transaction
-                payment_transaction.razorpay_payment_id = payment_id
-                payment_transaction.razorpay_signature = signature
-                payment_transaction.status = 'completed'
-                payment_transaction.updated_at = datetime.utcnow()
-                payment_transaction.save()
-                
-                return JsonResponse({
-                    'success': True,
-                    'message': 'Payment verified and credits added successfully',
-                    'credits_added': payment_transaction.credits,
-                    'balance_after': result['balance_after'],
-                    'payment_id': payment_id,
-                    'plan_id': str(payment_transaction.plan.id) if payment_transaction.plan else None
-                }, status=200)
+                if result['success']:
+                    # If this is a plan subscription, update organization's plan
+                    if payment_transaction.plan:
+                        organization = payment_transaction.organization
+                        organization.plan = payment_transaction.plan
+                        organization.save()
+                    
+                    balance_after = result['balance_after']
+                else:
+                    payment_transaction.status = 'failed'
+                    payment_transaction.save()
+                    return JsonResponse({'error': f'Failed to add credits: {result["message"]}'}, status=500)
             else:
-                payment_transaction.status = 'failed'
-                payment_transaction.save()
-                return JsonResponse({'error': f'Failed to add credits: {result["message"]}'}, status=500)
+                # Single user payment - add credits directly to user
+                user = payment_transaction.user
+                user.credit_balance = (user.credit_balance or 0) + payment_transaction.credits
+                
+                # If this is a plan subscription, update user's plan
+                if payment_transaction.plan:
+                    user.plan = payment_transaction.plan
+                
+                user.save()
+                balance_after = user.credit_balance
+            
+            # Update payment transaction
+            payment_transaction.razorpay_payment_id = payment_id
+            payment_transaction.razorpay_signature = signature
+            payment_transaction.status = 'completed'
+            payment_transaction.updated_at = datetime.utcnow()
+            payment_transaction.save()
+            
+            response_data = {
+                'success': True,
+                'message': 'Payment verified and credits added successfully',
+                'credits_added': payment_transaction.credits,
+                'balance_after': balance_after,
+                'payment_id': payment_id,
+                'plan_id': str(payment_transaction.plan.id) if payment_transaction.plan else None,
+                'is_single_user': payment_transaction.organization is None
+            }
+            
+            return JsonResponse(response_data, status=200)
                 
         except Exception as e:
             payment_transaction.status = 'failed'
@@ -272,24 +312,30 @@ def verify_razorpay_payment(request):
 @csrf_exempt
 @authenticate
 def get_payment_history(request):
-    """Get payment history for an organization"""
+    """Get payment history for an organization or individual user"""
     try:
         organization_id = request.GET.get('organization_id')
         
-        if not organization_id:
-            return JsonResponse({'error': 'organization_id is required'}, status=400)
-        
-        # Get organization
-        organization = Organization.objects(id=organization_id).first()
-        if not organization:
-            return JsonResponse({'error': 'Organization not found'}, status=404)
-        
-        # Check permission
-        if not is_organization_owner(request.user, organization):
-            return JsonResponse({'error': 'Only organization owner can view payment history'}, status=403)
-        
-        # Get payment transactions
-        transactions = PaymentTransaction.objects(organization=organization).order_by('-created_at')
+        if organization_id:
+            # Get organization
+            organization = Organization.objects(id=organization_id).first()
+            if not organization:
+                return JsonResponse({'error': 'Organization not found'}, status=404)
+            
+            # Check permission
+            if not is_organization_owner(request.user, organization):
+                return JsonResponse({'error': 'Only organization owner can view payment history'}, status=403)
+            
+            # Get payment transactions for organization
+            transactions = PaymentTransaction.objects(organization=organization).order_by('-created_at')
+            is_single_user = False
+        else:
+            # Single user - get their payment transactions
+            transactions = PaymentTransaction.objects(
+                user=request.user,
+                organization=None
+            ).order_by('-created_at')
+            is_single_user = True
         
         transactions_list = []
         for txn in transactions:
@@ -310,12 +356,20 @@ def get_payment_history(request):
                 'updated_at': txn.updated_at.isoformat() if txn.updated_at else None
             })
         
-        return JsonResponse({
-            'organization_id': str(organization.id),
-            'organization_name': organization.name,
+        response_data = {
             'transactions': transactions_list,
-            'total_count': len(transactions_list)
-        }, status=200)
+            'total_count': len(transactions_list),
+            'is_single_user': is_single_user
+        }
+        
+        if not is_single_user:
+            response_data['organization_id'] = str(organization.id)
+            response_data['organization_name'] = organization.name
+        else:
+            response_data['user_id'] = str(request.user.id)
+            response_data['user_name'] = request.user.full_name or request.user.username
+        
+        return JsonResponse(response_data, status=200)
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
@@ -357,12 +411,13 @@ def get_all_payments(request):
             if txn.plan:
                 plan_name = txn.plan.name
             
-            transactions_list.append({
+            transaction_data = {
                 'id': str(txn.id),
-                'organization_id': str(txn.organization.id),
-                'organization_name': txn.organization.name,
+                'organization_id': str(txn.organization.id) if txn.organization else None,
+                'organization_name': txn.organization.name if txn.organization else None,
                 'user_id': str(txn.user.id),
                 'user_email': txn.user.email if hasattr(txn.user, 'email') else 'N/A',
+                'user_name': txn.user.full_name if hasattr(txn.user, 'full_name') and txn.user.full_name else txn.user.username if hasattr(txn.user, 'username') else 'N/A',
                 'plan_id': str(txn.plan.id) if txn.plan else None,
                 'plan_name': plan_name,
                 'amount': txn.amount,
@@ -373,7 +428,9 @@ def get_all_payments(request):
                 'razorpay_payment_id': txn.razorpay_payment_id,
                 'created_at': txn.created_at.isoformat() if txn.created_at else None,
                 'updated_at': txn.updated_at.isoformat() if txn.updated_at else None,
-            })
+                'is_single_user': txn.organization is None,
+            }
+            transactions_list.append(transaction_data)
         
         return JsonResponse({
             'success': True,

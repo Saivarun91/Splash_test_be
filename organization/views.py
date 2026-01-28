@@ -353,9 +353,18 @@ def add_organization_user(request, organization_id):
                 print(f"Failed to send organization invite email: {e}")
                 # Don't fail if email fails, but log it
         else:
-            # User exists, just add to organization
+            # User exists, check if already in this organization
             if user.organization and str(user.organization.id) == str(organization.id):
                 return JsonResponse({'error': 'User is already a member of this organization'}, status=400)
+            
+            # Check if user is already in another organization
+            if user.organization and str(user.organization.id) != str(organization.id):
+                existing_org = user.organization
+                return JsonResponse({
+                    'error': f'This Member is already in another organization',
+                    'existing_organization': existing_org.name,
+                    'existing_organization_id': str(existing_org.id)
+                }, status=400)
 
             user.organization = organization
             user.organization_role = organization_role
@@ -681,20 +690,73 @@ def remove_organization_credits(request, organization_id):
 
 
 # =====================
-# Admin-only: Remove User from Organization
+# Admin and Organization Owner: Remove User from Organization
 # =====================
 @api_view(['DELETE'])
 @csrf_exempt
 @authenticate
 def remove_user_from_organization(request, organization_id, user_id):
-    """Only admin can remove users from organizations"""
-    if not is_admin(request.user):
-        return JsonResponse({'error': 'Only admin can remove users from organizations'}, status=403)
-
+    """Admin and organization owner can remove users from organizations"""
     try:
         organization = Organization.objects(id=organization_id).first()
         if not organization:
             return JsonResponse({'error': 'Organization not found'}, status=404)
+
+        # Check if user is organization owner or admin
+        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
+            return JsonResponse({'error': 'Only organization owner or admin can remove users'}, status=403)
+
+        user = User.objects(id=user_id).first()
+        if not user:
+            return JsonResponse({'error': 'User not found'}, status=404)
+
+        # Check if user is the owner
+        if str(organization.owner.id) == str(user.id):
+            return JsonResponse({'error': 'Cannot remove organization owner'}, status=400)
+
+        # Check if user is actually in this organization
+        if not user.organization or str(user.organization.id) != str(organization.id):
+            return JsonResponse({'error': 'User is not a member of this organization'}, status=400)
+
+        # Remove user from organization members list
+        if user in organization.members:
+            organization.members.remove(user)
+            organization.save()
+
+        # Clear user's organization reference
+        user.organization = None
+        user.organization_role = None
+        user.updated_at = datetime.utcnow()
+        user.save()
+
+        # Delete OrgRole entries for this user-organization combination
+        OrgRole.objects(user=user, organization=organization).delete()
+
+        return JsonResponse({
+            'success': True,
+            'message': 'User removed from organization successfully'
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Organization Owner: Remove User from Organization
+# =====================
+@api_view(['DELETE'])
+@csrf_exempt
+@authenticate
+def remove_organization_user(request, organization_id, user_id):
+    """Organization owner can remove users from their organization"""
+    try:
+        organization = Organization.objects(id=organization_id).first()
+        if not organization:
+            return JsonResponse({'error': 'Organization not found'}, status=404)
+
+        # Check if user is organization owner or admin
+        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
+            return JsonResponse({'error': 'Only organization owner or admin can remove users'}, status=403)
 
         user = User.objects(id=user_id).first()
         if not user:
