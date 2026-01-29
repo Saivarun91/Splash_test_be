@@ -249,6 +249,38 @@ def all_organizations_credit_usage(request):
 
 
 # =====================
+# User Credit Usage (single user, not scoped to organization)
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def user_credit_usage(request):
+    """
+    Return credit ledger entries for the current user (both org and personal),
+    mainly for showing a simple credits deduction log on the frontend.
+    """
+    try:
+        user = request.user
+        # Most recent first
+        ledger_entries = CreditLedger.objects(user=user).order_by('-created_at')[:200]
+
+        entries = []
+        for entry in ledger_entries:
+            entries.append({
+                'id': str(entry.id),
+                'created_at': entry.created_at.isoformat() if entry.created_at else None,
+                'change_type': entry.change_type,
+                'credits_changed': entry.credits_changed,
+                'balance_after': entry.balance_after,
+                'reason': entry.reason,
+            })
+
+        return JsonResponse({'entries': entries}, status=200)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
 # Organization Credit Summary (Quick stats)
 # =====================
 @api_view(['GET'])
