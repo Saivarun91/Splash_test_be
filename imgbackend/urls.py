@@ -17,6 +17,8 @@ urlpatterns = [
     path('api/credits/', include('CREDITS.urls'), name='credits'),
     # Payment endpoints
     path('api/payments/', include('payments.urls'), name='payments'),
+    # Invoice / GST configuration endpoints
+    path('api/invoices/', include('invoices.urls'), name='invoices'),
     # Plans endpoints
     path('api/plans/', include('plans.urls'), name='plans'),
     # Admin dashboard endpoints

@@ -90,6 +90,7 @@ INSTALLED_APPS = [
     'organization',
     'CREDITS',
     'payments',
+    'invoices',
     'django_celery_results',
 ]
 
