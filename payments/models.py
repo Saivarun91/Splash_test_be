@@ -1,4 +1,11 @@
-from mongoengine import Document, StringField, IntField, DateTimeField, ReferenceField, FloatField
+from mongoengine import (
+    Document,
+    StringField,
+    IntField,
+    DateTimeField,
+    ReferenceField,
+    FloatField,
+)
 from datetime import datetime
 
 
@@ -9,9 +16,22 @@ class PaymentTransaction(Document):
     plan = ReferenceField("Plan")  # Plan subscription (if this is a plan purchase)
     
     # Payment details
-    amount = FloatField(required=True)  # Amount in INR
+    # Base amount (before GST) in INR
+    amount = FloatField(required=True)
     credits = IntField(required=True)  # Credits purchased
     currency = StringField()
+
+    # Billing details captured from user before payment
+    billing_name = StringField()
+    billing_address = StringField()
+    billing_phone = StringField()
+    billing_gst_number = StringField()
+    billing_type = StringField(choices=["individual", "business"], default="individual")
+
+    # Tax details (at time of payment)
+    tax_rate = FloatField()  # GST percentage used
+    tax_amount = FloatField()  # GST amount in INR
+    total_amount = FloatField()  # Final amount charged (amount + tax_amount)
     
     # Razorpay details
     razorpay_order_id = StringField(required=True, unique=True)

@@ -9,6 +9,7 @@ from organization.models import Organization
 from users.models import User, Role
 from plans.models import Plan
 from .models import PaymentTransaction
+from invoices.models import InvoiceConfig
 from CREDITS.utils import add_credits
 import json
 import traceback
@@ -59,13 +60,27 @@ def is_organization_owner(user, organization):
 @csrf_exempt
 @authenticate
 def create_razorpay_order(request):
-    """Create a Razorpay order for credit purchase (organization or single user)"""
+    """Create a Razorpay order for credit purchase (organization or single user).
+
+    This endpoint now:
+    - looks up current GST percentage from InvoiceConfig
+    - accepts optional billing details (name, address, phone, gst_number, billing_type)
+    - stores tax breakdown on PaymentTransaction
+    """
     try:
         data = json.loads(request.body)
         organization_id = data.get('organization_id')  # Optional for single users
+        # Base amount before GST
         amount = float(data.get('amount', 0))
         credits = int(data.get('credits', 0))
         plan_id = data.get('plan_id')  # Optional - for plan subscriptions
+
+        # Optional billing details provided from frontend "billing details" step
+        billing_name = data.get('billing_name')
+        billing_address = data.get('billing_address')
+        billing_phone = data.get('billing_phone')
+        billing_gst_number = data.get('billing_gst_number')
+        billing_type = data.get('billing_type') or 'individual'
         
         if amount <= 0:
             return JsonResponse({'error': 'amount is required and must be greater than 0'}, status=400)
@@ -99,6 +114,12 @@ def create_razorpay_order(request):
             # Single user payment
             is_single_user = True
         
+        # Calculate GST using current invoice configuration
+        invoice_config = InvoiceConfig.objects.first()
+        tax_rate = float(getattr(invoice_config, "tax_rate", 18.0))
+        tax_amount = round((amount * tax_rate) / 100.0, 2)
+        total_amount = round(amount + tax_amount, 2)
+
         # Create Razorpay order
         client = get_razorpay_client()
         
@@ -134,7 +155,8 @@ def create_razorpay_order(request):
             order_notes['plan_name'] = plan.name
         
         order_data = {
-            'amount': int(amount * 100),  # Convert to paise
+            # Razorpay expects final amount including GST, in paise
+            'amount': int(total_amount * 100),
             'currency': 'INR',
             'receipt': receipt_id,
             'notes': order_notes
@@ -150,6 +172,14 @@ def create_razorpay_order(request):
             amount=amount,
             credits=credits,
             currency=order_data['currency'],
+            billing_name=billing_name,
+            billing_address=billing_address,
+            billing_phone=billing_phone,
+            billing_gst_number=billing_gst_number,
+            billing_type=billing_type,
+            tax_rate=tax_rate,
+            tax_amount=tax_amount,
+            total_amount=total_amount,
             razorpay_order_id=razorpay_order['id'],
             status='pending',
             metadata=json.dumps({
@@ -163,7 +193,11 @@ def create_razorpay_order(request):
         response_data = {
             'success': True,
             'order_id': razorpay_order['id'],
+            # Return both base amount and final amount for UI display if needed
             'amount': amount,
+            'tax_rate': tax_rate,
+            'tax_amount': tax_amount,
+            'total_amount': total_amount,
             'currency': 'INR',
             'key_id': getattr(settings, 'RAZORPAY_KEY_ID', ''),
             'credits': credits,
@@ -350,6 +384,15 @@ def get_payment_history(request):
                 'status': txn.status,
                 'razorpay_order_id': txn.razorpay_order_id,
                 'razorpay_payment_id': txn.razorpay_payment_id,
+                # Billing / tax details for invoices
+                'billing_name': getattr(txn, 'billing_name', None),
+                'billing_address': getattr(txn, 'billing_address', None),
+                'billing_phone': getattr(txn, 'billing_phone', None),
+                'billing_gst_number': getattr(txn, 'billing_gst_number', None),
+                'billing_type': getattr(txn, 'billing_type', None),
+                'tax_rate': getattr(txn, 'tax_rate', None),
+                'tax_amount': getattr(txn, 'tax_amount', None),
+                'total_amount': getattr(txn, 'total_amount', None),
                 'plan_id': str(txn.plan.id) if txn.plan else None,
                 'plan_name': plan_name,
                 'created_at': txn.created_at.isoformat() if txn.created_at else None,
@@ -426,6 +469,15 @@ def get_all_payments(request):
                 'status': txn.status,
                 'razorpay_order_id': txn.razorpay_order_id,
                 'razorpay_payment_id': txn.razorpay_payment_id,
+                # Billing / tax details for admin invoice view
+                'billing_name': getattr(txn, 'billing_name', None),
+                'billing_address': getattr(txn, 'billing_address', None),
+                'billing_phone': getattr(txn, 'billing_phone', None),
+                'billing_gst_number': getattr(txn, 'billing_gst_number', None),
+                'billing_type': getattr(txn, 'billing_type', None),
+                'tax_rate': getattr(txn, 'tax_rate', None),
+                'tax_amount': getattr(txn, 'tax_amount', None),
+                'total_amount': getattr(txn, 'total_amount', None),
                 'created_at': txn.created_at.isoformat() if txn.created_at else None,
                 'updated_at': txn.updated_at.isoformat() if txn.updated_at else None,
                 'is_single_user': txn.organization is None,
