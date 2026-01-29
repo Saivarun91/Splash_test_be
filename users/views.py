@@ -12,7 +12,7 @@ from datetime import timedelta
 from django.conf import settings
 import secrets
 from common.middleware import authenticate
-from common.email_utils import send_registration_email, send_password_reset_email, generate_random_password
+from common.email_utils import send_registration_email, send_registration_admin_email, send_password_reset_email, generate_random_password
 
 SECRET_KEY = settings.SECRET_KEY
 
@@ -62,11 +62,20 @@ def register_user(request):
         )
         user.save()
 
-        # Send registration email
+        # Send registration email to user
         try:
             send_registration_email(user.email, user.full_name or user.username)
         except Exception as e:
             print(f"Failed to send registration email: {e}")
+        # Notify admin(s) that a new user registered
+        try:
+            send_registration_admin_email(
+                user.email,
+                user.full_name or user.username,
+                user.username,
+            )
+        except Exception as e:
+            print(f"Failed to send registration admin notification: {e}")
             # Don't fail registration if email fails
 
         # Generate JWT after registration (optional)

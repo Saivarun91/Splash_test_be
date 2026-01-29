@@ -23,6 +23,8 @@ urlpatterns = [
     path('api/admin/dashboard/stats', admin_views.admin_dashboard_stats, name='admin_dashboard_stats'),
     path('api/admin/dashboard/images', admin_views.admin_dashboard_images, name='admin_dashboard_images'),
     path('api/admin/dashboard/all-charts', admin_views.admin_dashboard_all_charts, name='admin_dashboard_all_charts'),
+    # Mail templates (admin only)
+    path('api/mail-templates/', include('common.mail_urls')),
 ]
 
 # Serve media files during development

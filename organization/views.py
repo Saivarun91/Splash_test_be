@@ -14,7 +14,7 @@ from common.middleware import authenticate
 from CREDITS.utils import add_credits, deduct_credits
 from datetime import datetime
 from django.contrib.auth.hashers import make_password
-from common.email_utils import send_organization_invite_email, generate_random_password
+from common.email_utils import send_organization_invite_email, send_invite_organizer_confirmation, generate_random_password
 from probackendapp.models import Project, ImageGenerationHistory
 from imgbackendapp.mongo_models import OrnamentMongo
 from mongoengine import Q
@@ -349,6 +349,12 @@ def add_organization_user(request, organization_id):
                     request.user.full_name or request.user.username,
                     is_new_user=True
                 )
+                send_invite_organizer_confirmation(
+                    request.user.email,
+                    user_email,
+                    organization.name,
+                    organization_role,
+                )
             except Exception as e:
                 print(f"Failed to send organization invite email: {e}")
                 # Don't fail if email fails, but log it
@@ -381,6 +387,12 @@ def add_organization_user(request, organization_id):
                     organization_role,
                     request.user.full_name or request.user.username,
                     is_new_user=False
+                )
+                send_invite_organizer_confirmation(
+                    request.user.email,
+                    user_email,
+                    organization.name,
+                    organization_role,
                 )
             except Exception as e:
                 print(f"Failed to send organization notification email: {e}")
