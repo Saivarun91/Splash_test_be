@@ -418,6 +418,7 @@ def get_payment_history(request):
         return JsonResponse(response_data, status=200)
         
     except Exception as e:
+        print(f"Error in get_payment_history: {str(e)}")
         return JsonResponse({'error': str(e)}, status=500)
 
 

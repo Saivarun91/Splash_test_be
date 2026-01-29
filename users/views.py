@@ -276,6 +276,7 @@ def get_user_profile(request):
                 "preferred_language": getattr(user, 'preferred_language', 'en') or 'en',
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+                "credit_balance": user.credit_balance or 0,
             }
         }, status=200)
     except Exception as e:
