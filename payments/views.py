@@ -157,7 +157,7 @@ def create_razorpay_order(request):
         order_data = {
             # Razorpay expects final amount including GST, in paise
             'amount': int(total_amount * 100),
-            'currency': 'INR',
+            'currency': 'USD',
             'receipt': receipt_id,
             'notes': order_notes
         }
@@ -198,7 +198,7 @@ def create_razorpay_order(request):
             'tax_rate': tax_rate,
             'tax_amount': tax_amount,
             'total_amount': total_amount,
-            'currency': 'INR',
+            'currency': 'USD',
             'key_id': getattr(settings, 'RAZORPAY_KEY_ID', ''),
             'credits': credits,
             'is_single_user': is_single_user
@@ -230,10 +230,13 @@ def verify_razorpay_payment(request):
     """Verify Razorpay payment and add credits to organization"""
     try:
         data = json.loads(request.body)
-        order_id = data.get('order_id')
-        payment_id = data.get('payment_id')
-        signature = data.get('signature')
-        
+        # Support both our internal field names and Razorpay's default names
+        order_id = data.get('order_id') or data.get('razorpay_order_id')
+        payment_id = data.get('payment_id') or data.get('razorpay_payment_id')
+        signature = data.get('signature') or data.get('razorpay_signature')
+        print("order_id", order_id)
+        print("payment_id", payment_id)
+        print("signature", signature)
         if not order_id or not payment_id or not signature:
             return JsonResponse({'error': 'order_id, payment_id, and signature are required'}, status=400)
         
@@ -557,7 +560,7 @@ def get_revenue_stats(request):
             'growth_percentage': round(growth_percentage, 2),
             'total_transactions': total_transactions,
             'monthly_transactions': monthly_transactions_count,
-            'currency': 'INR'
+            'currency': 'USD'
         }, status=200)
         
     except Exception as e:

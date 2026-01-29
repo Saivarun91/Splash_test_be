@@ -14,6 +14,9 @@ urlpatterns = [
     # All organizations credit usage (admin only)
     path('all-organizations/usage/', views.all_organizations_credit_usage, name='all_organizations_credit_usage'),
     
+    # Individual user credit usage
+    path('user/usage/', views.user_credit_usage, name='user_credit_usage'),
+    
     # Credits usage statistics for charts (admin only)
     path('admin/usage-statistics/', views.credits_usage_statistics, name='credits_usage_statistics'),
     

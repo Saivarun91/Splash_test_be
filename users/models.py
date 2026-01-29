@@ -1,4 +1,14 @@
-from mongoengine import Document, StringField, EmailField, BooleanField, DateTimeField, EnumField, ListField, ReferenceField
+from mongoengine import (
+    Document,
+    StringField,
+    EmailField,
+    BooleanField,
+    DateTimeField,
+    EnumField,
+    ListField,
+    ReferenceField,
+    IntField,
+)
 import datetime
 import enum
 
@@ -23,6 +33,9 @@ class User(Document):
 
     # Use string reference to avoid circular import
     projects = ListField(ReferenceField("Project"), default=list)
+
+    # Credit balance for single users (not in an organization)
+    credit_balance = IntField(default=0)
 
     created_at = DateTimeField(default=datetime.datetime.utcnow)
     updated_at = DateTimeField(default=datetime.datetime.utcnow)
