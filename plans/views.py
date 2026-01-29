@@ -35,13 +35,18 @@ def list_plans(request):
         
         plans_data = []
         for plan in plans:
+            cs = plan.custom_settings or {}
+            # Normalize credit_options for Pro plan: [{amount, credits}, ...]
+            credit_options = cs.get('credit_options')
+            if not credit_options and (plan.name or '').lower() == 'pro':
+                credit_options = [{'amount': 50, 'credits': 50}, {'amount': 100, 'credits': 100}, {'amount': 300, 'credits': 300}]
             plan_dict = {
                 'id': str(plan.id),
                 'name': plan.name,
                 'description': plan.description or '',
                 'price': plan.price,
                 'original_price': plan.original_price,
-                'currency': getattr(plan, 'currency', 'USD'),  # Default to USD for backward compatibility
+                'currency': getattr(plan, 'currency', 'USD'),
                 'billing_cycle': plan.billing_cycle,
                 'credits_per_month': plan.credits_per_month,
                 'max_projects': plan.max_projects,
@@ -49,7 +54,10 @@ def list_plans(request):
                 'features': plan.features or [],
                 'is_active': plan.is_active,
                 'is_popular': plan.is_popular,
-                'custom_settings': plan.custom_settings or {},  # Include custom_settings for dynamic display
+                'custom_settings': {**cs, 'credit_options': credit_options or cs.get('credit_options')},
+                'credit_options': credit_options or cs.get('credit_options') or [],
+                'amount_display': cs.get('amount_display', 'As you go'),
+                'cta_text': cs.get('cta_text'),
                 'created_at': plan.created_at.isoformat() if plan.created_at else None,
                 'updated_at': plan.updated_at.isoformat() if plan.updated_at else None,
             }
@@ -74,7 +82,10 @@ def get_plan(request, plan_id):
     """Get single plan details - public endpoint"""
     try:
         plan = Plan.objects.get(id=plan_id)
-        
+        cs = plan.custom_settings or {}
+        credit_options = cs.get('credit_options')
+        if not credit_options and (plan.name or '').lower() == 'pro':
+            credit_options = [{'amount': 50, 'credits': 50}, {'amount': 100, 'credits': 100}, {'amount': 300, 'credits': 300}]
         plan_dict = {
             'id': str(plan.id),
             'name': plan.name,
@@ -89,7 +100,10 @@ def get_plan(request, plan_id):
             'features': plan.features or [],
             'is_active': plan.is_active,
             'is_popular': plan.is_popular,
-            'custom_settings': plan.custom_settings or {},
+            'custom_settings': {**cs, 'credit_options': credit_options or cs.get('credit_options')},
+            'credit_options': credit_options or cs.get('credit_options') or [],
+            'amount_display': cs.get('amount_display', 'As you go'),
+            'cta_text': cs.get('cta_text'),
             'created_at': plan.created_at.isoformat() if plan.created_at else None,
             'updated_at': plan.updated_at.isoformat() if plan.updated_at else None,
         }
