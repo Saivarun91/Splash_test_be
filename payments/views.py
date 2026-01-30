@@ -398,6 +398,8 @@ def get_payment_history(request):
                 'total_amount': getattr(txn, 'total_amount', None),
                 'plan_id': str(txn.plan.id) if txn.plan else None,
                 'plan_name': plan_name,
+                'user_email': txn.user.email if hasattr(txn.user, 'email') else None,
+                'user_name': txn.user.full_name if hasattr(txn.user, 'full_name') and txn.user.full_name else txn.user.username if hasattr(txn.user, 'username') else None,
                 'created_at': txn.created_at.isoformat() if txn.created_at else None,
                 'updated_at': txn.updated_at.isoformat() if txn.updated_at else None
             })
