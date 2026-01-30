@@ -56,3 +56,24 @@ class PaymentTransaction(Document):
     
     def __str__(self):
         return f"Payment {self.razorpay_order_id} - {self.status}"
+
+
+class ContactSalesSubmission(Document):
+    """Store Contact Sales / Enterprise lead form submissions."""
+    first_name = StringField(required=True)
+    last_name = StringField(required=True)
+    work_email = StringField(required=True)
+    phone = StringField(required=True)
+    company_website = StringField(required=True)
+    problems_trying_to_solve = StringField()
+    users_to_onboard = StringField()
+    timeline = StringField()
+    created_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "contact_sales_submissions",
+        "strict": False,
+    }
+
+    def __str__(self):
+        return f"Contact Sales: {self.work_email}"
