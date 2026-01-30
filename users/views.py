@@ -57,8 +57,8 @@ def register_user(request):
             full_name=full_name,
             username=username,
             role=role,  # Default
-            
-            profile_completed=False,  # User needs to complete profile
+            credit_balance=5,
+            profile_completed=True,  # User needs to complete profile
         )
         user.save()
 
