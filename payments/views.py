@@ -8,7 +8,7 @@ from common.middleware import authenticate
 from organization.models import Organization
 from users.models import User, Role
 from plans.models import Plan
-from .models import PaymentTransaction
+from .models import PaymentTransaction, ContactSalesSubmission
 from invoices.models import InvoiceConfig
 from CREDITS.utils import add_credits
 import json
@@ -564,4 +564,70 @@ def get_revenue_stats(request):
         }, status=200)
         
     except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Contact Sales (Enterprise lead form)
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+def submit_contact_sales(request):
+    """Save Contact Sales form submission to DB and email admin. No auth required."""
+    try:
+        data = json.loads(request.body)
+        first_name = (data.get('first_name') or '').strip()
+        last_name = (data.get('last_name') or '').strip()
+        work_email = (data.get('work_email') or '').strip()
+        phone = (data.get('phone') or '').strip()
+        company_website = (data.get('company_website') or '').strip()
+        problems_trying_to_solve = (data.get('problems_trying_to_solve') or '').strip()
+        users_to_onboard = (data.get('users_to_onboard') or '').strip()
+        timeline = (data.get('timeline') or '').strip()
+
+        if not first_name:
+            return JsonResponse({'error': 'First name is required'}, status=400)
+        if not last_name:
+            return JsonResponse({'error': 'Last name is required'}, status=400)
+        if not work_email:
+            return JsonResponse({'error': 'Work email is required'}, status=400)
+        if not phone:
+            return JsonResponse({'error': 'Phone number is required'}, status=400)
+        if not company_website:
+            return JsonResponse({'error': "Company's website is required"}, status=400)
+
+        submission = ContactSalesSubmission(
+            first_name=first_name,
+            last_name=last_name,
+            work_email=work_email,
+            phone=phone,
+            company_website=company_website,
+            problems_trying_to_solve=problems_trying_to_solve,
+            users_to_onboard=users_to_onboard,
+            timeline=timeline,
+        )
+        submission.save()
+
+        submission_data = {
+            'first_name': first_name,
+            'last_name': last_name,
+            'work_email': work_email,
+            'phone': phone,
+            'company_website': company_website,
+            'problems_trying_to_solve': problems_trying_to_solve,
+            'users_to_onboard': users_to_onboard,
+            'timeline': timeline,
+        }
+        from common.email_utils import send_contact_sales_admin_email
+        try:
+            send_contact_sales_admin_email(submission_data)
+        except Exception as e:
+            print(f"Failed to send contact sales admin email: {e}")
+            # Do not fail the request; data is already saved
+
+        return JsonResponse({'success': True, 'message': 'Thank you. Our team will get back to you shortly.'})
+    except json.JSONDecodeError as e:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        traceback.print_exc()
         return JsonResponse({'error': str(e)}, status=500)

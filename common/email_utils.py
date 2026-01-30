@@ -231,3 +231,56 @@ The Splash Team
     return _send_from_template(
         "invite_organization_organizer", [organizer_email], context, fallback_subject, fallback_body
     )
+
+
+def send_contact_sales_admin_email(submission_data):
+    """Notify admin(s) about a new Contact Sales / Enterprise lead submission."""
+    try:
+        from users.models import User, Role
+        admin_users = User.objects(role=Role.ADMIN)
+        admin_emails = [u.email for u in admin_users if getattr(u, "email", None)]
+        if not admin_emails:
+            admin_emails = getattr(settings, "ADMIN_EMAILS", [])
+        if isinstance(admin_emails, str):
+            admin_emails = [admin_emails]
+        if not admin_emails:
+            return True
+    except Exception as e:
+        print(f"Could not get admin emails for contact sales notification: {e}")
+        return True
+    context = {
+        "first_name": submission_data.get("first_name", ""),
+        "last_name": submission_data.get("last_name", ""),
+        "work_email": submission_data.get("work_email", ""),
+        "phone": submission_data.get("phone", ""),
+        "company_website": submission_data.get("company_website", ""),
+        "problems_trying_to_solve": submission_data.get("problems_trying_to_solve", ""),
+        "users_to_onboard": submission_data.get("users_to_onboard", ""),
+        "timeline": submission_data.get("timeline", ""),
+        "submitted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+    }
+    fallback_subject = "New Contact Sales / Enterprise lead"
+    fallback_body = f"""
+Hello,
+
+A new Contact Sales / Enterprise lead has been submitted:
+
+Contact details:
+- First name: {context['first_name']}
+- Last name: {context['last_name']}
+- Work email: {context['work_email']}
+- Phone: {context['phone']}
+- Company website: {context['company_website']}
+
+What problems are they trying to solve: {context['problems_trying_to_solve']}
+Users to onboard: {context['users_to_onboard']}
+Timeline: {context['timeline']}
+
+Submitted at: {context['submitted_at']}
+
+Best regards,
+Splash System
+"""
+    return _send_from_template(
+        "contact_sales_admin", admin_emails, context, fallback_subject, fallback_body
+    )
