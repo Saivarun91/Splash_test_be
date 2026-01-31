@@ -13,6 +13,9 @@ SLUG_INVITE_ORGANIZATION_USER = "invite_organization_user"
 SLUG_INVITE_ORGANIZATION_ORGANIZER = "invite_organization_organizer"
 SLUG_INVITE_PROJECT_USER = "invite_project_user"
 SLUG_INVITE_PROJECT_ORGANIZER = "invite_project_organizer"
+SLUG_PAYMENT_SUCCESS_USER = "payment_success_user"
+SLUG_PAYMENT_SUCCESS_ADMIN = "payment_success_admin"
+SLUG_CREDITS_RECHARGE_REMINDER = "credits_recharge_reminder"
 
 MAIL_TEMPLATE_SLUGS = [
     SLUG_REGISTRATION_USER,
@@ -22,6 +25,9 @@ MAIL_TEMPLATE_SLUGS = [
     SLUG_INVITE_ORGANIZATION_ORGANIZER,
     SLUG_INVITE_PROJECT_USER,
     SLUG_INVITE_PROJECT_ORGANIZER,
+    SLUG_PAYMENT_SUCCESS_USER,
+    SLUG_PAYMENT_SUCCESS_ADMIN,
+    SLUG_CREDITS_RECHARGE_REMINDER,
 ]
 
 
@@ -132,6 +138,52 @@ The Splash Team""",
             "body_plain": """Hello {{organizer_name}},
 
 You have sent a project collaboration invite to {{invitee_email}} for the project "{{project_name}}".
+
+Best regards,
+The Splash Team""",
+        },
+        SLUG_PAYMENT_SUCCESS_USER: {
+            "name": "Payment successful (to user)",
+            "description": "Sent to the user after a successful credit purchase.",
+            "subject": "Payment successful – {{credits_added}} credits added to your account",
+            "body_plain": """Hello {{user_name}},
+
+Your payment was successful.
+
+Credits added: {{credits_added}}
+Current balance: {{balance_after}}
+Amount paid: ${{total_amount}}
+
+Thank you for using Splash.
+
+Best regards,
+The Splash Team""",
+        },
+        SLUG_PAYMENT_SUCCESS_ADMIN: {
+            "name": "Payment successful (to admin)",
+            "description": "Sent to admin when a user completes a credit purchase.",
+            "subject": "Payment successful – credits purchased",
+            "body_plain": """Hello,
+
+A payment was completed:
+
+User: {{user_name}} ({{user_email}})
+Credits: {{credits_added}}
+Amount: ${{total_amount}}
+
+Time: {{payment_time}}
+
+Splash System""",
+        },
+        SLUG_CREDITS_RECHARGE_REMINDER: {
+            "name": "Credits running low – Recharge reminder",
+            "description": "Sent to user when their credit balance is at or below a threshold (thresholds set below).",
+            "subject": "Credits running low – only {{current_balance}} left",
+            "body_plain": """Hello {{user_name}},
+
+Your credit balance is now {{current_balance}} (at or below the {{threshold}} credit reminder threshold).
+
+Please recharge your credits to continue using Splash without interruption.
 
 Best regards,
 The Splash Team""",

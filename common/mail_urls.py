@@ -5,3 +5,4 @@ urlpatterns = [
     path("", mail_views.mail_template_list),
     path("<str:slug>/", mail_views.mail_template_detail),
 ]
+

@@ -12,7 +12,6 @@ from common.middleware import authenticate
 from datetime import datetime, timedelta
 from mongoengine import Q
 import json
-from collections import defaultdict
 
 
 def is_admin(user):
@@ -249,38 +248,6 @@ def all_organizations_credit_usage(request):
 
 
 # =====================
-# User Credit Usage (single user, not scoped to organization)
-# =====================
-@api_view(['GET'])
-@csrf_exempt
-@authenticate
-def user_credit_usage(request):
-    """
-    Return credit ledger entries for the current user (both org and personal),
-    mainly for showing a simple credits deduction log on the frontend.
-    """
-    try:
-        user = request.user
-        # Most recent first
-        ledger_entries = CreditLedger.objects(user=user).order_by('-created_at')[:200]
-
-        entries = []
-        for entry in ledger_entries:
-            entries.append({
-                'id': str(entry.id),
-                'created_at': entry.created_at.isoformat() if entry.created_at else None,
-                'change_type': entry.change_type,
-                'credits_changed': entry.credits_changed,
-                'balance_after': entry.balance_after,
-                'reason': entry.reason,
-            })
-
-        return JsonResponse({'entries': entries}, status=200)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-# =====================
 # Organization Credit Summary (Quick stats)
 # =====================
 @api_view(['GET'])
@@ -337,6 +304,188 @@ def organization_credit_summary(request, organization_id):
 
 
 # =====================
+# Individual User Credit Usage
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def user_credit_usage(request):
+    """
+    Get credit usage for the authenticated user (individual user, no organization).
+    Returns ledger entries where user=request.user and organization is None.
+    """
+    try:
+        user = request.user
+        start_date = request.GET.get('start_date')
+        end_date = request.GET.get('end_date')
+        change_type = request.GET.get('change_type')
+
+        query = Q(user=user) & (Q(organization=None) | Q(organization__exists=False))
+
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                query &= Q(created_at__gte=start_dt)
+            except Exception:
+                pass
+
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                query &= Q(created_at__lte=end_dt)
+            except Exception:
+                pass
+
+        if change_type and change_type in ['debit', 'credit']:
+            query &= Q(change_type=change_type)
+
+        ledger_entries = CreditLedger.objects(query).order_by('-created_at')
+
+        usage_data = []
+        total_debits = 0
+        total_credits = 0
+
+        for entry in ledger_entries:
+            user_email = None
+            try:
+                if entry.user:
+                    user_email = entry.user.email
+            except Exception:
+                pass
+            usage_data.append({
+                'id': str(entry.id),
+                'date': entry.created_at.isoformat() if entry.created_at else None,
+                'change_type': entry.change_type,
+                'credits_changed': entry.credits_changed,
+                'balance_after': entry.balance_after,
+                'reason': entry.reason,
+                'user_email': user_email,
+                'project_id': str(entry.project.id) if entry.project else None,
+                'metadata': entry.metadata or {}
+            })
+            if entry.change_type == 'debit':
+                total_debits += entry.credits_changed
+            else:
+                total_credits += entry.credits_changed
+
+        current_balance = getattr(user, 'credit_balance', 0) or 0
+
+        return JsonResponse({
+            'user': {
+                'id': str(user.id),
+                'email': user.email,
+                'current_balance': current_balance
+            },
+            'summary': {
+                'total_debits': total_debits,
+                'total_credits': total_credits,
+                'net_usage': total_debits - total_credits,
+                'entry_count': len(usage_data)
+            },
+            'usage_data': usage_data
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# Credits Usage Statistics for Charts (Admin only)
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def credits_usage_statistics(request):
+    """
+    Get credit usage statistics aggregated by time period for admin charts.
+    Query params: time_range ('day'|'week'|'month'), period_count (e.g. 7, 8, 6).
+    Returns: { success: true, data: [ { period, total, debit, credit }, ... ] }
+    """
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can view usage statistics'}, status=403)
+
+    try:
+        time_range = request.GET.get('time_range', 'month').lower()
+        try:
+            period_count = int(request.GET.get('period_count', 6))
+        except (TypeError, ValueError):
+            period_count = 6
+
+        # Compute range: one period per day/week/month
+        end_date = datetime.utcnow()
+        if time_range == 'day':
+            period_delta = timedelta(days=1)
+            start_date = end_date - (period_delta * period_count)
+            period_fmt = '%Y-%m-%d'
+            period_label = lambda d: d.strftime('%b %d')
+        elif time_range == 'week':
+            period_delta = timedelta(weeks=1)
+            start_date = end_date - (period_delta * period_count)
+            period_fmt = '%Y-%W'
+            period_label = lambda d: f"W{d.strftime('%W')} {d.strftime('%Y')}"
+        else:
+            # month
+            period_delta = timedelta(days=30)
+            start_date = end_date - (period_delta * period_count)
+            period_fmt = '%Y-%m'
+            period_label = lambda d: d.strftime('%b %Y')
+
+        # Build list of period boundaries (start of each period)
+        periods = []
+        current = start_date
+        while current <= end_date:
+            periods.append({
+                'start': current,
+                'label': period_label(current),
+                'key': current.strftime(period_fmt)
+            })
+            if time_range == 'day':
+                current += timedelta(days=1)
+            elif time_range == 'week':
+                current += timedelta(weeks=1)
+            else:
+                # advance by ~1 month
+                if current.month == 12:
+                    current = current.replace(year=current.year + 1, month=1, day=1)
+                else:
+                    current = current.replace(month=current.month + 1, day=1)
+            if len(periods) >= period_count + 1:
+                break
+
+        # Query all ledger entries in range (admin: all organizations + individual)
+        query = Q(created_at__gte=start_date, created_at__lte=end_date)
+        entries = CreditLedger.objects(query).only('created_at', 'change_type', 'credits_changed')
+
+        # Aggregate by period
+        period_totals = {p['key']: {'period': p['label'], 'debit': 0, 'credit': 0, 'total': 0} for p in periods}
+
+        for entry in entries:
+            if not entry.created_at:
+                continue
+            if time_range == 'day':
+                key = entry.created_at.strftime('%Y-%m-%d')
+            elif time_range == 'week':
+                key = entry.created_at.strftime('%Y-%W')
+            else:
+                key = entry.created_at.strftime('%Y-%m')
+            if key not in period_totals:
+                period_totals[key] = {'period': key, 'debit': 0, 'credit': 0, 'total': 0}
+            bucket = period_totals[key]
+            if entry.change_type == 'debit':
+                bucket['debit'] += entry.credits_changed
+            else:
+                bucket['credit'] += entry.credits_changed
+            bucket['total'] = bucket['debit']  # chart "credits" = usage (debits)
+
+        # Return in stable order (by period start)
+        data = [{'period': period_totals[p['key']]['period'], 'total': period_totals[p['key']]['total'], 'debit': period_totals[p['key']]['debit'], 'credit': period_totals[p['key']]['credit']} for p in periods if p['key'] in period_totals]
+        return JsonResponse({'success': True, 'data': data}, status=200)
+
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+# =====================
 # Get Credit Settings (Public - read-only)
 # =====================
 @api_view(['GET'])
@@ -350,11 +499,6 @@ def get_credit_settings_public(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
-                'default_image_model_name': getattr(
-                    settings,
-                    'default_image_model_name',
-                    'gemini-3-pro-image-preview'
-                ),
             }
         }, status=200)
     except Exception as e:
@@ -379,11 +523,9 @@ def get_credit_settings(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
-                'default_image_model_name': getattr(
-                    settings,
-                    'default_image_model_name',
-                    'gemini-3-pro-image-preview'
-                ),
+                'default_image_model_name': getattr(settings, 'default_image_model_name', 'gemini-3-pro-image-preview'),
+                'credit_reminder_threshold_1': getattr(settings, 'credit_reminder_threshold_1', 20),
+                'credit_reminder_threshold_2': getattr(settings, 'credit_reminder_threshold_2', 10),
                 'updated_at': settings.updated_at.isoformat() if settings.updated_at else None,
                 'updated_by': settings.updated_by.email if settings.updated_by else None,
             }
@@ -408,7 +550,6 @@ def update_credit_settings(request):
         
         credits_per_image = data.get('credits_per_image_generation')
         credits_per_regeneration = data.get('credits_per_regeneration')
-        default_image_model_name = data.get('default_image_model_name')
         
         if credits_per_image is None or credits_per_regeneration is None:
             return JsonResponse({'error': 'Both credits_per_image_generation and credits_per_regeneration are required'}, status=400)
@@ -420,8 +561,12 @@ def update_credit_settings(request):
         settings = CreditSettings.get_settings()
         settings.credits_per_image_generation = int(credits_per_image)
         settings.credits_per_regeneration = int(credits_per_regeneration)
-        if default_image_model_name:
-            settings.default_image_model_name = str(default_image_model_name)
+        if data.get('default_image_model_name') is not None:
+            settings.default_image_model_name = data.get('default_image_model_name', settings.default_image_model_name)
+        if data.get('credit_reminder_threshold_1') is not None:
+            settings.credit_reminder_threshold_1 = max(0, int(data.get('credit_reminder_threshold_1', 20)))
+        if data.get('credit_reminder_threshold_2') is not None:
+            settings.credit_reminder_threshold_2 = max(0, int(data.get('credit_reminder_threshold_2', 10)))
         settings.updated_by = request.user
         settings.updated_at = datetime.utcnow()
         settings.save()
@@ -432,109 +577,12 @@ def update_credit_settings(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
-                'default_image_model_name': getattr(
-                    settings,
-                    'default_image_model_name',
-                    'gemini-3-pro-image-preview'
-                ),
+                'default_image_model_name': getattr(settings, 'default_image_model_name', 'gemini-3-pro-image-preview'),
+                'credit_reminder_threshold_1': getattr(settings, 'credit_reminder_threshold_1', 20),
+                'credit_reminder_threshold_2': getattr(settings, 'credit_reminder_threshold_2', 10),
                 'updated_at': settings.updated_at.isoformat() if settings.updated_at else None,
                 'updated_by': settings.updated_by.email if settings.updated_by else None,
             }
         }, status=200)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-
-# =====================
-# Monthly/Weekly/Daily Credits Usage Statistics (Admin only)
-# =====================
-@api_view(['GET'])
-@csrf_exempt
-@authenticate
-def credits_usage_statistics(request):
-    """
-    Get aggregated credit usage statistics by time period (month, week, day).
-    Admin only.
-    Returns data grouped by time period for charting.
-    """
-    if not is_admin(request.user):
-        return JsonResponse({'error': 'Only admin can view credit usage statistics'}, status=403)
-    
-    try:
-        # Get query parameters
-        time_range = request.GET.get('time_range', 'month')  # 'month', 'week', 'day'
-        period_count = int(request.GET.get('period_count', '6'))  # Number of periods to return
-        
-        # Calculate date range based on time_range
-        end_date = datetime.utcnow()
-        if time_range == 'month':
-            start_date = end_date - timedelta(days=period_count * 30)
-        elif time_range == 'week':
-            start_date = end_date - timedelta(weeks=period_count)
-        else:  # day
-            start_date = end_date - timedelta(days=period_count)
-        
-        # Get all ledger entries in the date range
-        query = Q(created_at__gte=start_date, created_at__lte=end_date)
-        ledger_entries = CreditLedger.objects(query).only('created_at', 'change_type', 'credits_changed')
-        
-        # Aggregate by time period
-        period_data = defaultdict(lambda: {'debit': 0, 'credit': 0})
-        
-        for entry in ledger_entries:
-            if entry.created_at:
-                # Format date based on time range
-                if time_range == 'month':
-                    period_key = entry.created_at.strftime('%Y-%m')
-                elif time_range == 'week':
-                    # Get week number and year
-                    week_num = entry.created_at.isocalendar()[1]
-                    year = entry.created_at.year
-                    period_key = f"{year}-W{week_num:02d}"
-                else:  # day
-                    period_key = entry.created_at.strftime('%Y-%m-%d')
-                
-                if entry.change_type == 'debit':
-                    period_data[period_key]['debit'] += entry.credits_changed
-                elif entry.change_type == 'credit':
-                    period_data[period_key]['credit'] += entry.credits_changed
-        
-        # Convert to sorted list format for chart
-        chart_data = []
-        current_date = start_date
-        
-        # Generate all periods in range (even if no data)
-        for i in range(period_count):
-            if time_range == 'month':
-                period_key = current_date.strftime('%Y-%m')
-                display_key = current_date.strftime('%b')
-                next_date = current_date + timedelta(days=30)
-            elif time_range == 'week':
-                week_num = current_date.isocalendar()[1]
-                year = current_date.year
-                period_key = f"{year}-W{week_num:02d}"
-                display_key = f"W{week_num}"
-                next_date = current_date + timedelta(weeks=1)
-            else:  # day
-                period_key = current_date.strftime('%Y-%m-%d')
-                display_key = current_date.strftime('%d/%m')
-                next_date = current_date + timedelta(days=1)
-            
-            data = period_data.get(period_key, {'debit': 0, 'credit': 0})
-            chart_data.append({
-                'period': display_key,
-                'debit': data['debit'],
-                'credit': data['credit'],
-                'total': data['debit'] + data['credit']
-            })
-            
-            current_date = next_date
-        
-        return JsonResponse({
-            'success': True,
-            'time_range': time_range,
-            'data': chart_data
-        }, status=200)
-    
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)

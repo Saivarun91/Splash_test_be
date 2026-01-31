@@ -1,6 +1,7 @@
 """
 Email utility functions for sending various types of emails.
 Uses MailTemplate from DB when available; falls back to built-in defaults.
+Includes a shared HTML base template with portal colors and logo.
 """
 import re
 from django.core.mail import send_mail
@@ -8,6 +9,90 @@ from django.conf import settings
 import secrets
 import string
 from datetime import datetime
+
+# Portal color palette and branding for emails
+EMAIL_PRIMARY = "#6d28d9"
+EMAIL_PRIMARY_LIGHT = "#8b5cf6"
+EMAIL_BG = "#f8fafc"
+EMAIL_CARD_BG = "#ffffff"
+EMAIL_TEXT = "#171717"
+EMAIL_TEXT_MUTED = "#64748b"
+EMAIL_BORDER = "#e2e8f0"
+PORTAL_NAME = "Splash"
+
+
+def get_logo_url():
+    """Base URL for logo image in emails (must be absolute)."""
+    base = getattr(settings, "FRONTEND_URL", "") or "http://localhost:3000"
+    return base.rstrip("/") + "/images/logo-splash.png"
+
+
+def get_base_email_html(content_body, title=""):
+    """
+    Wrap content in a consistent HTML email layout with portal colors and logo.
+    content_body: HTML string for the main body.
+    title: Optional heading above the body (e.g. "Payment Successful").
+    """
+    logo_url = get_logo_url()
+    frontend_url = getattr(settings, "FRONTEND_URL", "") or ""
+    title_block = f'<h2 style="color: {EMAIL_TEXT}; font-size: 20px; margin: 0 0 16px 0;">{title}</h2>' if title else ""
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{PORTAL_NAME}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: {EMAIL_BG}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: {EMAIL_BG};">
+    <tr>
+      <td align="center" style="padding: 32px 16px;">
+        <table role="presentation" width="100%" style="max-width: 560px; background-color: {EMAIL_CARD_BG}; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid {EMAIL_BORDER};">
+          <tr>
+            <td style="padding: 24px 24px 16px 24px; border-bottom: 1px solid {EMAIL_BORDER};">
+              <a href="{frontend_url}" style="text-decoration: none;">
+                <img src="{logo_url}" alt="{PORTAL_NAME}" style="max-height: 40px; display: block;" />
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 24px; color: {EMAIL_TEXT}; font-size: 16px; line-height: 1.6;">
+              {title_block}
+              <div style="color: {EMAIL_TEXT};">
+                {content_body}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px 24px; border-top: 1px solid {EMAIL_BORDER}; font-size: 12px; color: {EMAIL_TEXT_MUTED};">
+              This email was sent by {PORTAL_NAME}. If you have questions, contact support.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+
+
+def _send_html_email(subject, body_plain, body_html, recipient_list):
+    """Send email with both plain and HTML parts."""
+    try:
+        send_mail(
+            subject,
+            body_plain,
+            settings.DEFAULT_FROM_EMAIL,
+            recipient_list,
+            fail_silently=False,
+            html_message=body_html,
+        )
+        return True
+    except Exception as e:
+        print(f"Error sending HTML email: {e}")
+        return False
 
 
 def generate_random_password(length=16):
@@ -284,3 +369,122 @@ Splash System
     return _send_from_template(
         "contact_sales_admin", admin_emails, context, fallback_subject, fallback_body
     )
+
+
+def send_payment_success_user_email(user_email, user_name, credits_added, balance_after, total_amount, is_organization=False, organization_name=None):
+    """Send payment success email to the user who made the payment (HTML + plain)."""
+    context = {
+        "user_name": user_name or "User",
+        "credits_added": credits_added,
+        "balance_after": balance_after,
+        "total_amount": total_amount,
+        "is_organization": is_organization,
+        "organization_name": organization_name or "",
+    }
+    subject = f"Payment successful – {credits_added} credits added to your account"
+    body_plain = f"""
+Hello {context['user_name']},
+
+Your payment was successful.
+
+Credits added: {credits_added}
+Current balance: {balance_after}
+Amount paid: ${total_amount:.2f}
+"""
+    if is_organization and organization_name:
+        body_plain += f"\nOrganization: {organization_name}\n"
+    body_plain += "\nThank you for using Splash.\n\nBest regards,\nThe Splash Team"
+
+    body_html_content = f"""
+<p>Hello {context['user_name']},</p>
+<p>Your payment was successful.</p>
+<table style="border-collapse: collapse; margin: 16px 0;">
+  <tr><td style="padding: 6px 12px 6px 0; color: {EMAIL_TEXT_MUTED};">Credits added</td><td style="padding: 6px 0;"><strong>{credits_added}</strong></td></tr>
+  <tr><td style="padding: 6px 12px 6px 0; color: {EMAIL_TEXT_MUTED};">Current balance</td><td style="padding: 6px 0;"><strong>{balance_after}</strong></td></tr>
+  <tr><td style="padding: 6px 12px 6px 0; color: {EMAIL_TEXT_MUTED};">Amount paid</td><td style="padding: 6px 0;"><strong>${total_amount:.2f}</strong></td></tr>
+</table>
+"""
+    if is_organization and organization_name:
+        body_html_content += f"<p style='color: {EMAIL_TEXT_MUTED};'>Organization: <strong>{organization_name}</strong></p>"
+    body_html_content += "<p>Thank you for using Splash.</p><p>Best regards,<br>The Splash Team</p>"
+
+    html = get_base_email_html(body_html_content, "Payment successful")
+    return _send_html_email(subject, body_plain, html, [user_email])
+
+
+def send_payment_success_admin_email(user_email, user_name, credits_added, total_amount, is_organization=False, organization_name=None):
+    """Notify admin(s) that a payment was completed (HTML + plain)."""
+    try:
+        from users.models import User, Role
+        admin_users = User.objects(role=Role.ADMIN)
+        admin_emails = [u.email for u in admin_users if getattr(u, "email", None)]
+        if not admin_emails:
+            admin_emails = getattr(settings, "ADMIN_EMAILS", [])
+        if isinstance(admin_emails, str):
+            admin_emails = [admin_emails]
+        if not admin_emails:
+            return True
+    except Exception as e:
+        print(f"Could not get admin emails for payment success notification: {e}")
+        return True
+
+    subject = "Payment successful – credits purchased"
+    body_plain = f"""
+A payment was completed:
+
+User: {user_name} ({user_email})
+Credits: {credits_added}
+Amount: ${total_amount:.2f}
+"""
+    if is_organization and organization_name:
+        body_plain += f"Organization: {organization_name}\n"
+    body_plain += f"\nTime: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\nSplash System"
+
+    body_html_content = f"""
+<p>A payment was completed:</p>
+<table style="border-collapse: collapse; margin: 16px 0;">
+  <tr><td style="padding: 6px 12px 6px 0; color: {EMAIL_TEXT_MUTED};">User</td><td style="padding: 6px 0;">{user_name} ({user_email})</td></tr>
+  <tr><td style="padding: 6px 12px 6px 0; color: {EMAIL_TEXT_MUTED};">Credits</td><td style="padding: 6px 0;"><strong>{credits_added}</strong></td></tr>
+  <tr><td style="padding: 6px 12px 6px 0; color: {EMAIL_TEXT_MUTED};">Amount</td><td style="padding: 6px 0;"><strong>${total_amount:.2f}</strong></td></tr>
+"""
+    if is_organization and organization_name:
+        body_html_content += f"  <tr><td style='padding: 6px 12px 6px 0; color: {EMAIL_TEXT_MUTED};'>Organization</td><td style='padding: 6px 0;'>{organization_name}</td></tr>"
+    body_html_content += f"""
+</table>
+<p style="color: {EMAIL_TEXT_MUTED}; font-size: 14px;">Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</p>
+<p>Splash System</p>
+"""
+    html = get_base_email_html(body_html_content, "Payment successful (admin)")
+    return _send_html_email(subject, body_plain, html, admin_emails)
+
+
+def send_credits_recharge_reminder_email(user_email, user_name, current_balance, threshold, is_organization=False, organization_name=None):
+    """Send credits low / recharge reminder to the user (HTML + plain)."""
+    subject = f"Credits running low – only {current_balance} left"
+    body_plain = f"""
+Hello {user_name or 'User'},
+
+Your credit balance is now {current_balance} (at or below the {threshold} credit reminder threshold).
+"""
+    if is_organization and organization_name:
+        body_plain += f"\nOrganization: {organization_name}\n"
+    body_plain += """
+Please recharge your credits to continue using Splash without interruption.
+
+Best regards,
+The Splash Team
+"""
+
+    body_html_content = f"""
+<p>Hello {user_name or 'User'},</p>
+<p>Your credit balance is now <strong>{current_balance}</strong> (at or below the {threshold} credit reminder threshold).</p>
+"""
+    if is_organization and organization_name:
+        body_html_content += f"<p style='color: {EMAIL_TEXT_MUTED};'>Organization: <strong>{organization_name}</strong></p>"
+    body_html_content += f"""
+<p>Please <a href="{getattr(settings, 'FRONTEND_URL', '')}" style="color: {EMAIL_PRIMARY}; font-weight: 600;">recharge your credits</a> to continue using Splash without interruption.</p>
+<p>Best regards,<br>The Splash Team</p>
+"""
+    html = get_base_email_html(body_html_content, "Credits running low")
+    return _send_html_email(subject, body_plain, html, [user_email])
+

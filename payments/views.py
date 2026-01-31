@@ -320,7 +320,29 @@ def verify_razorpay_payment(request):
             payment_transaction.status = 'completed'
             payment_transaction.updated_at = datetime.utcnow()
             payment_transaction.save()
-            
+
+            # Payment success emails (user + admin)
+            try:
+                from common.email_utils import send_payment_success_user_email, send_payment_success_admin_email
+                user = payment_transaction.user
+                user_email = getattr(user, 'email', None)
+                user_name = getattr(user, 'full_name', None) or getattr(user, 'username', 'User')
+                credits_added = payment_transaction.credits
+                total_amount = float(getattr(payment_transaction, 'total_amount', payment_transaction.amount))
+                is_org = payment_transaction.organization is not None
+                org_name = payment_transaction.organization.name if payment_transaction.organization else None
+                if user_email:
+                    send_payment_success_user_email(
+                        user_email, user_name, credits_added, balance_after, total_amount,
+                        is_organization=is_org, organization_name=org_name
+                    )
+                send_payment_success_admin_email(
+                    user_email or '', user_name, credits_added, total_amount,
+                    is_organization=is_org, organization_name=org_name
+                )
+            except Exception as e:
+                print(f"Failed to send payment success emails: {e}")
+
             response_data = {
                 'success': True,
                 'message': 'Payment verified and credits added successfully',

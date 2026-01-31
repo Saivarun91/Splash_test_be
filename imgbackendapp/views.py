@@ -723,9 +723,12 @@ def generate_model_with_ornament(request):
             "type": "model_with_ornament"
         }, status=200)
 
+        
+
     except Exception as e:
         traceback.print_exc()
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
 
 
 # Assuming OrnamentMongo is imported
