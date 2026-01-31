@@ -38,6 +38,12 @@ urlpatterns = [
     path('<str:organization_id>/members/', views.get_organization_members, name='get_organization_members'),
     path('<str:organization_id>/add-user/', views.add_organization_user, name='add_organization_user'),
     path('<str:organization_id>/users/<str:user_id>/remove/', views.remove_organization_user, name='remove_organization_user'),
+    
+    # User detail endpoints (by slug)
+    path('<str:organization_id>/users/<str:user_slug>/', views.get_user_by_slug, name='get_user_by_slug'),
+    path('<str:organization_id>/users/<str:user_slug>/images/', views.get_user_images, name='get_user_images'),
+    path('<str:organization_id>/users/<str:user_slug>/projects/', views.get_user_projects, name='get_user_projects'),
+    path('<str:organization_id>/users/<str:user_slug>/credit-history/', views.get_user_credit_history, name='get_user_credit_history'),
 ]
 
 

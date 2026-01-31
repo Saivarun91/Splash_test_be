@@ -3,9 +3,30 @@ from datetime import datetime
 from users.models import User
 import enum
 from datetime import timezone
+import re
+import unicodedata
 # -----------------------------
 # Project Model
 # -----------------------------
+
+
+def generate_slug(text):
+    """Generate a URL-friendly slug from text"""
+    if not text:
+        return ""
+    # Normalize unicode characters (e.g., convert é to e)
+    text = unicodedata.normalize('NFKD', str(text)).encode('ascii', 'ignore').decode('ascii')
+    # Convert to lowercase
+    text = text.lower()
+    # Replace spaces and underscores with hyphens
+    text = re.sub(r'[\s_]+', '-', text)
+    # Remove all non-word characters except hyphens
+    text = re.sub(r'[^\w\-]', '', text)
+    # Replace multiple hyphens with a single hyphen
+    text = re.sub(r'-+', '-', text)
+    # Remove leading and trailing hyphens
+    text = text.strip('-')
+    return text
 
 
 class ProjectRole(enum.Enum):
@@ -27,6 +48,7 @@ class ProjectMember(EmbeddedDocument):
 
 class Project(Document):
     name = StringField(max_length=200, required=True)
+    slug = StringField(max_length=200, unique=True, sparse=True)  # sparse=True allows multiple None values
     about = StringField()
     organization = ReferenceField("Organization", required=False)  # Optional: projects can belong to an organization
     created_by = ReferenceField("User")
@@ -36,12 +58,28 @@ class Project(Document):
     status = StringField(default="progress")
     team_members = ListField(EmbeddedDocumentField(ProjectMember))
 
+    def save(self, *args, **kwargs):
+        # Auto-generate slug if not provided
+        if not self.slug and self.name:
+            base_slug = generate_slug(self.name)
+            slug = base_slug
+            counter = 1
+            # Ensure uniqueness by appending a number if needed
+            while Project.objects(slug=slug).count() > 0:
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            self.slug = slug
+        # Update updated_at timestamp
+        self.updated_at = datetime.now(timezone.utc)
+        return super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
     meta = {
         'collection': 'projectsUpdated',
         'ordering': ['-created_at'],
+        'indexes': ['slug'],  # Add index for efficient slug lookups
         'strict': False,  # Allow extra fields for backward compatibility
         'allow_inheritance': False
     }

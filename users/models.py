@@ -11,6 +11,27 @@ from mongoengine import (
 )
 import datetime
 import enum
+import re
+import unicodedata
+
+
+def generate_slug(text):
+    """Generate a URL-friendly slug from text"""
+    if not text:
+        return ""
+    # Normalize unicode characters (e.g., convert é to e)
+    text = unicodedata.normalize('NFKD', str(text)).encode('ascii', 'ignore').decode('ascii')
+    # Convert to lowercase
+    text = text.lower()
+    # Replace spaces and underscores with hyphens
+    text = re.sub(r'[\s_]+', '-', text)
+    # Remove all non-word characters except hyphens
+    text = re.sub(r'[^\w\-]', '', text)
+    # Replace multiple hyphens with a single hyphen
+    text = re.sub(r'-+', '-', text)
+    # Remove leading and trailing hyphens
+    text = text.strip('-')
+    return text
 
 
 class Role(enum.Enum):
@@ -23,6 +44,7 @@ class User(Document):
     password = StringField(required=True)  # store hashed passwords!
     full_name = StringField()
     username = StringField(unique=True)
+    slug = StringField(max_length=200, unique=True, sparse=True)  # sparse=True allows multiple None values
     role = EnumField(Role, default=Role.USER)
     organization = ReferenceField("Organization", required=False)
     organization_role = StringField(required=False)  # owner, editor, chief_editor, etc.
@@ -40,8 +62,37 @@ class User(Document):
     created_at = DateTimeField(default=datetime.datetime.utcnow)
     updated_at = DateTimeField(default=datetime.datetime.utcnow)
 
+    def save(self, *args, **kwargs):
+        # Auto-generate slug if not provided
+        if not self.slug:
+            # Prefer username, fallback to email (without domain), then full_name
+            base_text = None
+            if self.username:
+                base_text = self.username
+            elif self.email:
+                # Use email username part (before @)
+                base_text = self.email.split('@')[0]
+            elif self.full_name:
+                base_text = self.full_name
+            else:
+                # Fallback to email if nothing else available
+                base_text = self.email.split('@')[0] if self.email else "user"
+            
+            base_slug = generate_slug(base_text)
+            slug = base_slug
+            counter = 1
+            # Ensure uniqueness by appending a number if needed
+            while User.objects(slug=slug).count() > 0:
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            self.slug = slug
+        # Update updated_at timestamp
+        self.updated_at = datetime.datetime.utcnow()
+        return super().save(*args, **kwargs)
+
     meta = {
         "collection": "users",
+        "indexes": ["slug"],  # Add index for efficient slug lookups
         "strict": False,  # Allow extra fields for backward compatibility
         "allow_inheritance": False
     }

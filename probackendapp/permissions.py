@@ -18,6 +18,8 @@ def get_user_role_in_project(user, project):
     Get user's role in a project.
     Returns: role string ('owner', 'editor', 'viewer') or None if not a member
     """
+    if user.organization_role == "owner":
+        return "owner"
     if not project or not user:
         return None
 

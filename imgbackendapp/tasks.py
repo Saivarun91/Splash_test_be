@@ -17,7 +17,6 @@ import cloudinary.uploader
 from .mongo_models import OrnamentMongo
 from .models import Ornament
 from bson import ObjectId
-from CREDITS.utils import get_image_model_name
 
 # Check for Gemini SDK
 try:
@@ -71,7 +70,7 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
                 raise Exception("GOOGLE_API_KEY not configured")
 
             client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-            model_name = get_image_model_name("gemini-3-pro-image-preview")
+            model_name = "gemini-3-pro-image-preview"
 
             contents = [
                 {
@@ -290,7 +289,7 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
 
         if has_genai:
             client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-            model_name = get_image_model_name("gemini-2.5-flash-image")
+            model_name = "gemini-2.5-flash-image"
 
             parts = []
             parts.append({
@@ -438,7 +437,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
         if has_genai:
             client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-            model_name = get_image_model_name("gemini-3-pro-image-preview")
+            model_name = "gemini-3-pro-image-preview"
 
             contents = [
                 {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
@@ -608,7 +607,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
 
         if has_genai:
             client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-            model_name = get_image_model_name("gemini-3-pro-image-preview")
+            model_name = "gemini-3-pro-image-preview"
 
             contents = [
                 {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
@@ -813,7 +812,7 @@ def generate_campaign_shot_advanced_task(self, user_id, model_type, model_image_
 
         # Build Gemini request
         client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        model_name = get_image_model_name("gemini-3-pro-image-preview")
+        model_name = "gemini-3-pro-image-preview"
 
         parts = []
 
@@ -989,7 +988,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
                 raise Exception("GOOGLE_API_KEY not configured")
 
             client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-            model_name = get_image_model_name("gemini-3-pro-image-preview")
+            model_name = "gemini-3-pro-image-preview"
 
             contents = [
                 {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
