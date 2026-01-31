@@ -13,6 +13,7 @@ from .views import (
 from users.models import User
 from organization.models import Organization
 from .models import Project, Collection, CollectionItem, ProjectRole, ProjectMember, UploadedImage, PromptMaster
+from .permissions import get_user_role_in_project
 import re
 import logging
 from cloudinary.utils import cloudinary_url
@@ -35,6 +36,26 @@ logger = logging.getLogger(__name__)
 # -------------------------
 # Project API Views
 # -------------------------
+
+
+def get_project_by_id_or_slug(project_id):
+    """Helper function to get a project by ID or slug"""
+    from bson import ObjectId
+    try:
+        # Check if it's a valid ObjectId format (24 hex characters)
+        if len(project_id) == 24 and all(c in '0123456789abcdefABCDEF' for c in project_id):
+            try:
+                return Project.objects.get(id=project_id)
+            except (DoesNotExist, ValueError):
+                pass
+        # Try slug lookup
+        return Project.objects.get(slug=project_id)
+    except DoesNotExist:
+        # If slug lookup fails, try ID lookup as fallback
+        try:
+            return Project.objects.get(id=project_id)
+        except (DoesNotExist, ValueError):
+            raise DoesNotExist(f"Project with ID or slug '{project_id}' not found")
 
 
 @api_view(['GET'])
@@ -103,6 +124,7 @@ def api_projects_list(request):
 
                 projects_data.append({
                     'id': str(project.id),
+                    'slug': project.slug if hasattr(project, 'slug') and project.slug else None,
                     'name': project.name,
                     'about': project.about,
                     'created_at': project.created_at.isoformat(),
@@ -123,14 +145,37 @@ def api_projects_list(request):
 
 @api_view(['GET'])
 @csrf_exempt
+@authenticate
 def api_project_detail(request, project_id):
-    """Get a specific project"""
+    """Get a specific project by ID or slug - organization owners can view all projects"""
     try:
-        project = Project.objects.get(id=project_id)
+        user = request.user
+        project = get_project_by_id_or_slug(project_id)
+        
+        # Check if user has access to this project
+        # Organization owners can view all projects in their organization
+        user_role = get_user_role_in_project(user, project)
+        
+        # If user is not a team member, check if they're organization owner
+        if not user_role:
+            if user.organization and project.organization:
+                # Check if user's organization matches project's organization
+                if str(user.organization.id) == str(project.organization.id):
+                    # Check if user is organization owner
+                    if user.organization_role == "owner" or str(user.organization.owner.id) == str(user.id):
+                        user_role = "owner"  # Organization owners get owner-level view access
+                    else:
+                        return Response({'error': 'You do not have access to this project'}, status=403)
+                else:
+                    return Response({'error': 'You do not have access to this project'}, status=403)
+            else:
+                return Response({'error': 'You do not have access to this project'}, status=403)
+        
         collection = Collection.objects(project=project).first()
 
         project_data = {
             'id': str(project.id),
+            'slug': project.slug if hasattr(project, 'slug') and project.slug else None,
             'name': project.name,
             'about': project.about,
             'created_at': project.created_at.isoformat(),
@@ -197,7 +242,7 @@ def api_project_detail(request, project_id):
                     item_data['product_images'].append(product_data)
 
                 project_data['collection']['items'].append(item_data)
-
+        # print("project_data", project_data)
         return Response(project_data)
     except DoesNotExist:
         return Response({'error': 'Project not found'}, status=404)
@@ -247,6 +292,7 @@ def api_create_project(request):
 
         return Response({
             'id': str(project.id),
+            'slug': project.slug if hasattr(project, 'slug') and project.slug else None,
             'name': project.name,
             'about': project.about,
             'created_at': project.created_at.isoformat(),
@@ -260,7 +306,7 @@ def api_create_project(request):
                     'role': member.role
                 } for member in project.team_members
             ]
-        })
+        }, status=201)
     except Exception as e:
         print(e)
         return Response({'error': str(e)}, status=500)
@@ -270,10 +316,10 @@ def api_create_project(request):
 @csrf_exempt
 @authenticate
 def api_update_project(request, project_id):
-    """Update a project"""
+    """Update a project by ID or slug"""
     try:
         user = request.user
-        project = Project.objects.get(id=project_id)
+        project = get_project_by_id_or_slug(project_id)
         data = json.loads(request.body)
 
         if 'name' in data:
@@ -294,6 +340,7 @@ def api_update_project(request, project_id):
 
         return Response({
             'id': str(project.id),
+            'slug': project.slug if hasattr(project, 'slug') and project.slug else None,
             'name': project.name,
             'about': project.about,
             'status': project.status,
@@ -309,9 +356,9 @@ def api_update_project(request, project_id):
 @csrf_exempt
 @authenticate
 def api_delete_project(request, project_id):
-    """Delete a project"""
+    """Delete a project by ID or slug"""
     try:
-        project = Project.objects.get(id=project_id)
+        project = get_project_by_id_or_slug(project_id)
         project.delete()
         return Response({'success': True})
     except DoesNotExist:
@@ -412,9 +459,9 @@ def api_project_setup_description(request, project_id):
         # (These are still required for step 2 to be considered complete)
         # Note: We allow saving without description, in which case suggestions won't be generated
 
-        # Get or create project
+        # Get or create project (supports both ID and slug)
         try:
-            project = Project.objects.get(id=project_id)
+            project = get_project_by_id_or_slug(project_id)
         except DoesNotExist:
             return Response({'error': 'Project not found'}, status=404)
 
@@ -2375,9 +2422,10 @@ def api_invite_member(request, project_id):
         invitee_email = data.get("email")
         role = data.get("role", "viewer")
 
-        # Find project
-        project = Project.objects(id=project_id).first()
-        if not project:
+        # Find project (supports both ID and slug)
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
             return Response({"error": "Project not found"}, status=404)
 
         # Check if current user is an owner
@@ -2428,9 +2476,15 @@ def api_accept_invite(request, project_id):
     try:
         user = request.user
 
+        # Get project first (supports both ID and slug)
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
+            return Response({"error": "Project not found"}, status=404)
+
         # Find pending invite
         invite = ProjectInvite.objects(
-            project=project_id, invitee=user, accepted=False).first()
+            project=project, invitee=user, accepted=False).first()
         if not invite:
             return Response({"error": "No pending invite found"}, status=404)
 
@@ -2530,9 +2584,15 @@ def api_reject_invite(request, invite_id):
 @authenticate
 def api_list_invites(request, project_id):
     """Get pending invitations for a specific project"""
+    # Get project first (supports both ID and slug)
+    try:
+        project = get_project_by_id_or_slug(project_id)
+    except DoesNotExist:
+        return Response({"error": "Project not found"}, status=404)
+    
     # Get all pending invites for this project (not just for the current user)
     invites = ProjectInvite.objects(
-        project=project_id, accepted=False)
+        project=project, accepted=False)
     data = [{
         "id": str(inv.id),
         "project": inv.project.name,
@@ -2568,8 +2628,10 @@ def api_list_all_invites(request):
 def api_available_users(request, project_id):
     """Get all users who are not yet members of this project"""
     try:
-        project = Project.objects(id=project_id).first()
-        if not project:
+        # Find project (supports both ID and slug)
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
             return Response({"error": "Project not found"}, status=404)
 
         # Get IDs of users already in the project
@@ -2611,9 +2673,10 @@ def api_update_member_role(request, project_id):
         if new_role not in ["owner", "editor", "viewer"]:
             return Response({"error": "Invalid role. Must be 'owner', 'editor', or 'viewer'"}, status=400)
 
-        # Find project
-        project = Project.objects(id=project_id).first()
-        if not project:
+        # Find project (supports both ID and slug)
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
             return Response({"error": "Project not found"}, status=404)
 
         # Check if current user is an owner
@@ -2843,6 +2906,7 @@ def api_recent_projects(request):
 
                 project_data = {
                     'id': str(project.id),
+                    'slug': project.slug if hasattr(project, 'slug') and project.slug else None,
                     'name': project.name,
                     'about': project.about,
                     'created_at': project.created_at.isoformat(),
@@ -3040,13 +3104,15 @@ def api_recent_project_history(request):
 @authenticate
 def api_collection_history(request, collection_id):
     """Get image generation history for a specific collection, grouped by product images"""
+    print("api_collection_history", request);
     try:
         user = request.user
         user_id = str(user.id)
-
+        
         # Get the collection
         try:
             collection = Collection.objects.get(id=collection_id)
+            print("collection", collection);
         except Collection.DoesNotExist:
             return Response({'error': 'Collection not found'}, status=404)
 
@@ -3055,10 +3121,35 @@ def api_collection_history(request, collection_id):
             collection, 'project') else None
         project_id = str(project.id) if project else None
 
+        # Check if user is organization owner - if so, get all user IDs in the organization
+        user_ids_to_query = [user_id]  # Default to just the current user
+        
+        if project and project.organization:
+            # Check if user is organization owner
+            is_org_owner = False
+            if user.organization and str(user.organization.id) == str(project.organization.id):
+                if user.organization_role == "owner" or str(project.organization.owner.id) == str(user.id):
+                    is_org_owner = True
+            
+            if is_org_owner:
+                # Get all user IDs in the organization
+                org = project.organization
+                user_ids_to_query = [str(org.owner.id)]
+                
+                # Add all members
+                if org.members:
+                    for member in org.members:
+                        member_id = str(member.id)
+                        if member_id not in user_ids_to_query:
+                            user_ids_to_query.append(member_id)
+                
+                print(f"Organization owner detected. Querying history for {len(user_ids_to_query)} users")
+
         # Get all history for this collection AND project (double-check to ensure project match)
+        # If organization owner, query for all users in organization; otherwise just current user
         collection_history = ImageGenerationHistory.objects(
             collection=collection,
-            user_id=user_id
+            user_id__in=user_ids_to_query
         ).order_by('-created_at')
 
         # Additional filter: ensure history belongs to the same project
@@ -3163,7 +3254,7 @@ def api_collection_history(request, collection_id):
 
         # Sort by latest generation date (most recent first)
         result.sort(key=lambda x: x['latest_generation'] or '', reverse=True)
-
+        print("result", result);
         return Response({
             'success': True,
             'collection_id': str(collection.id),

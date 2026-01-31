@@ -251,6 +251,7 @@ def verify_razorpay_payment(request):
         # Verify signature
         razorpay_key_secret = getattr(settings, 'RAZORPAY_KEY_SECRET', None)
         if not razorpay_key_secret:
+            print("Razorpay secret key not configured")
             return JsonResponse({'error': 'Razorpay secret key not configured'}, status=500)
         
         message = f"{order_id}|{payment_id}"
@@ -289,7 +290,7 @@ def verify_razorpay_payment(request):
                         'amount': payment_transaction.amount
                     }
                 )
-                
+                print("result", result)
                 if result['success']:
                     # If this is a plan subscription, update organization's plan
                     if payment_transaction.plan:
@@ -299,6 +300,7 @@ def verify_razorpay_payment(request):
                     
                     balance_after = result['balance_after']
                 else:
+                    print("Razorpay verification failed: ", result["message"])
                     payment_transaction.status = 'failed'
                     payment_transaction.save()
                     return JsonResponse({'error': f'Failed to add credits: {result["message"]}'}, status=500)
@@ -334,11 +336,13 @@ def verify_razorpay_payment(request):
             return JsonResponse(response_data, status=200)
                 
         except Exception as e:
+            print("Razorpay verification failed: ", e)
             payment_transaction.status = 'failed'
             payment_transaction.save()
             return JsonResponse({'error': f'Razorpay verification failed: {str(e)}'}, status=500)
         
     except Exception as e:
+        print("Error in verify_razorpay_payment: ", e)
         return JsonResponse({'error': str(e)}, status=500)
 
 

@@ -155,6 +155,7 @@ def login_user(request):
                 "token": token,
                 "user": {
                     "id": str(user.id),
+                    "slug": user.slug if hasattr(user, 'slug') and user.slug else None,
                     "email": user.email,
                     "preferred_language": getattr(user, 'preferred_language', 'en') or 'en',
                     "role": user.role.value,
@@ -265,6 +266,7 @@ def get_user_profile(request):
             "success": True,
             "user": {
                 "id": str(user.id),
+                "slug": user.slug if hasattr(user, 'slug') and user.slug else None,
                 "email": user.email,
                 "full_name": user.full_name or "",
                 "username": user.username or "",
@@ -407,6 +409,7 @@ def complete_profile(request):
             "message": "Profile completed successfully",
             "user": {
                 "id": str(user.id),
+                "slug": user.slug if hasattr(user, 'slug') and user.slug else None,
                 "email": user.email,
                 "full_name": user.full_name or "",
                 "username": user.username or "",

@@ -7,9 +7,29 @@ Extended API views for advanced features:
 from django.http import JsonResponse
 from rest_framework.decorators import api_view
 from mongoengine.errors import DoesNotExist
-from .models import Collection
+from .models import Collection, Project
 from .permissions import require_collection_role, get_user_role_in_project
 from common.middleware import authenticate
+
+
+def get_project_by_id_or_slug(project_id):
+    """Helper function to get a project by ID or slug"""
+    from bson import ObjectId
+    try:
+        # Check if it's a valid ObjectId format (24 hex characters)
+        if len(project_id) == 24 and all(c in '0123456789abcdefABCDEF' for c in project_id):
+            try:
+                return Project.objects.get(id=project_id)
+            except (DoesNotExist, ValueError):
+                pass
+        # Try slug lookup
+        return Project.objects.get(slug=project_id)
+    except DoesNotExist:
+        # If slug lookup fails, try ID lookup as fallback
+        try:
+            return Project.objects.get(id=project_id)
+        except (DoesNotExist, ValueError):
+            raise DoesNotExist(f"Project with ID or slug '{project_id}' not found")
 
 
 @api_view(['GET'])
@@ -93,11 +113,9 @@ def api_get_user_role(request, project_id):
     Get the current user's role in a project.
     """
     try:
-        from .models import Project
-
-        project = Project.objects.get(id=project_id)
+        project = get_project_by_id_or_slug(project_id)
         user_role = get_user_role_in_project(request.user, project)
-
+       
         if not user_role:
             return JsonResponse({
                 "success": False,
@@ -122,6 +140,7 @@ def api_get_user_role(request, project_id):
             "error": "Project not found"
         }, status=404)
     except Exception as e:
+        print("Error in api_get_user_role: ", e)
         return JsonResponse({
             "success": False,
             "error": str(e)
