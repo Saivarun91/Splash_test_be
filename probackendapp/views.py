@@ -522,7 +522,7 @@ def generate_ai_images_background(collection_id, user_id):
         return {"success": False, "error": "Gemini SDK not available."}
 
     client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-    model_name = get_image_model_name("gemini-3-pro-image-preview")
+    model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
 
     for i in range(4):
         prompt_text = (
@@ -964,7 +964,7 @@ def generate_product_model_api(request, collection_id):
 
         # ✅ Initialize Gemini client
         client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        model_name = get_image_model_name("gemini-3-pro-image-preview")
+        model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
 
         import requests
         import base64
@@ -1582,7 +1582,7 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
         model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
         client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        model_name = get_image_model_name("gemini-3-pro-image-preview")
+        model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
 
         # Prompt templates
         from .prompt_initializer import get_prompt_from_db
@@ -2053,7 +2053,7 @@ def generate_all_product_model_images_background(collection_id, user_id):
         model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
         client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        model_name = "gemini-3-pro-image-preview"
+        model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
 
         # ---------------------------
         # 3. Prompt templates
@@ -3303,7 +3303,7 @@ def regenerate_product_model_image(request, collection_id):
 
         # --- Google GenAI setup ---
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-        model_name = get_image_model_name("gemini-3-pro-image-preview")
+        model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
 
         # Determine which model to use
         if use_different_model and new_model_data:

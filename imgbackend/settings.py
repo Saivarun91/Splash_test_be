@@ -263,3 +263,13 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 
 # Frontend URL for password reset links
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
+
+# AI Model Configuration - Dynamically loaded from database
+try:
+    from CREDITS.utils import get_image_model_name
+    # Get the model name from database, with fallback to default
+    IMAGE_MODEL_NAME = get_image_model_name(default_model="gemini-3-pro-image-preview")
+except Exception as e:
+    # Fallback if database connection fails during settings load
+    print(f"Warning: Could not load IMAGE_MODEL_NAME from database: {e}")
+    IMAGE_MODEL_NAME = "gemini-3-pro-image-preview"
