@@ -9,7 +9,7 @@ class ProbackendappConfig(AppConfig):
         """Initialize app - ensure unique index exists for duplicate prevention"""
         try:
             from .models import ImageGenerationHistory
-            ImageGenerationHistory.git ensure_unique_index()
+            ImageGenerationHistory.git_ensure_unique_index()
         except Exception as e:
             # Don't fail app startup if index creation fails
             # It will be created on first model access or via management command
