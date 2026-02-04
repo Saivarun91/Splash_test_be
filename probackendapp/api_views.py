@@ -26,7 +26,7 @@ from bson.dbref import DBRef
 from django.conf import settings
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import cloudinary
 import cloudinary.uploader
 import jwt
@@ -58,7 +58,7 @@ def get_project_by_id_or_slug(project_id):
             raise DoesNotExist(f"Project with ID or slug '{project_id}' not found")
 
 
-@api_view(['GET'])
+@api_view(['GET','OPTIONS'])
 @csrf_exempt
 @authenticate
 def api_projects_list(request):
@@ -1918,17 +1918,36 @@ def api_generate_all_product_model_images(request, collection_id):
         user = getattr(request, "user", None)
         user_id = str(user.id) if user else None
 
-        # Soft per-tenant concurrency limit (max 3 active jobs per user)
+        # Soft per-tenant concurrency limit with stale job detection
+        # Only count jobs that are actually active (updated within last 30 minutes)
         if user_id:
+            cutoff_time = datetime.utcnow() - timedelta(minutes=5)
+            
+            # Count only recently updated active jobs (exclude stale jobs)
             active_jobs = ImageGenerationJob.objects(
                 user=user,
                 status__in=["pending", "running"],
+                updated_at__gte=cutoff_time
             ).count()
-            if active_jobs >= 3:
+            
+            # Also mark stale jobs as failed (jobs running for more than 30 minutes without updates)
+            stale_jobs = ImageGenerationJob.objects(
+                user=user,
+                status__in=["pending", "running"],
+                updated_at__lt=cutoff_time
+            )
+            for stale_job in stale_jobs:
+                stale_job.status = "failed"
+                stale_job.error = "Job timed out - no updates for 30 minutes"
+                stale_job.save()
+            
+            # Increased limit to 10 active jobs per user (configurable)
+            MAX_ACTIVE_JOBS = 10
+            if active_jobs >= MAX_ACTIVE_JOBS:
                 return Response(
                     {
                         "success": False,
-                        "error": "Too many active image generation jobs. Please wait for existing jobs to finish.",
+                        "error": f"Too many active image generation jobs ({active_jobs}/{MAX_ACTIVE_JOBS}). Please wait for existing jobs to finish.",
                     },
                     status=429,
                 )
@@ -2042,7 +2061,8 @@ def api_generate_all_product_model_images(request, collection_id):
                 status=400,
             )
 
-        job_id = uuid.uuid4().hex
+        # Generate unique job_id for tracking this batch
+        job_id = str(uuid.uuid4())
 
         # Create job document for tracking
         job = ImageGenerationJob(

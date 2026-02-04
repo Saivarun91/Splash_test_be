@@ -91,6 +91,8 @@ INSTALLED_APPS = [
     'CREDITS',
     'payments',
     'invoices',
+    'plans',
+    'legal',
     'django_celery_results',
 ]
 
@@ -115,6 +117,17 @@ CELERY_TASK_RESULT_EXPIRES = None
 # Use multiple worker processes to take advantage of multi-core VPS.
 # You can override this at runtime with the -c flag on the worker.
 CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "4"))
+
+# Windows-specific: Use 'solo' pool instead of 'prefork' to avoid PermissionError
+# On Windows, multiprocessing has issues with shared memory/semaphores
+# Use 'solo' for Windows development, 'prefork' for Linux production
+import sys
+if sys.platform == 'win32':
+    CELERY_WORKER_POOL = 'solo'
+    # Solo pool doesn't support concurrency > 1
+    CELERY_WORKER_CONCURRENCY = 1
+else:
+    CELERY_WORKER_POOL = 'prefork'
 
 
 MIDDLEWARE = [
