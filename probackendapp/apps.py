@@ -15,4 +15,8 @@ class ProbackendappConfig(AppConfig):
             # It will be created on first model access or via management command
             import logging
             logger = logging.getLogger(__name__)
+<<<<<<< HEAD
             logger.warning(f"Could not ensure ImageGenerationHistory index: {e}")
+=======
+            logger.warning(f"Could not ensure ImageGenerationHistory index: {e}")
+>>>>>>> vps
