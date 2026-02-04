@@ -284,8 +284,55 @@ class ImageGenerationHistory(Document):
         'collection': 'image_generation_history',
         'ordering': ['-created_at'],
         'strict': False,  # Allow extra fields for backward compatibility
-        'allow_inheritance': False
+        'allow_inheritance': False,
+        # Note: Unique compound index is created via ensure_unique_index() method
+        # This ensures only ONE worker can process the same image generation task
+        # The index is created automatically on app startup or via management command
     }
+    
+    @classmethod
+    def ensure_unique_index(cls):
+        """
+        Ensure the unique compound index exists. Call this after model definition
+        or during application startup to create the index if it doesn't exist.
+        This prevents duplicate image generation when using multiple Celery workers.
+        """
+        from mongoengine import connection
+        try:
+            db = connection.get_db()
+            collection_name = cls._get_collection_name()
+            collection = db[collection_name]
+            
+            # Check if index already exists
+            existing_indexes = collection.index_information()
+            index_name = 'unique_job_product_prompt'
+            
+            if index_name in existing_indexes:
+                # Index already exists, verify it's unique
+                index_info = existing_indexes[index_name]
+                if index_info.get('unique'):
+                    return  # Index is correct, no need to recreate
+            
+            # Create unique compound index
+            collection.create_index(
+                [
+                    ('metadata.job_id', 1),
+                    ('metadata.product_index', 1),
+                    ('metadata.prompt_key', 1)
+                ],
+                unique=True,
+                sparse=True,  # Only index documents that have these fields
+                name=index_name,
+                background=True  # Create in background to avoid blocking
+            )
+            print(f"✅ Created unique index '{index_name}' on {collection_name}")
+        except Exception as e:
+            # Index might already exist, which is fine
+            error_str = str(e).lower()
+            if 'already exists' not in error_str and 'duplicate' not in error_str and 'e11000' not in error_str:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Could not create unique index for ImageGenerationHistory: {e}")
 
 
 class ProjectInvite(Document):
@@ -361,3 +408,5 @@ class PromptMaster(Document):
         'strict': False,  # Allow extra fields for backward compatibility
         'allow_inheritance': False
     }
+
+
