@@ -9,14 +9,10 @@ class ProbackendappConfig(AppConfig):
         """Initialize app - ensure unique index exists for duplicate prevention"""
         try:
             from .models import ImageGenerationHistory
-            ImageGenerationHistory.ensure_unique_index()
+            ImageGenerationHistory.git ensure_unique_index()
         except Exception as e:
             # Don't fail app startup if index creation fails
             # It will be created on first model access or via management command
             import logging
             logger = logging.getLogger(__name__)
-<<<<<<< HEAD
             logger.warning(f"Could not ensure ImageGenerationHistory index: {e}")
-=======
-            logger.warning(f"Could not ensure ImageGenerationHistory index: {e}")
->>>>>>> vps
