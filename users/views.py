@@ -2,6 +2,8 @@ from django.http import JsonResponse
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+from django.utils.timezone import is_naive
 import json
 from mongoengine.errors import NotUniqueError
 from .models import User, Role
@@ -13,6 +15,7 @@ from django.conf import settings
 import secrets
 from common.middleware import authenticate
 from common.email_utils import send_registration_email, send_registration_admin_email, send_password_reset_email, generate_random_password
+from common.email_utils import generate_otp, send_email_otp
 
 SECRET_KEY = settings.SECRET_KEY
 
@@ -36,7 +39,6 @@ def generate_jwt(user):
 @api_view(['POST'])
 @csrf_exempt
 def register_user(request):
-
     try:
         data = json.loads(request.body)
         email = data.get("email")
@@ -44,53 +46,37 @@ def register_user(request):
         full_name = data.get("full_name")
         username = data.get("username")
         role = data.get("role")
+
         if not email or not password:
             return Response({"error": "Email and password required"}, status=400)
 
-        # Hash password
         hashed_pw = make_password(password)
 
-        # Create new user
+        otp = generate_otp()
+        # Use UTC naive datetime for consistency with MongoDB
+        otp_expiry = datetime.datetime.utcnow() + timedelta(minutes=10)
+
         user = User(
             email=email,
             password=hashed_pw,
             full_name=full_name,
             username=username,
-            role=role,  # Default
+            role=role,
             credit_balance=5,
-            profile_completed=True,  # User needs to complete profile
+            profile_completed=True,
+            is_email_verified=False,
+            email_otp=otp,
+            email_otp_expires_at=otp_expiry,
         )
         user.save()
 
-        # Send registration email to user
-        try:
-            send_registration_email(user.email, user.full_name or user.username)
-        except Exception as e:
-            print(f"Failed to send registration email: {e}")
-        # Notify admin(s) that a new user registered
-        try:
-            send_registration_admin_email(
-                user.email,
-                user.full_name or user.username,
-                user.username,
-            )
-        except Exception as e:
-            print(f"Failed to send registration admin notification: {e}")
-            # Don't fail registration if email fails
-
-        # Generate JWT after registration (optional)
-        token = generate_jwt(user)
+        # Send OTP email
+        send_email_otp(user.email, otp, user.full_name or user.username)
 
         return JsonResponse(
             {
-                "message": "User registered successfully!",
-                "token": token,
-                "user": {
-                    "id": str(user.id),
-                    "email": user.email,
-                    "role": user.role.value,
-                    "profile_completed": user.profile_completed,
-                },
+                "message": "OTP sent to email. Please verify to complete signup.",
+                "user_id": str(user.id),
             },
             status=201,
         )
@@ -100,6 +86,114 @@ def register_user(request):
     except Exception as e:
         print(e)
         return JsonResponse({"error": str(e)}, status=500)
+
+@api_view(['POST'])
+def verify_email_otp(request):
+    try:
+        data = json.loads(request.body)
+        email = data.get("email")
+        otp = data.get("otp")
+
+        if not email or not otp:
+            return Response({"error": "Email and OTP required"}, status=400)
+
+        user = User.objects.get(email=email)
+
+        if user.is_email_verified:
+            return Response({"message": "Email already verified"}, status=200)
+
+        if user.email_otp != otp:
+            return Response({"error": "Invalid OTP"}, status=400)
+
+        # Handle timezone-aware/naive datetime comparison
+        # We store UTC naive datetimes, so compare with UTC naive datetime
+        if user.email_otp_expires_at:
+            expiry = user.email_otp_expires_at
+            now = datetime.datetime.utcnow()
+            
+            # Ensure both are naive for comparison
+            if not is_naive(expiry):
+                # If expiry is aware, convert to naive UTC
+                expiry = expiry.replace(tzinfo=None)
+            
+            if expiry < now:
+                return Response({"error": "OTP expired"}, status=400)
+
+        # Mark verified
+        user.is_email_verified = True
+        user.email_otp = None
+        user.email_otp_expires_at = None
+        user.save()
+
+        token = generate_jwt(user)
+
+        return Response(
+            {
+                "message": "Email verified successfully",
+                "token": token,
+                "user": {
+                    "id": str(user.id),
+                    "email": user.email,
+                    "role": user.role.value,
+                },
+            },
+            status=200,
+        )
+
+    except User.DoesNotExist:
+        return Response({"error": "User not found"}, status=404)
+    except Exception as e:
+        print("VERIFY EMAIL OTP ERROR:", str(e))
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+def resend_email_otp(request):
+    """Resend OTP email to user"""
+    try:
+        data = json.loads(request.body)
+        email = data.get("email")
+
+        if not email:
+            return Response({"error": "Email is required"}, status=400)
+
+        user = User.objects(email=email).first()
+        if not user:
+            # Don't reveal if email exists for security
+            return Response({
+                "message": "If the email exists, an OTP has been sent."
+            }, status=200)
+
+        # Check if email is already verified
+        if user.is_email_verified:
+            return Response({"error": "Email is already verified"}, status=400)
+
+        # Generate new OTP
+        otp = generate_otp()
+        # Use UTC naive datetime for consistency with MongoDB
+        otp_expiry = datetime.datetime.utcnow() + timedelta(minutes=10)
+
+        # Update user with new OTP
+        user.email_otp = otp
+        user.email_otp_expires_at = otp_expiry
+        user.save()
+
+        # Send OTP email
+        try:
+            send_email_otp(user.email, otp, user.full_name or user.username)
+        except Exception as e:
+            print(f"Failed to send OTP email: {e}")
+            return Response({"error": "Failed to send OTP email. Please try again later."}, status=500)
+
+        return Response({
+            "message": "OTP has been resent to your email.",
+            "success": True
+        }, status=200)
+
+    except Exception as e:
+        print("RESEND OTP ERROR:", str(e))
+        return Response({"error": str(e)}, status=500)
 
 
 # =====================
