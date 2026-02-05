@@ -489,13 +489,19 @@ def get_organization(request, organization_id):
             return JsonResponse({'error': 'You do not have permission to view this organization'}, status=403)
 
         members_list = []
-        for member in organization.members:
-            members_list.append({
-                'id': str(member.id),
-                'email': member.email,
-                'full_name': member.full_name,
-                'organization_role': member.organization_role
-            })
+        if organization.members:
+            for member in organization.members:
+                try:
+                    if member:  # Check if member reference is valid
+                        members_list.append({
+                            'id': str(member.id),
+                            'email': member.email if hasattr(member, 'email') else '',
+                            'full_name': member.full_name if hasattr(member, 'full_name') else '',
+                            'organization_role': member.organization_role if hasattr(member, 'organization_role') else ''
+                        })
+                except (DoesNotExist, AttributeError, TypeError):
+                    # Skip invalid member references
+                    continue
 
         # Get projects for this organization
         # Query projects directly by organization instead of using organization.projects
@@ -537,11 +543,20 @@ def get_organization(request, organization_id):
                 # Skip projects that no longer exist or have issues
                 continue
 
+        # Safely get owner email
+        owner_email = ''
+        try:
+            owner_obj = organization.owner  # This may raise DoesNotExist if reference is broken
+            if owner_obj:
+                owner_email = getattr(owner_obj, 'email', '')
+        except (DoesNotExist, AttributeError, TypeError):
+            pass
+
         return JsonResponse({
             'id': str(organization.id),
             'name': organization.name,
-            'owner_email': organization.owner.email,
-            'credit_balance': organization.credit_balance,
+            'owner_email': owner_email,
+            'credit_balance': organization.credit_balance if hasattr(organization, 'credit_balance') else 0,
             'members': members_list,
             'projects': projects_list,
             'created_at': organization.created_at.isoformat() if organization.created_at else None

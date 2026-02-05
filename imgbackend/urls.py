@@ -23,6 +23,8 @@ urlpatterns = [
     path('api/plans/', include('plans.urls'), name='plans'),
     # Legal compliance endpoints
     path('api/legal/', include('legal.urls'), name='legal'),
+    # Homepage content endpoints
+    path('api/homepage/', include('homepage.urls'), name='homepage'),
     # Admin dashboard endpoints
     path('api/admin/dashboard/stats', admin_views.admin_dashboard_stats, name='admin_dashboard_stats'),
     path('api/admin/dashboard/images', admin_views.admin_dashboard_images, name='admin_dashboard_images'),

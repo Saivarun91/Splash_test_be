@@ -93,6 +93,7 @@ INSTALLED_APPS = [
     'invoices',
     'plans',
     'legal',
+    'homepage',
     'django_celery_results',
 ]
 
