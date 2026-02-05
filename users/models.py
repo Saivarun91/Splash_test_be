@@ -52,6 +52,9 @@ class User(Document):
     preferred_language = StringField(default='en')  # User's preferred language (en, es, etc.)
     reset_password_token = StringField(required=False)  # Token for password reset
     reset_password_token_expiry = DateTimeField(required=False)  # Expiry for reset token
+    email_otp = StringField(max_length=6, null=True, blank=True)
+    email_otp_expires_at = DateTimeField(null=True, blank=True)
+    is_email_verified = BooleanField(default=False)
 
     # Use string reference to avoid circular import
     projects = ListField(ReferenceField("Project"), default=list)

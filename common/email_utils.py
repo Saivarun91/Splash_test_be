@@ -20,6 +20,35 @@ EMAIL_TEXT_MUTED = "#64748b"
 EMAIL_BORDER = "#e2e8f0"
 PORTAL_NAME = "Splash"
 
+# common/email_utils.py
+import random
+from django.core.mail import send_mail
+from django.conf import settings
+
+def generate_otp():
+    return str(random.randint(100000, 999999))
+
+
+def send_email_otp(email, otp, name=None):
+    subject = "Verify your email"
+    message = f"""
+Hi {name or ''},
+
+Your email verification OTP is: {otp}
+
+This OTP is valid for 10 minutes.
+Do not share it with anyone.
+
+Thanks,
+Team
+"""
+    send_mail(
+        subject,
+        message,
+        settings.DEFAULT_FROM_EMAIL,
+        [email],
+        fail_silently=False,
+    )
 
 def get_logo_url():
     """Base URL for logo image in emails (must be absolute)."""

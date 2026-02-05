@@ -12,6 +12,7 @@ urlpatterns = [
          name='generate_real_model_with_ornament'),
     path('generate-campaign-shot/', views.generate_campaign_shot_advanced,
          name='generate_campaign_shot_advanced'),
+    path('delete-image/<str:image_id>/', views.delete_user_image, name='delete_user_image'),
     path('regenerate/', views.regenerate_image, name='regenerate_image'),
 ]
 
