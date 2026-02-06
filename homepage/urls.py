@@ -19,4 +19,7 @@ urlpatterns = [
     
     # Admin-only: Delete before/after image
     path('before-after/<str:image_id>/delete/', views.delete_before_after_image, name='delete_before_after_image'),
+    
+    # Public: Submit contact form
+    path('contact/', views.submit_contact_form, name='submit_contact_form'),
 ]

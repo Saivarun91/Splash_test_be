@@ -288,3 +288,66 @@ def delete_before_after_image(request, image_id):
             'success': False,
             'error': str(e)
         }, status=500)
+
+
+# =====================
+# Submit Contact Form
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+def submit_contact_form(request):
+    """
+    Submit contact form from footer
+    Public endpoint - no auth required
+    """
+    try:
+        data = json.loads(request.body)
+        
+        name = data.get('name')
+        mobile = data.get('mobile')
+        email = data.get('email')
+        reason = data.get('reason')
+        
+        # Validation
+        if not all([name, mobile, email, reason]):
+            return JsonResponse({
+                'success': False,
+                'error': 'All fields are required'
+            }, status=400)
+            
+        # Create submission record
+        from .models import ContactSubmission
+        submission = ContactSubmission(
+            name=name,
+            mobile=mobile,
+            email=email,
+            reason=reason,
+            created_at=datetime.utcnow()
+        )
+        submission.save()
+        
+        # Send admin email
+        try:
+            from common.email_utils import send_contact_admin_email
+            # Convert to dict for email utility
+            submission_data = {
+                'name': name,
+                'mobile': mobile,
+                'email': email,
+                'reason': reason
+            }
+            send_contact_admin_email(submission_data)
+        except Exception as e:
+            print(f"Failed to send contact admin email: {e}")
+            # Continue even if email fails
+            
+        return JsonResponse({
+            'success': True,
+            'message': 'Thank you! We will contact you shortly.'
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)

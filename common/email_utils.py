@@ -517,3 +517,48 @@ The Splash Team
     html = get_base_email_html(body_html_content, "Credits running low")
     return _send_html_email(subject, body_plain, html, [user_email])
 
+
+def send_contact_admin_email(submission_data):
+    """Notify admin(s) about a new Contact form submission."""
+    try:
+        from users.models import User, Role
+        admin_users = User.objects(role=Role.ADMIN)
+        admin_emails = [u.email for u in admin_users if getattr(u, "email", None)]
+        if not admin_emails:
+            admin_emails = getattr(settings, "ADMIN_EMAILS", [])
+        if isinstance(admin_emails, str):
+            admin_emails = [admin_emails]
+        if not admin_emails:
+            return True
+    except Exception as e:
+        print(f"Could not get admin emails for contact notification: {e}")
+        return True
+    
+    context = {
+        "name": submission_data.get("name", ""),
+        "mobile": submission_data.get("mobile", ""),
+        "email": submission_data.get("email", ""),
+        "reason": submission_data.get("reason", ""),
+        "submitted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+    }
+    
+    fallback_subject = "New Contact Form Submission - Footer"
+    fallback_body = f"""
+Hello,
+
+A new contact form submission has been received:
+
+- Name: {context['name']}
+- Mobile: {context['mobile']}
+- Email: {context['email']}
+- Reason: {context['reason']}
+
+Submitted at: {context['submitted_at']}
+
+Best regards,
+Splash System
+"""
+
+    return _send_from_template(
+        "footer_contact_admin", admin_emails, context, fallback_subject, fallback_body
+    )

@@ -1,13 +1,19 @@
 
-import os
-import django
+from pymongo import MongoClient
+from datetime import datetime
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "imgbackend.settings")
-django.setup()
+def seed_legal_direct():
+    # Use the URI from settings.py
+    uri = "mongodb+srv://bhargavraavi4444_db_user:bhargav4444@cluster0.5dfeawc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+    print(f"Connecting to Atlas: {uri.split('@')[1]}") # Hide credentials in log
+    
+    client = MongoClient(uri)
+    target_db = client['tarnika']
+    target_col = target_db['legal_compliance']
+    
+    potential_dbs = [] # Unused now
+    print("Updating 'legal_compliance' collection in 'tarnika' database...")
 
-from legal.models import LegalCompliance
-
-def seed_legal():
     data = [
         {
             'content_type': 'terms',
@@ -71,24 +77,21 @@ def seed_legal():
     <p>For any privacy-related queries, please contact us at <a href="mailto:support@findmyguru.com" class="text-blue-600 hover:underline">support@findmyguru.com</a>.</p>
 </div>
             '''
-        },
-        {
-            'content_type': 'gdpr',
-            'title': 'GDPR Compliance',
-            'content': '<h3>GDPR Compliance</h3><p>We are GDPR compliant...</p>'
         }
     ]
 
     for item in data:
-        obj = LegalCompliance.objects(content_type=item['content_type']).first()
-        if not obj:
-            LegalCompliance(**item).save()
-            print(f"Created {item['content_type']}")
-        else:
-            print(f"Updated {item['content_type']}")
-            obj.title = item['title']
-            obj.content = item['content']
-            obj.save()
+        # Update or Insert
+        result = target_col.update_one(
+            {'content_type': item['content_type']},
+            {'$set': {
+                'title': item['title'],
+                'content': item['content'],
+                'updated_at': datetime.utcnow()
+            }},
+            upsert=True
+        )
+        print(f"Processed {item['content_type']}: Matched={result.matched_count}, Modified={result.modified_count}, Upserted={result.upserted_id}")
 
 if __name__ == '__main__':
-    seed_legal()
+    seed_legal_direct()

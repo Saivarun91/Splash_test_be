@@ -31,3 +31,24 @@ class BeforeAfterImage(Document):
     
     def __str__(self):
         return f"BeforeAfter Image #{self.order}"
+
+
+class ContactSubmission(Document):
+    """
+    Model for storing contact form submissions from the footer
+    """
+    name = StringField(required=True)
+    mobile = StringField(required=True)
+    email = StringField(required=True)
+    reason = StringField(required=True)
+    created_at = DateTimeField(default=datetime.utcnow)
+    
+    meta = {
+        "collection": "contact_submissions",
+        "indexes": ["-created_at"],
+        "ordering": ["-created_at"],
+        "strict": False
+    }
+    
+    def __str__(self):
+        return f"Contact from {self.name} ({self.email})"
