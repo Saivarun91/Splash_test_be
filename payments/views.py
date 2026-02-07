@@ -660,3 +660,41 @@ def submit_contact_sales(request):
     except Exception as e:
         traceback.print_exc()
         return JsonResponse({'error': str(e)}, status=500)
+
+# =====================
+# Admin: Get All Sales Leads
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_all_sales_leads(request):
+    """Get all contact sales submissions - admin only"""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can view sales leads'}, status=403)
+    
+    try:
+        leads = ContactSalesSubmission.objects().order_by('-created_at')
+        
+        leads_list = []
+        for lead in leads:
+            leads_list.append({
+                'id': str(lead.id),
+                'first_name': lead.first_name,
+                'last_name': lead.last_name,
+                'work_email': lead.work_email,
+                'phone': lead.phone,
+                'company_website': lead.company_website,
+                'problems_trying_to_solve': lead.problems_trying_to_solve,
+                'users_to_onboard': lead.users_to_onboard,
+                'timeline': lead.timeline,
+                'created_at': lead.created_at.isoformat() if lead.created_at else None,
+            })
+            
+        return JsonResponse({
+            'success': True,
+            'leads': leads_list,
+            'count': len(leads_list)
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

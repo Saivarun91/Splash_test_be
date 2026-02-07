@@ -22,4 +22,10 @@ urlpatterns = [
     
     # Public: Submit contact form
     path('contact/', views.submit_contact_form, name='submit_contact_form'),
+    
+    # Authenticated: Submit help/support request
+    path('help/submit/', views.submit_support_request, name='submit_support_request'),
+    
+    # Admin-only: Get all support/contact requests
+    path('support/all/', views.get_all_support_requests, name='get_all_support_requests'),
 ]

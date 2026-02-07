@@ -351,3 +351,135 @@ def submit_contact_form(request):
             'success': False,
             'error': str(e)
         }, status=500)
+
+
+# =====================
+# Submit Support Request (Help Center - Authenticated)
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def submit_support_request(request):
+    """
+    Submit help/support request from dashboard
+    Authenticated endpoint - automatically links user
+    """
+    try:
+        data = json.loads(request.body)
+        
+        # User details from request.user (authenticated)
+        user = request.user
+        
+        # Allow overriding name/mobile/email but default to user profile
+        name = data.get('name') or user.full_name or user.username
+        email = data.get('email') or user.email
+        mobile = data.get('mobile') or getattr(user, 'phone_number', '')
+        
+        reason = data.get('reason')
+        
+        # Validation
+        if not reason:
+            return JsonResponse({
+                'success': False,
+                'error': 'Message/Reason is required'
+            }, status=400)
+            
+        # Create submission record
+        from .models import ContactSubmission
+        submission = ContactSubmission(
+            name=name,
+            mobile=mobile,
+            email=email,
+            reason=reason,
+            user=user,
+            type='support',
+            created_at=datetime.utcnow()
+        )
+        submission.save()
+        
+        # Send admin email
+        try:
+            from common.email_utils import send_support_admin_email
+            # Convert to dict for email utility
+            submission_data = {
+                'name': name,
+                'mobile': mobile,
+                'email': email,
+                'reason': reason,
+                'username': user.username,
+                'user_email': user.email
+            }
+            send_support_admin_email(submission_data)
+        except Exception as e:
+            print(f"Failed to send support admin email: {e}")
+            
+        return JsonResponse({
+            'success': True,
+            'message': 'Support request submitted successfully.'
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+# =====================
+# Get All Support/Contact Requests (Admin)
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_all_support_requests(request):
+    """
+    Get all contact and support submissions
+    Admin-only endpoint
+    """
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can list support requests'}, status=403)
+    
+    try:
+        from .models import ContactSubmission
+        
+        # Determine type filter if any
+        type_filter = request.GET.get('type')
+        
+        query = {}
+        if type_filter in ['contact', 'support']:
+            query['type'] = type_filter
+            
+        submissions = ContactSubmission.objects(**query).order_by('-created_at')
+        
+        data = []
+        for sub in submissions:
+            user_info = None
+            if sub.user:
+                user_info = {
+                    'username': sub.user.username,
+                    'email': sub.user.email,
+                    'id': str(sub.user.id)
+                }
+                
+            data.append({
+                'id': str(sub.id),
+                'name': sub.name,
+                'email': sub.email,
+                'mobile': sub.mobile,
+                'reason': sub.reason,
+                'type': sub.type,
+                'user': user_info,
+                'created_at': sub.created_at.isoformat() if sub.created_at else None
+            })
+            
+        return JsonResponse({
+            'success': True,
+            'requests': data
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+

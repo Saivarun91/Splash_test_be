@@ -11,4 +11,5 @@ urlpatterns = [
     path('admin/all/', views.get_all_payments, name='get_all_payments'),
     path('admin/revenue/', views.get_revenue_stats, name='get_revenue_stats'),
     path('contact-sales/', views.submit_contact_sales, name='submit_contact_sales'),
+    path('admin/leads/', views.get_all_sales_leads, name='get_all_sales_leads'),
 ]
