@@ -28,13 +28,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 cloudinary.config(
     cloud_name="dxjtd5vcf",
-<<<<<<< HEAD
     api_key="173447711599692",
     api_secret="I7gGWZr70t8kiCrHyvLlYaY0gBQ",
-=======
-    api_key="654543311549767",
-    api_secret="rZQUJZEkYGGWSEiS-aY8oq7hA-Y",
->>>>>>> 9990e752f9a876af6b788379fa0135a65b06e903
     secure=True
 )
 
