@@ -27,9 +27,9 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 cloudinary.config(
-    cloud_name="dxsafjcl4",
-    api_key="734289539815585",
-    api_secret="CBZPRw57UsYIVPM13VZuio9wbCQ",
+    cloud_name="dxjtd5vcf",
+    api_key="173447711599692",
+    api_secret="I7gGWZr70t8kiCrHyvLlYaY0gBQ",
     secure=True
 )
 
