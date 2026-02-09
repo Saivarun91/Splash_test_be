@@ -1,4 +1,4 @@
-from mongoengine import Document, StringField, DateTimeField, URLField, IntField
+from mongoengine import Document, StringField, DateTimeField, URLField, IntField, ReferenceField
 from datetime import datetime
 
 
@@ -36,19 +36,25 @@ class BeforeAfterImage(Document):
 class ContactSubmission(Document):
     """
     Model for storing contact form submissions from the footer
+    and help center requests (support)
     """
     name = StringField(required=True)
     mobile = StringField(required=True)
     email = StringField(required=True)
     reason = StringField(required=True)
+    
+    # New fields for Help Center / Support
+    user = ReferenceField('User', required=False)  # Link to User model if authenticated
+    type = StringField(default='contact', choices=['contact', 'support'])  # discriminate source
+    
     created_at = DateTimeField(default=datetime.utcnow)
     
     meta = {
         "collection": "contact_submissions",
-        "indexes": ["-created_at"],
+        "indexes": ["-created_at", "type", "user"],
         "ordering": ["-created_at"],
         "strict": False
     }
     
     def __str__(self):
-        return f"Contact from {self.name} ({self.email})"
+        return f"{self.type.title()} from {self.name} ({self.email})"
