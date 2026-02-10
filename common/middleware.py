@@ -66,3 +66,72 @@ def restrict(roles=[]):
             return view_func(request, *args, **kwargs)
         return wrapper
     return decorator
+
+# common/middleware.py
+import traceback
+from .tasks import notify_admin_error
+
+
+def _get_user_details(request):
+    """Build a JSON-serializable dict of user details (for MongoEngine User or anonymous)."""
+    user = getattr(request, "user", None)
+    if user is None:
+        return {"authenticated": False, "label": "anonymous"}
+    try:
+        return {
+            "authenticated": True,
+            "id": str(user.id) if hasattr(user, "id") and user.id else None,
+            "email": getattr(user, "email", None),
+            "full_name": getattr(user, "full_name", None),
+            "username": getattr(user, "username", None),
+            "role": str(getattr(user, "role", None)) if getattr(user, "role", None) else None,
+        }
+    except Exception:
+        return {"authenticated": True, "label": "unknown", "raw_id": str(getattr(user, "id", None))}
+
+
+def _get_location_details(request):
+    """Build where the error occurred: path, method, view name if available. Safe for non-Django request objects."""
+    path = getattr(request, "path", "")
+    get_full_path = getattr(request, "get_full_path", None)
+    if callable(get_full_path):
+        try:
+            full_path = get_full_path()
+        except Exception:
+            full_path = path
+    else:
+        full_path = path
+    location = {
+        "path": path,
+        "full_path": full_path,
+        "method": getattr(request, "method", ""),
+    }
+    try:
+        resolver = getattr(request, "resolver_match", None)
+        if resolver:
+            location["view_name"] = getattr(resolver, "view_name", None) or getattr(resolver, "url_name", None)
+            location["view_func"] = getattr(getattr(resolver, "func", None), "__name__", None)
+    except Exception:
+        pass
+    return location
+
+
+class ErrorNotificationMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        try:
+            return self.get_response(request)
+        except Exception as exc:
+            payload = {
+                "user": _get_user_details(request),
+                "location": _get_location_details(request),
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+            try:
+                notify_admin_error.delay(payload)
+            except Exception:
+                pass  # do not mask original exception
+            raise

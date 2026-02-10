@@ -18,6 +18,7 @@ import cloudinary.uploader
 from .mongo_models import OrnamentMongo
 from .models import Ornament
 from bson import ObjectId
+from common.error_reporter import report_handled_exception
 
 # Check for Gemini SDK
 try:
@@ -211,7 +212,7 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
 
     except Exception as e:
         traceback.print_exc()
-        # Retry on certain errors
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -406,6 +407,7 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -572,6 +574,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -751,6 +754,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -928,6 +932,7 @@ def generate_campaign_shot_advanced_task(self, user_id, model_type, model_image_
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -1122,6 +1127,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {

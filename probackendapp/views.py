@@ -464,7 +464,7 @@ except ImportError:
 
 
 # Constants for image generation
-MAX_IMAGE_BYTES = 9 * 1024 * 1024  # 9MB maximum image size
+MAX_IMAGE_BYTES = 9 * 4096 * 4096 # 9MB maximum image size
 CLOUDINARY_UPLOAD_TIMEOUT = 120  # 120 seconds timeout for Cloudinary uploads
 
 

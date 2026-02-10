@@ -33,6 +33,73 @@ def generate_jwt(user):
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 
+def generate_refresh_jwt(user):
+    """Generate a longer-lived JWT used only for obtaining new access tokens."""
+    payload = {
+        "id": str(user.id),
+        "type": "refresh",
+        "exp": datetime.datetime.utcnow() + timedelta(days=7),
+        "iat": datetime.datetime.utcnow(),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+
+# =====================
+# JWT Token endpoints (for admin frontend: access + refresh)
+# =====================
+@api_view(['POST'])
+@csrf_exempt
+def token_obtain_pair(request):
+    """POST with { email, password } -> { access, refresh }."""
+    try:
+        data = json.loads(request.body)
+        email = data.get("email")
+        password = data.get("password")
+        if not email or not password:
+            return JsonResponse({"error": "Email and password required"}, status=400)
+        user = User.objects(email=email).first()
+        if not user or not check_password(password, user.password):
+            return JsonResponse({"error": "Invalid credentials"}, status=401)
+        access = generate_jwt(user)
+        refresh = generate_refresh_jwt(user)
+        return JsonResponse({"access": access, "refresh": refresh}, status=200)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+def token_refresh(request):
+    """POST with { refresh } -> { access, refresh }."""
+    try:
+        data = json.loads(request.body)
+        refresh_token = data.get("refresh")
+        if not refresh_token:
+            return JsonResponse({"error": "Refresh token required"}, status=400)
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=["HS256"])
+        if payload.get("type") != "refresh":
+            return JsonResponse({"error": "Invalid refresh token"}, status=401)
+        user_id = payload.get("id")
+        if not user_id:
+            return JsonResponse({"error": "Invalid refresh token"}, status=401)
+        user = User.objects(id=user_id).first()
+        if not user:
+            return JsonResponse({"error": "User not found"}, status=401)
+        access = generate_jwt(user)
+        refresh = generate_refresh_jwt(user)
+        return JsonResponse({"access": access, "refresh": refresh}, status=200)
+    except jwt.ExpiredSignatureError:
+        return JsonResponse({"error": "Refresh token expired"}, status=401)
+    except jwt.InvalidTokenError:
+        return JsonResponse({"error": "Invalid refresh token"}, status=401)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
 # =====================
 # User Registration
 # =====================
