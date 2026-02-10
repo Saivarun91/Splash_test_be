@@ -2,6 +2,8 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    path("token/", views.token_obtain_pair, name="token_obtain_pair"),
+    path("token/refresh/", views.token_refresh, name="token_refresh"),
     path("register/", views.register_user, name="register_user"),
     path("login/", views.login_user, name="login_user"),
     path("verify-email-otp/", views.verify_email_otp, name="verify_email_otp"),
