@@ -473,6 +473,9 @@ def generate_ai_images_background(collection_id, user_id):
     Background function for generating AI model images for a collection.
     This function is called by Celery and doesn't use request object.
     Returns a dict with success status and results.
+
+    IMPORTANT: After changing this function, restart the Celery worker so it
+    loads the new code (e.g. stop and run: celery -A imgbackend worker -l info -P solo -c 1).
     """
     # === Credit Check and Deduction ===
     from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
@@ -515,7 +518,9 @@ def generate_ai_images_background(collection_id, user_id):
             return {"success": False, "error": credit_result['message']}
     # If no organization, allow generation to proceed without credit deduction
 
-    description = getattr(collection, "description", "") or ""
+    description = (getattr(collection, "description", "") or "").strip()
+    # target_audience = (getattr(collection, "target_audience", "") or "").strip()
+    # campaign_season = (getattr(collection, "campaign_season", "") or "").strip()
     generated_images = []
 
     if not has_genai:
@@ -524,12 +529,42 @@ def generate_ai_images_background(collection_id, user_id):
     client = genai.Client(api_key=settings.GOOGLE_API_KEY)
     model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
 
+    # Build optional extra requirements from collection (e.g. jewelry, outfit style)
+    extra_parts = []
+    if description:
+        extra_parts.append(description)
+    # if target_audience:
+    #     extra_parts.append(f"Target audience: {target_audience}.")
+    # if campaign_season:
+    #     extra_parts.append(f"Campaign/season: {campaign_season}.")
+    extra_requirements = " ".join(extra_parts) if extra_parts else ""
+
+    # Strict prompt: Indian model only, solid white/grey background only, 100% front-facing.
+    # Short imperative sentences and explicit "Do NOT" so the model follows requirements.
+    expression_hint = [
+        "Neutral expression.",
+        "Slight natural smile.",
+        "Calm professional expression.",
+        "Soft approachable expression.",
+    ]
+
     for i in range(4):
+        expr = expression_hint[i % len(expression_hint)]
         prompt_text = (
-            f"Generate a realistic human model image (face and shoulders visible) "
-            f"suitable for the collection description: {description}. "
-            f"High-quality, photorealistic."
+            "Generate exactly one photorealistic studio portrait. "
+            "REQUIRED: (1) The person must be an Indian woman ai model(age 18-25 years), Indian facial features and Indian white skin tone only. "
+            "(2) Background must be only a single solid color: pure white or very light grey, nothing else. No room, no fabric, no patterns, no objects. "
+            "model should not wear any jewelry but should have a minimal makeup on the face"
+            "model should have the smiling expression"
+            "(3) Model must be fully front-facing: face and body straight toward camera, eyes looking at viewer, shoulders square, no head turn, no side angle. "
+            "Do NOT draw non-Indian faces. Do NOT draw any background except solid white or light grey. Do NOT draw three-quarter view or profile. "
+            f"Face and shoulders visible. {expr} "
+            "Professional fashion model. Soft even studio lighting. High resolution. No text, no logos."
         )
+        if extra_requirements:
+            prompt_text += f" Optional context: {extra_requirements}"
+        else:
+            prompt_text += " Each image can show a different Indian woman ai model (different face or hair) but all must be front-facing with solid white or grey background."
 
         contents = [{"role": "user", "parts": [{"text": prompt_text}]}]
 

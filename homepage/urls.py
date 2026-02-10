@@ -28,4 +28,21 @@ urlpatterns = [
     
     # Admin-only: Get all support/contact requests
     path('support/all/', views.get_all_support_requests, name='get_all_support_requests'),
+    
+    # Page content (CMS): home, about, vision_mission, tutorials, security
+    path('content/<str:slug>/', views.get_page_content, name='get_page_content'),
+    path('content/<str:slug>/admin/', views.get_page_content_admin, name='get_page_content_admin'),
+    path('content/<str:slug>/admin/update/', views.update_page_content, name='update_page_content'),
+    
+    # Blog (admin - must be before blog/<slug>)
+    path('blog/admin/all/', views.get_all_blog_posts, name='get_all_blog_posts'),
+    path('blog/admin/create/', views.create_blog_post, name='create_blog_post'),
+    path('blog/admin/<str:slug>/update/', views.update_blog_post, name='update_blog_post'),
+    path('blog/admin/<str:slug>/delete/', views.delete_blog_post, name='delete_blog_post'),
+    # Blog (public)
+    path('blog/', views.get_blog_posts, name='get_blog_posts'),
+    path('blog/<str:slug>/', views.get_blog_post, name='get_blog_post'),
+    
+    # Admin: Upload content image (hero, showcase, etc.)
+    path('upload-image/', views.upload_content_image, name='upload_content_image'),
 ]

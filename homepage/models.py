@@ -1,5 +1,59 @@
-from mongoengine import Document, StringField, DateTimeField, URLField, IntField, ReferenceField
+from mongoengine import Document, StringField, DateTimeField, URLField, IntField, ReferenceField, DictField, ListField
 from datetime import datetime
+
+
+class PageContent(Document):
+    """
+    Flexible CMS-style content for public pages (home, about, vision_mission, tutorials, security).
+    One document per page_slug; content is a dict matching frontend structure.
+    """
+    page_slug = StringField(required=True, unique=True)  # home, about, vision_mission, tutorials, security
+    content = DictField(default=dict)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "page_content",
+        "indexes": ["page_slug"],
+        "strict": False,
+    }
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.utcnow()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"PageContent({self.page_slug})"
+
+
+class BlogPost(Document):
+    """Blog post for /blog listing and detail pages."""
+    slug = StringField(required=True, unique=True)
+    title = StringField(required=True)
+    excerpt = StringField()
+    body = StringField()  # HTML or markdown content for post detail
+    date = StringField()  # e.g. "October 16, 2025"
+    author = StringField(default="Splash Team")
+    category = StringField()
+    read_time = StringField(default="5 min read")
+    image_url = URLField()
+    order = IntField(default=0)
+    is_published = StringField(default='true')  # 'true' / 'false'
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "blog_posts",
+        "indexes": ["slug", "is_published", "order"],
+        "ordering": ["order", "-created_at"],
+        "strict": False,
+    }
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.utcnow()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.title
 
 
 class BeforeAfterImage(Document):
