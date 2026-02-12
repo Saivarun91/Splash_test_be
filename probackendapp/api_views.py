@@ -24,6 +24,7 @@ from django.shortcuts import get_object_or_404
 from mongoengine.errors import DoesNotExist
 from bson.dbref import DBRef
 from django.conf import settings
+from common.user_friendly_errors import get_user_friendly_message
 import json
 import os
 from datetime import datetime, timezone, timedelta
@@ -2137,7 +2138,7 @@ def api_generate_all_product_model_images(request, collection_id):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return Response({"success": False, "error": str(e)}, status=500)
+        return Response({"success": False, "error": get_user_friendly_message(e)}, status=500)
 
 
 @csrf_exempt
@@ -2215,23 +2216,24 @@ def api_job_images(request, job_id):
             print(
                 f"Error fetching collection data for job {job_id}: {coll_error}")
 
-        return Response(
-            {
-                "success": True,
-                "job_id": job.job_id,
-                "status": job.status,
-                "total_images": job.total_images,
-                "completed_images": job.completed_images,
-                "images": job.images or [],
-                "collection_data": collection_data,  # Include latest collection state
-                "created_at": job.created_at.isoformat() if job.created_at else None,
-                "updated_at": job.updated_at.isoformat() if job.updated_at else None,
-            }
-        )
+        payload = {
+            "success": True,
+            "job_id": job.job_id,
+            "status": job.status,
+            "total_images": job.total_images,
+            "completed_images": job.completed_images,
+            "images": job.images or [],
+            "collection_data": collection_data,  # Include latest collection state
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        }
+        if job.error:
+            payload["error"] = job.error
+        return Response(payload)
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return Response({"success": False, "error": str(e)}, status=500)
+        return Response({"success": False, "error": get_user_friendly_message(e)}, status=500)
 
 
 @csrf_exempt

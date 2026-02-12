@@ -95,6 +95,7 @@ INSTALLED_APPS = [
     'legal',
     'homepage',
     'django_celery_results',
+    'django_extensions',
 ]
 
 

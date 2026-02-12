@@ -19,6 +19,7 @@ from .mongo_models import OrnamentMongo
 from .models import Ornament
 from bson import ObjectId
 from common.error_reporter import report_handled_exception
+from common.user_friendly_errors import get_user_friendly_message
 
 # Check for Gemini SDK
 try:
@@ -579,7 +580,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "user_friendly_message": get_user_friendly_message(e),
         }
 
 
@@ -759,7 +761,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "user_friendly_message": get_user_friendly_message(e),
         }
 
 
@@ -955,7 +958,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         if not object_id_pattern.match(image_id):
             return {
                 "success": False,
-                "error": f"Invalid image_id: '{image_id}' is not a valid MongoDB ObjectId."
+                "error": f"Invalid image_id: '{image_id}' is not a valid MongoDB ObjectId.",
+                "user_friendly_message": get_user_friendly_message("Invalid image_id"),
             }
 
         # Fetch the previous image record from MongoDB
@@ -964,14 +968,16 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         except OrnamentMongo.DoesNotExist:
             return {
                 "success": False,
-                "error": "Image record not found"
+                "error": "Image record not found",
+                "user_friendly_message": get_user_friendly_message("Image record not found"),
             }
 
         # Verify that the image belongs to the user
         if prev_doc.user_id != user_id:
             return {
                 "success": False,
-                "error": "You don't have permission to regenerate this image"
+                "error": "You don't have permission to regenerate this image",
+                "user_friendly_message": get_user_friendly_message("permission to regenerate"),
             }
 
         # Get the previous generated image URL from Cloudinary
@@ -1132,5 +1138,6 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
+            "user_friendly_message": get_user_friendly_message(e),
         }
