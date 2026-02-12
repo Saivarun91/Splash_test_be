@@ -23,6 +23,7 @@ from django.http import JsonResponse, HttpResponseBadRequest
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from common.middleware import authenticate
+from common.user_friendly_errors import get_user_friendly_message
 from urllib.request import urlopen
 from bson import ObjectId
 import re
@@ -80,7 +81,7 @@ def upload_ornament(request):
 
         except Exception as e:
             traceback.print_exc()
-            return JsonResponse({"success": False, "error": str(e)})
+            return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
 
     else:
         print("Form errors:", form.errors)
@@ -188,7 +189,7 @@ def change_background(request):
 
         except Exception as e:
             traceback.print_exc()
-            return JsonResponse({"success": False, "error": str(e)})
+            return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
 
     else:
         return JsonResponse({"success": False, "error": "Invalid form data"})
@@ -294,7 +295,7 @@ def generate_model_with_ornament(request):
 
     except Exception as e:
         traceback.print_exc()
-        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+        return JsonResponse({"status": "error", "message": get_user_friendly_message(e)}, status=500)
 
 
 
@@ -415,7 +416,7 @@ def generate_real_model_with_ornament(request):
 
     except Exception as e:
         traceback.print_exc()
-        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+        return JsonResponse({"status": "error", "message": get_user_friendly_message(e)}, status=500)
 
 
 @api_view(['POST'])
@@ -535,7 +536,7 @@ def generate_campaign_shot_advanced(request):
 
     except Exception as e:
         traceback.print_exc()
-        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+        return JsonResponse({"status": "error", "message": get_user_friendly_message(e)}, status=500)
 
 # @csrf_exempt
 # @authenticate
@@ -757,7 +758,7 @@ def generate_campaign_shot_advanced(request):
 
 #     except Exception as e:
 #         traceback.print_exc()
-#         return JsonResponse({"status": "error", "message": str(e)}, status=500)
+#         return JsonResponse({"status": "error", "message": get_user_friendly_message(e)}, status=500)
 
 
 @api_view(['POST'])
@@ -826,7 +827,7 @@ def regenerate_image(request):
         object_id_pattern = re.compile(r'^[0-9a-fA-F]{24}$')
         if not object_id_pattern.match(image_id):
             return JsonResponse({
-                "error": f"Invalid image_id: '{image_id}' is not a valid MongoDB ObjectId. It must be a 24-character hex string. Please ensure you are using mongo_id, not ornament_id."
+                "error": get_user_friendly_message("Invalid image_id"),
             }, status=400)
 
         # Fetch the previous image record from MongoDB
@@ -836,7 +837,7 @@ def regenerate_image(request):
             return JsonResponse({"error": "Image record not found"}, status=404)
         except Exception as e:
             # This should rarely happen now due to format validation above
-            return Response({"error": f"Invalid image_id: {str(e)}"}, status=400)
+            return Response({"error": get_user_friendly_message(e)}, status=400)
 
         # Verify that the image belongs to the user (security check)
         if prev_doc.user_id != user_id:
@@ -859,7 +860,7 @@ def regenerate_image(request):
 
     except Exception as e:
         traceback.print_exc()
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
+        return JsonResponse({"success": False, "error": get_user_friendly_message(e)}, status=500)
 
 
 @api_view(['GET'])
@@ -872,7 +873,7 @@ def get_task_status(request):
         
         task_id = request.GET.get('task_id')
         if not task_id:
-            return JsonResponse({"success": False, "error": "task_id is required"}, status=400)
+            return JsonResponse({"success": False, "error": "Task ID is required."}, status=400)
         
         result = AsyncResult(task_id)
         
@@ -887,7 +888,15 @@ def get_task_status(request):
                 response_data["result"] = result.result
                 response_data["success"] = True
             else:
-                response_data["error"] = str(result.result) if result.result else "Task failed"
+                # Prefer user-friendly message from task result
+                raw = result.result
+                if isinstance(raw, dict):
+                    err_msg = raw.get("user_friendly_message") or get_user_friendly_message(
+                        raw.get("error") or raw.get("message") or str(raw)
+                    )
+                else:
+                    err_msg = get_user_friendly_message(str(raw) if raw else "Task failed")
+                response_data["error"] = err_msg
                 response_data["success"] = False
         else:
             # Task is still running
@@ -897,7 +906,10 @@ def get_task_status(request):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
+        return JsonResponse({
+            "success": False,
+            "error": get_user_friendly_message(e),
+        }, status=500)
 
 
 @csrf_exempt
@@ -966,7 +978,7 @@ def get_user_images(request):
 
     except Exception as e:
         traceback.print_exc()
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
+        return JsonResponse({"success": False, "error": get_user_friendly_message(e)}, status=500)
 
 
 @csrf_exempt
@@ -1011,6 +1023,6 @@ def delete_user_image(request, image_id):
     except Exception as e:
         traceback.print_exc()
         return JsonResponse(
-            {"success": False, "error": str(e)},
+            {"success": False, "error": get_user_friendly_message(e)},
             status=500
         )

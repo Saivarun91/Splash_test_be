@@ -23,6 +23,8 @@ from mongoengine.errors import DoesNotExist
 from rest_framework.response import Response
 from .utils import request_suggestions, call_gemini_api, parse_gemini_response
 from common.middleware import authenticate
+from common.error_reporter import report_handled_exception
+from common.user_friendly_errors import get_user_friendly_message
 from CREDITS.utils import get_image_model_name
 # -------------------------
 # Dashboard - Shows all projects
@@ -478,7 +480,7 @@ def generate_ai_images_background(collection_id, user_id):
     loads the new code (e.g. stop and run: celery -A imgbackend worker -l info -P solo -c 1).
     """
     # === Credit Check and Deduction ===
-    from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
+    from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings , deduct_user_credits
     from users.models import User
 
     # Get dynamic credit settings
@@ -500,22 +502,39 @@ def generate_ai_images_background(collection_id, user_id):
         return {"success": False, "error": "Collection not found."}
 
     # Check if user has organization - if not, allow generation without credit deduction
+    # === Credit Check and Deduction ===
     organization = get_user_organization(user)
+
+# Determine who pays
     if organization:
-        # Check and deduct credits before generation (for all 4 images)
         credit_result = deduct_credits(
             organization=organization,
             user=user,
             amount=TOTAL_CREDITS_NEEDED,
             reason=f"AI model images generation ({TOTAL_IMAGES_TO_GENERATE} images)",
-            project=collection.project if hasattr(
-                collection, 'project') else None,
-            metadata={"type": "generate_ai_images_background",
-                      "total_images": TOTAL_IMAGES_TO_GENERATE}
+            project=collection.project if hasattr(collection, 'project') else None,
+            metadata={
+                "type": "generate_ai_images_background",
+                "total_images": TOTAL_IMAGES_TO_GENERATE,
+                "wallet_type": "organization"
+            }
+        )
+    else:
+        credit_result = deduct_user_credits(
+            user=user,
+            amount=TOTAL_CREDITS_NEEDED,
+            reason=f"AI model images generation ({TOTAL_IMAGES_TO_GENERATE} images)",
+            project=collection.project if hasattr(collection, 'project') else None,
+            metadata={
+                "type": "generate_ai_images_background",
+                "total_images": TOTAL_IMAGES_TO_GENERATE,
+                "wallet_type": "user"
+            }
         )
 
-        if not credit_result['success']:
-            return {"success": False, "error": credit_result['message']}
+    if not credit_result['success']:
+        return {"success": False, "error": credit_result['message']}
+
     # If no organization, allow generation to proceed without credit deduction
 
     description = (getattr(collection, "description", "") or "").strip()
@@ -683,6 +702,7 @@ def generate_ai_images_background(collection_id, user_id):
                 saved_images = [img.get(
                     "cloud") for img in first_item.generated_model_images if img and "cloud" in img]
     except Exception as e:
+        report_handled_exception(e, context={"user_id": user_id})
         print(f"⚠️ Error collecting saved images: {e}")
         traceback.print_exc()
 
@@ -720,6 +740,7 @@ def generate_ai_images(request, collection_id):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        report_handled_exception(e, request=request)
         return JsonResponse({"success": False, "error": str(e)}, status=500)
 
 # def save_generated_images(request, collection_id):
@@ -838,6 +859,7 @@ def save_generated_images(request, collection_id):
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=request)
         return JsonResponse({"success": False, "error": str(e)})
 # -------------------------
 # Collection detail view
@@ -953,6 +975,7 @@ def upload_product_images_api(request, collection_id):
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=request)
         return Response({"success": False, "error": str(e)})
 
 
@@ -974,6 +997,7 @@ def generate_product_model_page(request, collection_id):
         })
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=request)
         return Response({"success": False, "error": str(e)}, status=500)
 
 
@@ -1064,6 +1088,7 @@ def generate_product_model_api(request, collection_id):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        report_handled_exception(e, request=request)
         return Response({"success": False, "error": str(e)}, status=500)
 
 
@@ -2006,16 +2031,17 @@ Follow this specific style prompt: {prompt_text}"""
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, context={"user_id": user_id, "path": "generate_single_product_model_image_background", "job_id": job_id})
         if job_id:
             try:
                 job = ImageGenerationJob.objects(job_id=job_id).first()
                 if job and job.status != "completed":
                     job.status = "failed"
-                    job.error = str(e)
+                    job.error = get_user_friendly_message(e)
                     job.save()
             except Exception:
                 pass
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": get_user_friendly_message(e)}
 
 
 def generate_all_product_model_images_background(collection_id, user_id):
@@ -3150,6 +3176,7 @@ Follow this specific style prompt: {prompt_text}"""
                             f"Error tracking project image generation history: {history_error}")
 
                 except Exception as e:
+                    report_handled_exception(e, context={"user_id": user_id, "path": "generate_all_product_model_images_background", "key": key})
                     error_trace = traceback.format_exc()
                     if key == "campaign_image":
                         log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ❌ CRITICAL ERROR: Failed to generate campaign_image for {product.uploaded_image_url}"
@@ -3204,6 +3231,7 @@ Follow this specific style prompt: {prompt_text}"""
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, context={"user_id": user_id, "path": "generate_all_product_model_images_background"})
         return {"success": False, "error": str(e)}
 
 
@@ -3234,6 +3262,7 @@ def generate_all_product_model_images(request, collection_id):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        report_handled_exception(e, request=request)
         return Response({"success": False, "error": str(e)}, status=500)
 
 
@@ -3527,4 +3556,5 @@ def regenerate_product_model_image(request, collection_id):
 
     except Exception as e:
         traceback.print_exc()
+        report_handled_exception(e, request=request)
         return Response({"success": False, "error": str(e)}, status=500)

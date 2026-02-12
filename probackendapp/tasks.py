@@ -9,6 +9,7 @@ from .views import (
 from mongoengine.errors import NotUniqueError, OperationError, ValidationError
 from datetime import datetime
 from .models import ImageGenerationHistory
+from common.error_reporter import report_handled_exception
 
 @shared_task(bind=True, acks_late=True)
 def generate_single_image_task(self, job_id, collection_id, user_id, product_index, prompt_key):
@@ -70,7 +71,7 @@ def generate_single_image_task(self, job_id, collection_id, user_id, product_ind
         error_str = str(e).lower()
         if 'duplicate' in error_str or 'e11000' in error_str:
             return "duplicate-blocked"
-        # Re-raise other exceptions
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
         raise
 
 
@@ -79,4 +80,8 @@ def generate_ai_images_task(self, collection_id, user_id):
     """
     Legacy bulk task – should NOT be used for paid flows.
     """
-    return generate_ai_images_background(collection_id, user_id)
+    try:
+        return generate_ai_images_background(collection_id, user_id)
+    except Exception as e:
+        report_handled_exception(e, request=self.request, context={"user_id": user_id})
+        raise
