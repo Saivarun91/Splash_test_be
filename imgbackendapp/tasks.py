@@ -767,7 +767,19 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_campaign_shot_advanced_task(self, user_id, model_type, model_image_path, ornament_image_paths, ornament_names, theme_image_paths, prompt, dimension):
+def generate_campaign_shot_advanced_task(
+    self,
+    user_id,
+    model_type,
+    model_image_path,
+    ornament_image_paths,
+    ornament_names,
+    ornament_types,
+    theme_image_paths,
+    prompt,
+    dimension,
+    ornament_measurements='[]',
+):
     """
     Celery task to generate campaign shot.
     """
@@ -775,6 +787,15 @@ def generate_campaign_shot_advanced_task(self, user_id, model_type, model_image_
         # Upload ornaments to Cloudinary & encode
         ornament_urls = []
         ornament_b64_list = []
+
+        # Parse optional per-ornament measurements (JSON array of dicts)
+        import json
+        try:
+            ornament_measurements_list = json.loads(
+                ornament_measurements) if ornament_measurements else []
+        except Exception:
+            ornament_measurements_list = []
+
         for idx, ornament_path in enumerate(ornament_image_paths):
             with open(ornament_path, "rb") as f:
                 ornament_bytes = f.read()
@@ -787,8 +808,23 @@ def generate_campaign_shot_advanced_task(self, user_id, model_type, model_image_
             # Encode
             ornament_name = ornament_names[idx] if idx < len(
                 ornament_names) else f"Ornament {idx+1}"
+            ornament_type = None
+            if ornament_types and idx < len(ornament_types):
+                ornament_type = ornament_types[idx] or None
+
+            # Attach measurements for this ornament (if any)
+            per_ornament_measurements = {}
+            if (
+                ornament_measurements_list
+                and idx < len(ornament_measurements_list)
+                and isinstance(ornament_measurements_list[idx], dict)
+            ):
+                per_ornament_measurements = ornament_measurements_list[idx]
+
             ornament_b64_list.append({
                 "name": ornament_name,
+                "type": ornament_type,
+                "measurements": per_ornament_measurements,
                 "data": base64.b64encode(ornament_bytes).decode('utf-8')
             })
 
@@ -833,9 +869,25 @@ def generate_campaign_shot_advanced_task(self, user_id, model_type, model_image_
         # Ornaments
         for ornament in ornament_b64_list:
             parts.append(
-                {"inline_data": {"mime_type": "image/jpeg", "data": ornament["data"]}})
+                {"inline_data": {"mime_type": "image/jpeg", "data": ornament["data"]}}
+            )
+            type_text = f" (type: {ornament['type']})" if ornament.get("type") else ""
+
+            measurements_text = ""
+            if ornament.get("measurements"):
+                entries = [
+                    f"{k}: {v}"
+                    for k, v in ornament["measurements"].items()
+                    if v
+                ]
+                if entries:
+                    measurements_text = f" with measurements: {', '.join(entries)}"
+
             parts.append(
-                {"text": f"Reference for ornament: {ornament['name']}"})
+                {
+                    "text": f"Reference for ornament: {ornament['name']}{type_text}{measurements_text}"
+                }
+            )
 
         # Themes (optional)
         for theme_b64 in theme_b64_list:

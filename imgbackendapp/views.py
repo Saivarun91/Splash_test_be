@@ -473,15 +473,24 @@ def generate_campaign_shot_advanced(request):
             'model_image') if model_type == 'real_model' else None
         ornaments = request.FILES.getlist('ornament_images')
         ornament_names = request.POST.getlist('ornament_names')
+        ornament_types = request.POST.getlist('ornament_types')
+        # Optional JSON array of per-ornament measurements
+        ornament_measurements = request.POST.get('ornament_measurements', '[]')
         theme_images = request.FILES.getlist('theme_images')
         prompt = request.POST.get('prompt')
         dimension = request.POST.get('dimension', '1:1').strip()
 
         # === Validation ===
         if not ornaments:
+            print("no ornaments")
             return Response({"error": "Please upload at least one ornament image."}, status=400)
         if model_type == 'real_model' and not model_img:
+            print("no model image")
             return Response({"error": "Please upload a model image for Real Model option."}, status=400)
+
+        # === Validation: ensure ornament types length matches (if provided) ===
+        if ornament_types and len(ornament_types) != len(ornaments):
+            return Response({"error": "Number of ornament types must match number of ornament images."}, status=400)
 
         # === Save ornaments locally ===
         ornament_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
@@ -522,6 +531,8 @@ def generate_campaign_shot_advanced(request):
             model_image_path=model_image_path,
             ornament_image_paths=ornament_image_paths,
             ornament_names=ornament_names,
+            ornament_types=ornament_types,
+            ornament_measurements=ornament_measurements,
             theme_image_paths=theme_image_paths,
             prompt=prompt,
             dimension=dimension
