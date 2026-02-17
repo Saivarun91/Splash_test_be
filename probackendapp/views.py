@@ -902,6 +902,15 @@ def upload_product_images_api(request, collection_id):
         except (json.JSONDecodeError, ValueError):
             ornament_types = []
 
+        # Get ornament rules from request (from ornamentRules.js, same order as ornament_types)
+        ornament_rules_json = request.POST.get("ornament_rules", "[]")
+        try:
+            ornament_rules = json.loads(ornament_rules_json)
+            if not isinstance(ornament_rules, list):
+                ornament_rules = []
+        except (json.JSONDecodeError, ValueError):
+            ornament_rules = []
+
         # Ensure ornament_types list matches the number of files
         if len(ornament_types) != len(uploaded_files):
             return Response({"success": False, "error": "Number of ornament types must match number of files."})
@@ -924,6 +933,9 @@ def upload_product_images_api(request, collection_id):
                 for chunk in file.chunks():
                     f.write(chunk)
 
+            # Ornament fitting rules (from frontend ornamentRules.js), same index as ornament_types
+            rules_for_index = ornament_rules[index] if index < len(ornament_rules) else ""
+
             # ✅ Create EmbeddedDocument object instead of dict
             product_img = ProductImage(
                 uploaded_image_url=cloud_url,
@@ -931,6 +943,7 @@ def upload_product_images_api(request, collection_id):
                 generated_images=[],
                 ornament_type=ornament_types[index] if index < len(
                     ornament_types) else None,
+                ornament_rules=rules_for_index if isinstance(rules_for_index, str) else "",
                 generation_selections={
                     "plainBg": False,
                     "bgReplace": False,
