@@ -110,6 +110,8 @@ class ProductImage(EmbeddedDocument):
     uploaded_at = DateTimeField(default=datetime.now(timezone.utc))
     # Store the type of ornament (e.g., "short_necklace", "long_necklace", "stud_earrings", etc.)
     ornament_type = StringField()
+    # Fitting rules for AI generation (from ornamentRules.js), sent when user selects ornament type
+    ornament_rules = StringField(default="")
     generation_selections = DictField(default=lambda: {"plainBg": False, "bgReplace": False, "model": False, "campaign": False})
     meta = {
         'strict': False,  # Allow unknown fields to prevent errors with legacy data

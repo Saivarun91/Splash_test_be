@@ -1038,7 +1038,9 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         # Combine the original prompt with the new prompt
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
         combined_prompt = f"{original_prompt}. {new_prompt}"
-
+        measurements = prev_doc.measurements
+        measurements_text = f"measurements: {measurements}. " if measurements else ""
+        
         # Download the previous generated image from Cloudinary
         with urlopen(prev_generated_url) as resp:
             img_bytes = resp.read()
@@ -1056,7 +1058,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
 
             contents = [
                 {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
-                {"text": combined_prompt}
+                {"text": combined_prompt},
+                {"text": measurements_text}
             ]
 
             config = types.GenerateContentConfig(
