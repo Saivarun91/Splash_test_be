@@ -45,6 +45,15 @@ except ImportError:
     has_genai = False
 
 
+def _parse_num_images(request):
+    """Parse and clamp num_images from request (1–10)."""
+    try:
+        n = int(request.POST.get("num_images", 1))
+        return max(1, min(10, n))
+    except (TypeError, ValueError):
+        return 1
+
+
 @api_view(['POST'])
 @csrf_exempt
 @authenticate
@@ -53,22 +62,51 @@ def upload_ornament(request):
     user = request.user
     user_id = str(user.id)
 
+    # === Credit Check and Deduction (1 image only for white-bg) ===
+    from CREDITS.utils import (
+        deduct_credits,
+        get_user_organization,
+        get_credit_settings,
+        deduct_user_credits,
+    )
+    credit_settings = get_credit_settings()
+    CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+    organization = get_user_organization(user)
+    if organization:
+        credit_result = deduct_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_IMAGE,
+            reason="White background image generation",
+            metadata={"type": "upload_ornament"},
+        )
+    else:
+        credit_result = deduct_user_credits(
+            user=user,
+            amount=CREDITS_PER_IMAGE,
+            reason="White background image generation",
+            metadata={"type": "upload_ornament"},
+        )
+    if not credit_result["success"]:
+        return JsonResponse(
+            {"success": False, "error": credit_result["message"]},
+            status=400,
+        )
+
     form = OrnamentForm(request.POST, request.FILES)
     if form.is_valid():
         ornament = form.save()
         try:
-            bg_color = request.POST.get(
-                "background_color", "white").strip()
+            bg_color = request.POST.get("background_color", "white").strip()
             extra_prompt = request.POST.get("prompt", "").strip()
             dimension = request.POST.get("dimension", "1:1").strip()
 
-            # Call Celery task asynchronously
             task = generate_white_background_task.delay(
                 ornament_id=ornament.id,
                 user_id=user_id,
                 bg_color=bg_color,
                 extra_prompt=extra_prompt,
-                dimension=dimension
+                dimension=dimension,
             )
 
             return JsonResponse({
@@ -76,7 +114,7 @@ def upload_ornament(request):
                 "message": "Image generation task started",
                 "task_id": task.id,
                 "ornament_id": ornament.id,
-                "status": "processing"
+                "status": "processing",
             })
 
         except Exception as e:
@@ -95,6 +133,7 @@ def change_background(request):
     # Get user from authentication middleware
     user = request.user
     user_id = str(user.id)
+    num_images = _parse_num_images(request)
 
     # === Credit Check and Deduction ===
     from CREDITS.utils import (
@@ -104,32 +143,29 @@ def change_background(request):
         deduct_user_credits,
     )
 
-    # Use admin-configured credits per image
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
-
-    # Check if user has organization; if not, fall back to individual credits
+    total_credits = num_images * CREDITS_PER_IMAGE
     organization = get_user_organization(user)
     if organization:
         credit_result = deduct_credits(
             organization=organization,
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=total_credits,
             reason="Background change image generation",
-            metadata={"type": "change_background"},
+            metadata={"type": "change_background", "num_images": num_images},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=total_credits,
             reason="Background change image generation",
-            metadata={"type": "change_background"},
+            metadata={"type": "change_background", "num_images": num_images},
         )
 
     if not credit_result["success"]:
-        return Response(
-            print("insufficient credits pls recharge",credit_result["message"]),
-            {"error": credit_result["message"]},
+        return JsonResponse(
+            {"success": False, "error": credit_result["message"]},
             status=400,
         )
 
@@ -170,21 +206,40 @@ def change_background(request):
                     for chunk in background.chunks():
                         dest.write(chunk)
 
-            # Call Celery task asynchronously
-            task = change_background_task.delay(
-                uploaded_image_path=local_uploaded_path,
-                user_id=user_id,
-                bg_color=bg_color,
-                background_image_path=background_image_path,
-                prompt=prompt,
-                dimension=dimension
-            )
-
+            # Call Celery task(s): one per image when num_images > 1
+            if num_images <= 1:
+                task = change_background_task.delay(
+                    uploaded_image_path=local_uploaded_path,
+                    user_id=user_id,
+                    bg_color=bg_color,
+                    background_image_path=background_image_path,
+                    prompt=prompt,
+                    dimension=dimension,
+                )
+                return JsonResponse({
+                    "success": True,
+                    "message": "Background change task started",
+                    "task_id": task.id,
+                    "status": "processing",
+                })
+            task_ids = []
+            for i in range(num_images):
+                t = change_background_task.delay(
+                    uploaded_image_path=local_uploaded_path,
+                    user_id=user_id,
+                    bg_color=bg_color,
+                    background_image_path=background_image_path,
+                    prompt=prompt,
+                    dimension=dimension,
+                    batch_index=i,
+                )
+                task_ids.append(t.id)
             return JsonResponse({
                 "success": True,
-                "message": "Background change task started",
-                "task_id": task.id,
-                "status": "processing"
+                "message": "Background change tasks started",
+                "task_ids": task_ids,
+                "status": "processing",
+                "num_images": num_images,
             })
 
         except Exception as e:
@@ -213,28 +268,28 @@ def generate_model_with_ornament(request):
 
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
-
+    num_images = _parse_num_images(request)
+    total_credits = num_images * CREDITS_PER_IMAGE
     organization = get_user_organization(user)
     if organization:
         credit_result = deduct_credits(
             organization=organization,
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=total_credits,
             reason="Model with ornament image generation",
-            metadata={"type": "generate_model_with_ornament"},
+            metadata={"type": "generate_model_with_ornament", "num_images": num_images},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=total_credits,
             reason="Model with ornament image generation",
-            metadata={"type": "generate_model_with_ornament"},
+            metadata={"type": "generate_model_with_ornament", "num_images": num_images},
         )
 
     if not credit_result["success"]:
-        return Response(
-            print("insufficient credits pls recharge",e),
-            {"error": "insufficient credits pls recharge"},
+        return JsonResponse(
+            {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
             status=400,
         )
 
@@ -272,23 +327,43 @@ def generate_model_with_ornament(request):
                 for chunk in pose_img.chunks():
                     dest.write(chunk)
 
-        # Call Celery task asynchronously
-        task = generate_model_with_ornament_task.delay(
-            ornament_image_path=local_uploaded_path,
-            user_id=user_id,
-            pose_image_path=pose_image_path,
-            prompt=prompt,
-            measurements=measurements,
-            ornament_type=ornament_type,
-            ornament_measurements=ornament_measurements,
-            dimension=dimension
-        )
-
+        if num_images <= 1:
+            task = generate_model_with_ornament_task.delay(
+                ornament_image_path=local_uploaded_path,
+                user_id=user_id,
+                pose_image_path=pose_image_path,
+                prompt=prompt,
+                measurements=measurements,
+                ornament_type=ornament_type,
+                ornament_measurements=ornament_measurements,
+                dimension=dimension,
+            )
+            return JsonResponse({
+                "status": "success",
+                "message": "Model with ornament generation task started",
+                "task_id": task.id,
+                "status": "processing",
+            }, status=200)
+        task_ids = []
+        for i in range(num_images):
+            t = generate_model_with_ornament_task.delay(
+                ornament_image_path=local_uploaded_path,
+                user_id=user_id,
+                pose_image_path=pose_image_path,
+                prompt=prompt,
+                measurements=measurements,
+                ornament_type=ornament_type,
+                ornament_measurements=ornament_measurements,
+                dimension=dimension,
+                batch_index=i,
+            )
+            task_ids.append(t.id)
         return JsonResponse({
             "status": "success",
-            "message": "Model with ornament generation task started",
-            "task_id": task.id,
-            "status": "processing"
+            "message": "Model with ornament generation tasks started",
+            "task_ids": task_ids,
+            "status": "processing",
+            "num_images": num_images,
         }, status=200)
 
         
@@ -325,27 +400,28 @@ def generate_real_model_with_ornament(request):
 
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
-
+    num_images = _parse_num_images(request)
+    total_credits = num_images * CREDITS_PER_IMAGE
     organization = get_user_organization(user)
     if organization:
         credit_result = deduct_credits(
             organization=organization,
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=total_credits,
             reason="Real model with ornament image generation",
-            metadata={"type": "generate_real_model_with_ornament"},
+            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=total_credits,
             reason="Real model with ornament image generation",
-            metadata={"type": "generate_real_model_with_ornament"},
+            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
         )
 
     if not credit_result["success"]:
-        return Response(
-            {"error": "insufficient credits pls recharge"},
+        return JsonResponse(
+            {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
             status=400,
         )
 
@@ -394,24 +470,45 @@ def generate_real_model_with_ornament(request):
                 for chunk in pose_img.chunks():
                     dest.write(chunk)
 
-        # Call Celery task asynchronously
-        task = generate_real_model_with_ornament_task.delay(
-            model_image_path=local_model_path,
-            ornament_image_path=local_ornament_path,
-            user_id=user_id,
-            pose_image_path=pose_image_path,
-            prompt=prompt,
-            measurements=measurements,
-            ornament_type=ornament_type,
-            ornament_measurements=ornament_measurements,
-            dimension=dimension
-        )
-
+        if num_images <= 1:
+            task = generate_real_model_with_ornament_task.delay(
+                model_image_path=local_model_path,
+                ornament_image_path=local_ornament_path,
+                user_id=user_id,
+                pose_image_path=pose_image_path,
+                prompt=prompt,
+                measurements=measurements,
+                ornament_type=ornament_type,
+                ornament_measurements=ornament_measurements,
+                dimension=dimension,
+            )
+            return JsonResponse({
+                "status": "success",
+                "message": "Real model with ornament generation task started",
+                "task_id": task.id,
+                "status": "processing",
+            }, status=200)
+        task_ids = []
+        for i in range(num_images):
+            t = generate_real_model_with_ornament_task.delay(
+                model_image_path=local_model_path,
+                ornament_image_path=local_ornament_path,
+                user_id=user_id,
+                pose_image_path=pose_image_path,
+                prompt=prompt,
+                measurements=measurements,
+                ornament_type=ornament_type,
+                ornament_measurements=ornament_measurements,
+                dimension=dimension,
+                batch_index=i,
+            )
+            task_ids.append(t.id)
         return JsonResponse({
             "status": "success",
-            "message": "Real model with ornament generation task started",
-            "task_id": task.id,
-            "status": "processing"
+            "message": "Real model with ornament generation tasks started",
+            "task_ids": task_ids,
+            "status": "processing",
+            "num_images": num_images,
         }, status=200)
 
     except Exception as e:
@@ -438,33 +535,36 @@ def generate_campaign_shot_advanced(request):
 
         credit_settings = get_credit_settings()
         CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
-
+        num_images = _parse_num_images(request)
+        total_credits = num_images * CREDITS_PER_IMAGE
         organization = get_user_organization(user)
         if organization:
             credit_result = deduct_credits(
                 organization=organization,
                 user=user,
-                amount=CREDITS_PER_IMAGE,
+                amount=total_credits,
                 reason="Campaign shot image generation",
                 metadata={
                     "type": "campaign_shot_advanced",
                     "model_type": request.POST.get("model_type", "ai"),
+                    "num_images": num_images,
                 },
             )
         else:
             credit_result = deduct_user_credits(
                 user=user,
-                amount=CREDITS_PER_IMAGE,
+                amount=total_credits,
                 reason="Campaign shot image generation",
                 metadata={
                     "type": "campaign_shot_advanced",
                     "model_type": request.POST.get("model_type", "ai"),
+                    "num_images": num_images,
                 },
             )
 
         if not credit_result["success"]:
-            return Response(
-                {"error": "insufficient credits pls recharge"},
+            return JsonResponse(
+                {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
                 status=400,
             )
 
@@ -473,15 +573,24 @@ def generate_campaign_shot_advanced(request):
             'model_image') if model_type == 'real_model' else None
         ornaments = request.FILES.getlist('ornament_images')
         ornament_names = request.POST.getlist('ornament_names')
+        ornament_types = request.POST.getlist('ornament_types')
+        # Optional JSON array of per-ornament measurements
+        ornament_measurements = request.POST.get('ornament_measurements', '[]')
         theme_images = request.FILES.getlist('theme_images')
         prompt = request.POST.get('prompt')
         dimension = request.POST.get('dimension', '1:1').strip()
 
         # === Validation ===
         if not ornaments:
+            print("no ornaments")
             return Response({"error": "Please upload at least one ornament image."}, status=400)
         if model_type == 'real_model' and not model_img:
+            print("no model image")
             return Response({"error": "Please upload a model image for Real Model option."}, status=400)
+
+        # === Validation: ensure ornament types length matches (if provided) ===
+        if ornament_types and len(ornament_types) != len(ornaments):
+            return Response({"error": "Number of ornament types must match number of ornament images."}, status=400)
 
         # === Save ornaments locally ===
         ornament_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
@@ -515,23 +624,48 @@ def generate_campaign_shot_advanced(request):
                     dest.write(chunk)
             theme_image_paths.append(theme_path)
 
-        # Call Celery task asynchronously
-        task = generate_campaign_shot_advanced_task.delay(
-            user_id=user_id,
-            model_type=model_type,
-            model_image_path=model_image_path,
-            ornament_image_paths=ornament_image_paths,
-            ornament_names=ornament_names,
-            theme_image_paths=theme_image_paths,
-            prompt=prompt,
-            dimension=dimension
-        )
-
+        # Call Celery task(s)
+        if num_images <= 1:
+            task = generate_campaign_shot_advanced_task.delay(
+                user_id=user_id,
+                model_type=model_type,
+                model_image_path=model_image_path,
+                ornament_image_paths=ornament_image_paths,
+                ornament_names=ornament_names,
+                ornament_types=ornament_types,
+                ornament_measurements=ornament_measurements,
+                theme_image_paths=theme_image_paths,
+                prompt=prompt,
+                dimension=dimension,
+            )
+            return JsonResponse({
+                "status": "success",
+                "message": "Campaign shot generation task started",
+                "task_id": task.id,
+                "status": "processing",
+            }, status=200)
+        task_ids = []
+        for i in range(num_images):
+            t = generate_campaign_shot_advanced_task.delay(
+                user_id=user_id,
+                model_type=model_type,
+                model_image_path=model_image_path,
+                ornament_image_paths=ornament_image_paths,
+                ornament_names=ornament_names,
+                ornament_types=ornament_types,
+                ornament_measurements=ornament_measurements,
+                theme_image_paths=theme_image_paths,
+                prompt=prompt,
+                dimension=dimension,
+                batch_index=i,
+            )
+            task_ids.append(t.id)
         return JsonResponse({
             "status": "success",
-            "message": "Campaign shot generation task started",
-            "task_id": task.id,
-            "status": "processing"
+            "message": "Campaign shot generation tasks started",
+            "task_ids": task_ids,
+            "status": "processing",
+            "num_images": num_images,
         }, status=200)
 
     except Exception as e:
