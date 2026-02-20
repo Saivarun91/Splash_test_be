@@ -30,6 +30,58 @@ except ImportError:
     has_genai = False
 
 
+def analyze_reference_image_with_genai(image_path, context):
+    """
+    Analyze a reference image with Gemini (text-only) and return description text.
+    context: 'themed' | 'model' | 'campaign'
+    - themed: backgrounds, backdrops, mood, props
+    - model: poses, style, attire
+    - campaign: theme, style, mood, attire, background, props
+    Returns a short paragraph suitable for inclusion in generation prompts.
+    """
+    if not has_genai or not getattr(settings, 'GOOGLE_API_KEY', None) or settings.GOOGLE_API_KEY == 'your_api_key_here':
+        return ""
+    if not image_path or not os.path.exists(image_path):
+        return ""
+    try:
+        with open(image_path, "rb") as f:
+            img_bytes = f.read()
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        model = getattr(settings, 'GEMINI_ANALYZE_MODEL', 'gemini-2.0-flash')
+        if context == "themed":
+            instruction = (
+                "Analyze this image and describe in 1-3 short sentences: "
+                "the background and backdrop (setting, surfaces, colors), the mood (e.g. calm, luxury, minimal), "
+                "and any visible props. Output only the description, no labels or bullet points."
+            )
+        elif context == "model":
+            instruction = (
+                "Analyze this image and describe in 1-3 short sentences: "
+                "the pose and body position, the style (e.g. fashion, casual), and the attire/clothing. "
+                "Output only the description, no labels or bullet points."
+            )
+        elif context == "campaign":
+            instruction = (
+                "Analyze this image and describe in 1-3 short sentences: "
+                "the overall theme, visual style, mood, and attire. "
+                "Output only the description, no labels or bullet points."
+            )
+        else:
+            instruction = "Describe this image in 1-2 sentences for use as a style reference. Output only the description."
+        contents = [
+            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+            {"text": instruction},
+        ]
+        resp = client.models.generate_content(model=model, contents=contents)
+        text = (resp.candidates[0].content.parts[0].text or "").strip() if resp.candidates and resp.candidates[0].content.parts else ""
+        return text
+    except Exception as e:
+        report_handled_exception(e, request=None, context={"analyze_reference": context})
+        return ""
+    
+
+
 @shared_task(bind=True, max_retries=3)
 def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_prompt, dimension):
     """
@@ -419,7 +471,8 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
                 'images_background_change_with_image',
                 "Replace the background using the uploaded background image."
             )
-            final_prompt = f"{user_prompt} {bg_prompt}"
+            ref_analysis_text = f" Reference image analysis: {reference_analysis}." if reference_analysis else ""
+            final_prompt = f"{user_prompt}{ref_analysis_text} {bg_prompt}"
         elif bg_color:
             color_prompt = get_prompt_from_db(
                 'images_background_change_with_color',
@@ -470,6 +523,8 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
                 })
                 parts.append(
                     {"text": "Use this image strictly as the new background."})
+                if reference_analysis:
+                    parts.append({"text": f"Reference description to match: {reference_analysis}"})
 
             parts.append({"text": base_prompt})
 
@@ -552,7 +607,8 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
             generated_image_path=local_generated_path,
             type="background_change",
             user_id=user_id,
-            original_prompt=prompt
+            original_prompt=prompt,
+            reference_analysis=reference_analysis or "",
         )
         ornament_doc.save()
 
@@ -578,9 +634,10 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None):
+def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None, reference_analysis=None):
     """
     Celery task to generate model with ornament. Use batch_index for multi-image generation.
+    reference_analysis: optional text from analyzing the pose/reference image (model).
     """
     try:
         # Read images
@@ -633,6 +690,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             from probackendapp.prompt_initializer import get_prompt_from_db
             measurements_text = f"measurements: {measurements}. " if measurements else ""
             prompt_text = f"\nmandatory consideration details: {prompt}" if prompt else ""
+            pose_ref_text = f" Pose and style reference from image: {reference_analysis}." if reference_analysis else ""
             default_prompt = (
                 "Generate a close-up, high-fashion portrait of an elegant Indian woman "
                 "wearing this 100% real accurate uploaded ornament. Focus tightly on the neckline and jewelry area according to the ornament. "
@@ -642,6 +700,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
                 "Do not include any watermark, text, or unnatural effects. "
                 f"{ornament_description}"
                 f"{measurements_text}Make sure to follow the measurements strictly."
+                f"{pose_ref_text}"
                 f"{prompt_text}"
             )
             user_prompt = get_prompt_from_db(
@@ -721,7 +780,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             generated_image_path=local_generated_path,
             type="model_with_ornament",
             user_id=user_id,
-            original_prompt=prompt
+            original_prompt=prompt,
+            reference_analysis=reference_analysis or "",
         )
         ornament_doc.save()
 
@@ -749,9 +809,10 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None):
+def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None, reference_analysis=None):
     """
     Celery task to generate real model with ornament. Use batch_index for multi-image generation.
+    reference_analysis: optional text from analyzing the pose/reference image (model).
     """
     try:
         # Read images
@@ -808,6 +869,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             from probackendapp.prompt_initializer import get_prompt_from_db
             measurements_text = f"Additional measurements: {measurements}. " if measurements else ""
             prompt_text = f" Additional user instructions: {prompt}" if prompt else ""
+            pose_ref_text = f" Pose and style reference from image: {reference_analysis}." if reference_analysis else ""
             default_prompt = (
                 "Generate a realistic, high-quality close-up image of the uploaded model wearing "
                 "the exact uploaded ornament. Keep the model's face fully intact and recognizable. "
@@ -818,6 +880,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
                 "Follow the pose from the uploaded pose image if provided. "
                 f"{ornament_description}"
                 f"{measurements_text}"
+                f"{pose_ref_text}"
                 f"{prompt_text}"
             )
             user_prompt = get_prompt_from_db(
@@ -905,7 +968,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             generated_image_path=local_generated_path,
             type="real_model_with_ornament",
             user_id=user_id,
-            original_prompt=prompt
+            original_prompt=prompt,
+            reference_analysis=reference_analysis or "",
         )
         ornament_doc.save()
 
@@ -947,9 +1011,11 @@ def generate_campaign_shot_advanced_task(
     dimension,
     ornament_measurements='[]',
     batch_index=None,
+    theme_reference_analysis=None,
 ):
     """
     Celery task to generate campaign shot. Use batch_index for multi-image generation.
+    theme_reference_analysis: optional text from analyzing theme reference image(s) (campaign).
     """
     try:
         # Upload ornaments to Cloudinary & encode
@@ -1063,15 +1129,18 @@ def generate_campaign_shot_advanced_task(
                 {"inline_data": {"mime_type": "image/jpeg", "data": theme_b64}})
             parts.append(
                 {"text": "Reference for background or theme styling."})
+        if theme_reference_analysis:
+            parts.append({"text": f"Theme/style reference description: {theme_reference_analysis}"})
 
         # Get prompt from database
         from probackendapp.prompt_initializer import get_prompt_from_db
 
         if model_type == 'real_model':
+            theme_ref_text = f" Match theme/style/mood: {theme_reference_analysis}." if theme_reference_analysis else ""
             default_prompt = (
                 "Generate a realistic image of the uploaded real model wearing all the uploaded ornaments. "
                 "Preserve the model's facial features and natural pose while making a small smile. "
-                f"Campaign instructions: {prompt}"
+                f"{theme_ref_text} Campaign instructions: {prompt}"
             )
             user_prompt = get_prompt_from_db(
                 'images_campaign_shot_real',
@@ -1079,10 +1148,11 @@ def generate_campaign_shot_advanced_task(
                 user_prompt=prompt
             )
         else:
+            theme_ref_text = f" Match theme/style/mood: {theme_reference_analysis}." if theme_reference_analysis else ""
             default_prompt = (
                 "Generate a high-quality campaign image of a model wearing all the uploaded ornaments. "
                 "Use realistic lighting, texture, and cohesive fashion aesthetics. "
-                f"Campaign instructions: {prompt}"
+                f"{theme_ref_text} Campaign instructions: {prompt}"
             )
             user_prompt = get_prompt_from_db(
                 'images_campaign_shot_ai',
@@ -1139,7 +1209,8 @@ def generate_campaign_shot_advanced_task(
             uploaded_image_path="Multiple ornaments",
             generated_image_path=f"media/generated/campaign_{len(ornament_image_paths)}{f'_batch_{batch_index}' if batch_index is not None else ''}.jpg",
             user_id=user_id,
-            original_prompt=prompt
+            original_prompt=prompt,
+            reference_analysis=theme_reference_analysis or "",
         )
         ornament_doc.save()
 
@@ -1206,9 +1277,11 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         # Get the previous generated image URL from Cloudinary
         prev_generated_url = prev_doc.generated_image_url
 
-        # Combine the original prompt with the new prompt
+        # Combine the original prompt with the new prompt; include stored reference analysis if any
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
-        combined_prompt = f"{original_prompt}. {new_prompt}"
+        reference_analysis = getattr(prev_doc, "reference_analysis", None) or ""
+        ref_prefix = f"Reference context: {reference_analysis}. " if reference_analysis else ""
+        combined_prompt = f"{ref_prefix}{original_prompt}. {new_prompt}"
         measurements = getattr(prev_doc, "measurements", None)
         measurements_text = f"measurements: {measurements}. " if measurements else ""
         
@@ -1321,7 +1394,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
             model_image_url=prev_doc.model_image_url if hasattr(
                 prev_doc, 'model_image_url') else None,
             uploaded_ornament_urls=prev_doc.uploaded_ornament_urls if hasattr(
-                prev_doc, 'uploaded_ornament_urls') else None
+                prev_doc, 'uploaded_ornament_urls') else None,
+            reference_analysis=getattr(prev_doc, "reference_analysis", None) or "",
         )
         new_doc.save()
 

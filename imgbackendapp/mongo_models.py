@@ -69,6 +69,9 @@ class OrnamentMongo(Document):
     created_at = DateTimeField(default=datetime.datetime.utcnow)
     updated_at = DateTimeField(default=datetime.datetime.utcnow)
 
+    # Analyzed reference description (background/pose/theme) for use in regeneration
+    reference_analysis = StringField()
+
     meta = {
         "collection": "jewellery",
         "strict": False,  # Allow extra fields for backward compatibility

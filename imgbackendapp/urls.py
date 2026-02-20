@@ -14,6 +14,7 @@ urlpatterns = [
          name='generate_campaign_shot_advanced'),
     path('delete-image/<str:image_id>/', views.delete_user_image, name='delete_user_image'),
     path('regenerate/', views.regenerate_image, name='regenerate_image'),
+    path('analyze-reference/', views.analyze_reference_image, name='analyze_reference_image'),
 ]
 
 

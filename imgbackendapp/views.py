@@ -33,7 +33,8 @@ from .tasks import (
     generate_model_with_ornament_task,
     generate_real_model_with_ornament_task,
     generate_campaign_shot_advanced_task,
-    regenerate_image_task
+    regenerate_image_task,
+    analyze_reference_image_with_genai,
 )
 
 # Check for Gemini SDK
@@ -43,6 +44,44 @@ try:
     has_genai = True
 except ImportError:
     has_genai = False
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def analyze_reference_image(request):
+    """
+    Analyze a reference image (themed / model / campaign) and return text description.
+    POST: image (file), context (themed | model | campaign).
+    No credits deducted.
+    """
+    image_file = request.FILES.get('image')
+    context = (request.POST.get('context') or '').strip().lower()
+    if context not in ('themed', 'model', 'campaign'):
+        context = 'themed'
+    if not image_file:
+        return JsonResponse({"success": False, "error": "No image provided"}, status=400)
+    try:
+        tmp_dir = os.path.join(settings.MEDIA_ROOT, "temp_analyze")
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_path = os.path.join(tmp_dir, image_file.name or "ref.jpg")
+        with open(tmp_path, "wb+") as dest:
+            for chunk in image_file.chunks():
+                dest.write(chunk)
+        try:
+            analysis_text = analyze_reference_image_with_genai(tmp_path, context)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return JsonResponse({"success": True, "analysis_text": analysis_text or ""})
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse(
+            {"success": False, "error": get_user_friendly_message(e)},
+            status=500,
+        )
 
 
 def _parse_num_images(request):
@@ -180,6 +219,7 @@ def change_background(request):
         bg_color = form.cleaned_data.get('background_color')
         prompt = form.cleaned_data.get('prompt', '')
         dimension = request.POST.get('dimension', '1:1').strip()
+        reference_analysis = (request.POST.get('reference_analysis') or '').strip()
 
         try:
             # -----------------------------
@@ -215,6 +255,7 @@ def change_background(request):
                     background_image_path=background_image_path,
                     prompt=prompt,
                     dimension=dimension,
+                    reference_analysis=reference_analysis or None,
                 )
                 return JsonResponse({
                     "success": True,
@@ -232,6 +273,7 @@ def change_background(request):
                     prompt=prompt,
                     dimension=dimension,
                     batch_index=i,
+                    reference_analysis=reference_analysis or None,
                 )
                 task_ids.append(t.id)
             return JsonResponse({
@@ -303,6 +345,7 @@ def generate_model_with_ornament(request):
         ornament_measurements = request.POST.get(
             'ornament_measurements', '{}')
         dimension = request.POST.get('dimension', '1:1').strip()
+        reference_analysis = (request.POST.get('reference_analysis') or '').strip() or None
         print(ornament_type, ornament_measurements)
 
         if not ornament_img:
@@ -337,6 +380,7 @@ def generate_model_with_ornament(request):
                 ornament_type=ornament_type,
                 ornament_measurements=ornament_measurements,
                 dimension=dimension,
+                reference_analysis=reference_analysis,
             )
             return JsonResponse({
                 "status": "success",
@@ -356,6 +400,7 @@ def generate_model_with_ornament(request):
                 ornament_measurements=ornament_measurements,
                 dimension=dimension,
                 batch_index=i,
+                reference_analysis=reference_analysis,
             )
             task_ids.append(t.id)
         return JsonResponse({
@@ -436,6 +481,7 @@ def generate_real_model_with_ornament(request):
         ornament_measurements = request.POST.get(
             'ornament_measurements', '{}')
         dimension = request.POST.get('dimension', '1:1').strip()
+        reference_analysis = (request.POST.get('reference_analysis') or '').strip() or None
 
         if not model_img or not ornament_img:
             return Response({"error": "Please upload both model and ornament images."}, status=400)
@@ -481,6 +527,7 @@ def generate_real_model_with_ornament(request):
                 ornament_type=ornament_type,
                 ornament_measurements=ornament_measurements,
                 dimension=dimension,
+                reference_analysis=reference_analysis,
             )
             return JsonResponse({
                 "status": "success",
@@ -501,6 +548,7 @@ def generate_real_model_with_ornament(request):
                 ornament_measurements=ornament_measurements,
                 dimension=dimension,
                 batch_index=i,
+                reference_analysis=reference_analysis,
             )
             task_ids.append(t.id)
         return JsonResponse({
@@ -579,6 +627,7 @@ def generate_campaign_shot_advanced(request):
         theme_images = request.FILES.getlist('theme_images')
         prompt = request.POST.get('prompt')
         dimension = request.POST.get('dimension', '1:1').strip()
+        theme_reference_analysis = (request.POST.get('theme_reference_analysis') or '').strip() or None
 
         # === Validation ===
         if not ornaments:
@@ -637,6 +686,7 @@ def generate_campaign_shot_advanced(request):
                 theme_image_paths=theme_image_paths,
                 prompt=prompt,
                 dimension=dimension,
+                theme_reference_analysis=theme_reference_analysis,
             )
             return JsonResponse({
                 "status": "success",
@@ -658,6 +708,7 @@ def generate_campaign_shot_advanced(request):
                 prompt=prompt,
                 dimension=dimension,
                 batch_index=i,
+                theme_reference_analysis=theme_reference_analysis,
             )
             task_ids.append(t.id)
         return JsonResponse({
