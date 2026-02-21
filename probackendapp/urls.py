@@ -109,6 +109,12 @@ urlpatterns = [
          api_views.api_available_users, name='api_available_users'),
     path('api/<str:project_id>/update-member-role',
          api_views.api_update_member_role, name='api_update_member_role'),
+    path('api/<str:project_id>/remove-member',
+         api_views.api_remove_project_member, name='api_remove_project_member'),
+    path('api/<str:project_id>/invites/<str:invite_id>/update-role',
+         api_views.api_update_project_invite_role, name='api_update_project_invite_role'),
+    path('api/<str:project_id>/invites/<str:invite_id>/cancel',
+         api_views.api_cancel_project_invite, name='api_cancel_project_invite'),
     # Global invite endpoints (not project-specific)
     path('api/invites/all',
          api_views.api_list_all_invites, name='api_list_all_invites'),
