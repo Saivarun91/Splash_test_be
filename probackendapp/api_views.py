@@ -551,6 +551,89 @@ def api_project_setup_description(request, project_id):
         return Response({'error': str(e)}, status=500)
 
 
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def api_update_description_comments(request, project_id, collection_id):
+    """Update description comments without regenerating suggestions."""
+    try:
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
+            return Response({'error': 'Project not found'}, status=404)
+
+        user_role = get_user_role_in_project(project, request.user)
+        if not user_role:
+            return Response({'error': 'Access denied to this project'}, status=403)
+
+        try:
+            collection = Collection.objects.get(id=collection_id, project=project)
+        except DoesNotExist:
+            return Response({'error': 'Collection not found'}, status=404)
+
+        data = json.loads(request.body)
+        description_comments = data.get('description_comments', [])
+        if not isinstance(description_comments, list):
+            description_comments = []
+
+        existing_comments = getattr(collection, 'description_comments', []) or []
+        existing_by_id = {
+            str(c.get('id')): c for c in existing_comments if isinstance(c, dict) and c.get('id')
+        }
+        incoming_by_id = {
+            str(c.get('id')): c for c in description_comments if isinstance(c, dict) and c.get('id')
+        }
+
+        removed_comment_ids = [
+            comment_id for comment_id in existing_by_id.keys()
+            if comment_id not in incoming_by_id
+        ]
+        current_user_id = str(request.user.id)
+        for comment_id in removed_comment_ids:
+            author_id = str(existing_by_id[comment_id].get('authorId'))
+            if author_id and author_id != current_user_id:
+                return Response({'error': 'You can only delete your own comments'}, status=403)
+
+        sanitized_comments = []
+        for raw_comment in description_comments:
+            if not isinstance(raw_comment, dict):
+                continue
+
+            comment_id = str(raw_comment.get('id') or '')
+            comment_text = str(raw_comment.get('comment', '')).strip()
+            selection_text = str(raw_comment.get('selection', '')).strip()
+
+            if not comment_id or not comment_text:
+                continue
+
+            existing_comment = existing_by_id.get(comment_id)
+            if existing_comment:
+                raw_comment['authorId'] = existing_comment.get('authorId')
+                raw_comment['authorName'] = existing_comment.get('authorName')
+                raw_comment['createdAt'] = existing_comment.get('createdAt')
+            else:
+                raw_comment['authorId'] = current_user_id
+                raw_comment['authorName'] = request.user.full_name or request.user.username or request.user.email
+                raw_comment['createdAt'] = raw_comment.get('createdAt') or datetime.now(timezone.utc).isoformat()
+
+            raw_comment['comment'] = comment_text
+            raw_comment['selection'] = selection_text
+            sanitized_comments.append(raw_comment)
+
+        collection.description_comments = sanitized_comments
+        collection.updated_by = request.user
+        collection.save()
+
+        return Response({
+            'success': True,
+            'description_comments': collection.description_comments or []
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=500)
+
+
 def analyze_uploaded_image(cloud_url, category):
     """
     Analyze an uploaded image using Gemini Vision API based on its category.
@@ -2731,6 +2814,126 @@ def api_update_member_role(request, project_id):
             "new_role": new_role
         }, status=200)
 
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def api_remove_project_member(request, project_id):
+    """Remove a member from project team - only project owner can perform this action"""
+    try:
+        user = request.user
+        data = json.loads(request.body)
+        member_user_id = data.get("user_id")
+
+        if not member_user_id:
+            return Response({"error": "user_id is required"}, status=400)
+
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
+            return Response({"error": "Project not found"}, status=404)
+
+        owner_member = next(
+            (m for m in project.team_members if str(m.user.id) == str(user.id) and m.role == "owner"), None)
+        if not owner_member:
+            return Response({"error": "Only project owner can remove team members"}, status=403)
+
+        member_to_remove = next(
+            (m for m in project.team_members if str(m.user.id) == str(member_user_id)), None)
+        if not member_to_remove:
+            return Response({"error": "Member not found in project"}, status=404)
+
+        if str(member_to_remove.user.id) == str(user.id):
+            return Response({"error": "You cannot remove yourself from the project"}, status=400)
+
+        if member_to_remove.role == "owner":
+            return Response({"error": "Cannot remove another owner"}, status=400)
+
+        removed_email = member_to_remove.user.email
+        project.team_members = [
+            m for m in project.team_members if str(m.user.id) != str(member_user_id)
+        ]
+        project.save()
+
+        return Response({
+            "message": "Member removed successfully",
+            "user_email": removed_email
+        }, status=200)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def api_update_project_invite_role(request, project_id, invite_id):
+    """Update role on a pending invite - only project owner can perform this action"""
+    try:
+        user = request.user
+        data = json.loads(request.body)
+        new_role = data.get("role")
+
+        if new_role not in ["owner", "editor", "viewer"]:
+            return Response({"error": "Invalid role. Must be 'owner', 'editor', or 'viewer'"}, status=400)
+
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
+            return Response({"error": "Project not found"}, status=404)
+
+        owner_member = next(
+            (m for m in project.team_members if str(m.user.id) == str(user.id) and m.role == "owner"), None)
+        if not owner_member:
+            return Response({"error": "Only project owner can update invite roles"}, status=403)
+
+        invite = ProjectInvite.objects(id=invite_id, project=project, accepted=False).first()
+        if not invite:
+            return Response({"error": "Pending invite not found"}, status=404)
+
+        invite.role = new_role
+        invite.save()
+
+        return Response({
+            "message": "Invite role updated successfully",
+            "invite_id": str(invite.id),
+            "role": invite.role
+        }, status=200)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def api_cancel_project_invite(request, project_id, invite_id):
+    """Cancel a pending project invite - only project owner can perform this action"""
+    try:
+        user = request.user
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
+            return Response({"error": "Project not found"}, status=404)
+
+        owner_member = next(
+            (m for m in project.team_members if str(m.user.id) == str(user.id) and m.role == "owner"), None)
+        if not owner_member:
+            return Response({"error": "Only project owner can cancel invites"}, status=403)
+
+        invite = ProjectInvite.objects(id=invite_id, project=project, accepted=False).first()
+        if not invite:
+            return Response({"error": "Pending invite not found"}, status=404)
+
+        invite.delete()
+        return Response({"message": "Invite deleted successfully"}, status=200)
     except Exception as e:
         import traceback
         traceback.print_exc()
