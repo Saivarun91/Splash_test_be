@@ -208,6 +208,7 @@ class Collection(Document):
     updated_at = DateTimeField(default=datetime.now(timezone.utc))
     target_audience = StringField()
     campaign_season = StringField()
+    description_comments = ListField(DictField(), default=list)
     items = ListField(EmbeddedDocumentField(CollectionItem))
 
     def __str__(self):
@@ -217,6 +218,59 @@ class Collection(Document):
         'collection': 'collections',
         'ordering': ['-created_at'],
         'strict': False,  # Allow extra fields for backward compatibility
+        'allow_inheritance': False
+    }
+
+
+class CollectionBriefComments(Document):
+    """Stores brief field comments in a dedicated collection."""
+    collection = ReferenceField(Collection, required=True, unique=True, reverse_delete_rule=2)
+    description_comments = ListField(DictField(), default=list)
+    target_audience_comments = ListField(DictField(), default=list)
+    campaign_season_comments = ListField(DictField(), default=list)
+    created_by = ReferenceField("User")
+    updated_by = ReferenceField("User")
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.now(timezone.utc)
+        return super().save(*args, **kwargs)
+
+    meta = {
+        'collection': 'collection_brief_comments',
+        'ordering': ['-updated_at'],
+        'strict': False,
+        'allow_inheritance': False
+    }
+
+
+class CollectionSelectionComments(Document):
+    """Stores selection field comments in a dedicated collection."""
+    collection = ReferenceField(Collection, required=True, unique=True, reverse_delete_rule=2)
+    themes_comments = ListField(DictField(), default=list)
+    backgrounds_comments = ListField(DictField(), default=list)
+    poses_comments = ListField(DictField(), default=list)
+    locations_comments = ListField(DictField(), default=list)
+    color_images_comments = ListField(DictField(), default=list)
+    additional_instructions_comments = ListField(DictField(), default=list)
+    human_model_preview_comments = ListField(DictField(), default=list)
+    ai_model_preview_comments = ListField(DictField(), default=list)
+    product_upload_comments = ListField(DictField(), default=list)
+    generated_product_images_comments = ListField(DictField(), default=list)
+    created_by = ReferenceField("User")
+    updated_by = ReferenceField("User")
+    created_at = DateTimeField(default=datetime.now(timezone.utc))
+    updated_at = DateTimeField(default=datetime.now(timezone.utc))
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.now(timezone.utc)
+        return super().save(*args, **kwargs)
+
+    meta = {
+        'collection': 'collection_selection_comments',
+        'ordering': ['-updated_at'],
+        'strict': False,
         'allow_inheritance': False
     }
 

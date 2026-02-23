@@ -439,7 +439,7 @@ def generate_white_background_batch_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def change_background_task(self, uploaded_image_path, user_id, bg_color, background_image_path, prompt, dimension, batch_index=None):
+def change_background_task(self, uploaded_image_path, user_id, bg_color, background_image_path, prompt, dimension, batch_index=None, reference_analysis=None):
     """
     Celery task to change background of an image.
     When batch_index is set, uses unique paths/ids for multi-image generation.

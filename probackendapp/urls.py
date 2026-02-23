@@ -68,6 +68,10 @@ urlpatterns = [
          api_views.api_upload_workflow_image, name="api_upload_workflow_image"),
     path("api/projects/<str:project_id>/collections/<str:collection_id>/remove-workflow-image/",
          api_views.api_remove_workflow_image, name="api_remove_workflow_image"),
+    path("api/projects/<str:project_id>/collections/<str:collection_id>/description-comments/",
+         api_views.api_update_description_comments, name="api_update_description_comments"),
+    path("api/projects/<str:project_id>/collections/<str:collection_id>/selection-comments/",
+         api_views.api_update_selection_comments, name="api_update_selection_comments"),
 
     path("api/collections/<str:collection_id>/generate-images/",
          api_views.api_generate_ai_images, name="api_generate_ai_images"),

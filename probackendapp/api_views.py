@@ -12,7 +12,7 @@ from .views import (
 )
 from users.models import User
 from organization.models import Organization
-from .models import Project, Collection, CollectionItem, ProjectRole, ProjectMember, UploadedImage, PromptMaster
+from .models import Project, Collection, CollectionItem, ProjectRole, ProjectMember, UploadedImage, PromptMaster, CollectionBriefComments, CollectionSelectionComments
 from .permissions import get_user_role_in_project
 import re
 import logging
@@ -57,6 +57,204 @@ def get_project_by_id_or_slug(project_id):
             return Project.objects.get(id=project_id)
         except (DoesNotExist, ValueError):
             raise DoesNotExist(f"Project with ID or slug '{project_id}' not found")
+
+
+def get_or_create_collection_brief_comments(collection, user=None):
+    """Ensure brief comments doc exists for the given collection."""
+    brief_comments = CollectionBriefComments.objects(collection=collection).first()
+    if brief_comments:
+        return brief_comments
+
+    brief_comments = CollectionBriefComments(collection=collection)
+    if user:
+        brief_comments.created_by = user
+        brief_comments.updated_by = user
+    brief_comments.save()
+    return brief_comments
+
+
+def get_collection_brief_comments_payload(collection):
+    """
+    Return brief comments payload with backward compatibility fallback.
+    Falls back to legacy `collection.description_comments` if no dedicated doc exists.
+    """
+    brief_comments = CollectionBriefComments.objects(collection=collection).first()
+    if brief_comments:
+        description_comments = brief_comments.description_comments or []
+        target_audience_comments = brief_comments.target_audience_comments or []
+        campaign_season_comments = brief_comments.campaign_season_comments or []
+    else:
+        description_comments = getattr(collection, 'description_comments', []) or []
+        target_audience_comments = []
+        campaign_season_comments = []
+
+    return {
+        'description_comments': description_comments,
+        'target_audience_comments': target_audience_comments,
+        'campaign_season_comments': campaign_season_comments,
+    }
+
+
+def get_or_create_collection_selection_comments(collection, user=None):
+    """Ensure selection comments doc exists for the given collection."""
+    selection_comments = CollectionSelectionComments.objects(collection=collection).first()
+    if selection_comments:
+        return selection_comments
+
+    selection_comments = CollectionSelectionComments(collection=collection)
+    if user:
+        selection_comments.created_by = user
+        selection_comments.updated_by = user
+    selection_comments.save()
+    return selection_comments
+
+
+def get_collection_selection_comments_payload(collection):
+    """Return selection comments payload for themes/backgrounds/poses/locations."""
+    selection_comments = CollectionSelectionComments.objects(collection=collection).first()
+    if selection_comments:
+        themes_comments = selection_comments.themes_comments or []
+        backgrounds_comments = selection_comments.backgrounds_comments or []
+        poses_comments = selection_comments.poses_comments or []
+        locations_comments = selection_comments.locations_comments or []
+        color_images_comments = selection_comments.color_images_comments or []
+        additional_instructions_comments = selection_comments.additional_instructions_comments or []
+        human_model_preview_comments = selection_comments.human_model_preview_comments or []
+        ai_model_preview_comments = selection_comments.ai_model_preview_comments or []
+        product_upload_comments = selection_comments.product_upload_comments or []
+        generated_product_images_comments = selection_comments.generated_product_images_comments or []
+    else:
+        themes_comments = []
+        backgrounds_comments = []
+        poses_comments = []
+        locations_comments = []
+        color_images_comments = []
+        additional_instructions_comments = []
+        human_model_preview_comments = []
+        ai_model_preview_comments = []
+        product_upload_comments = []
+        generated_product_images_comments = []
+
+    return {
+        'themes_comments': themes_comments,
+        'backgrounds_comments': backgrounds_comments,
+        'poses_comments': poses_comments,
+        'locations_comments': locations_comments,
+        'color_images_comments': color_images_comments,
+        'additional_instructions_comments': additional_instructions_comments,
+        'human_model_preview_comments': human_model_preview_comments,
+        'ai_model_preview_comments': ai_model_preview_comments,
+        'product_upload_comments': product_upload_comments,
+        'generated_product_images_comments': generated_product_images_comments,
+    }
+
+
+def sanitize_comments_with_replies(payload_comments, existing_comments, user):
+    """
+    Sanitize comments and nested replies while preserving original authorship.
+    Returns (sanitized_comments, error_message).
+    """
+    if not isinstance(payload_comments, list):
+        payload_comments = []
+    if not isinstance(existing_comments, list):
+        existing_comments = []
+
+    user_id = str(user.id)
+    user_name = user.full_name or user.username or user.email
+
+    existing_by_id = {
+        str(c.get('id')): c for c in existing_comments if isinstance(c, dict) and c.get('id')
+    }
+    incoming_by_id = {
+        str(c.get('id')): c for c in payload_comments if isinstance(c, dict) and c.get('id')
+    }
+
+    removed_comment_ids = [
+        comment_id for comment_id in existing_by_id.keys()
+        if comment_id not in incoming_by_id
+    ]
+    for comment_id in removed_comment_ids:
+        author_id = str(existing_by_id[comment_id].get('authorId'))
+        if author_id and author_id != user_id:
+            return [], 'You don\'t have access to delete this comment'
+
+    sanitized_comments = []
+    for raw_comment in payload_comments:
+        if not isinstance(raw_comment, dict):
+            continue
+
+        comment_id = str(raw_comment.get('id') or '')
+        comment_text = str(raw_comment.get('comment', '')).strip()
+        selection_text = str(raw_comment.get('selection', '')).strip()
+
+        if not comment_id or not comment_text:
+            continue
+
+        existing_comment = existing_by_id.get(comment_id)
+        sanitized_comment = dict(raw_comment)
+        if existing_comment:
+            sanitized_comment['authorId'] = existing_comment.get('authorId')
+            sanitized_comment['authorName'] = existing_comment.get('authorName')
+            sanitized_comment['createdAt'] = existing_comment.get('createdAt')
+        else:
+            sanitized_comment['authorId'] = user_id
+            sanitized_comment['authorName'] = user_name
+            sanitized_comment['createdAt'] = raw_comment.get('createdAt') or datetime.now(timezone.utc).isoformat()
+
+        existing_replies = existing_comment.get('replies', []) if isinstance(existing_comment, dict) else []
+        if not isinstance(existing_replies, list):
+            existing_replies = []
+        incoming_replies = raw_comment.get('replies', [])
+        if not isinstance(incoming_replies, list):
+            incoming_replies = []
+
+        existing_replies_by_id = {
+            str(r.get('id')): r for r in existing_replies if isinstance(r, dict) and r.get('id')
+        }
+        incoming_replies_by_id = {
+            str(r.get('id')): r for r in incoming_replies if isinstance(r, dict) and r.get('id')
+        }
+
+        removed_reply_ids = [
+            reply_id for reply_id in existing_replies_by_id.keys()
+            if reply_id not in incoming_replies_by_id
+        ]
+        for reply_id in removed_reply_ids:
+            reply_author_id = str(existing_replies_by_id[reply_id].get('authorId'))
+            if reply_author_id and reply_author_id != user_id:
+                return [], 'You don\'t have access to delete this reply'
+
+        sanitized_replies = []
+        for raw_reply in incoming_replies:
+            if not isinstance(raw_reply, dict):
+                continue
+
+            reply_id = str(raw_reply.get('id') or '')
+            reply_text = str(raw_reply.get('comment', '')).strip()
+            if not reply_id or not reply_text:
+                continue
+
+            existing_reply = existing_replies_by_id.get(reply_id)
+            sanitized_reply = dict(raw_reply)
+            if existing_reply:
+                sanitized_reply['authorId'] = existing_reply.get('authorId')
+                sanitized_reply['authorName'] = existing_reply.get('authorName')
+                sanitized_reply['createdAt'] = existing_reply.get('createdAt')
+            else:
+                sanitized_reply['authorId'] = user_id
+                sanitized_reply['authorName'] = user_name
+                sanitized_reply['createdAt'] = raw_reply.get('createdAt') or datetime.now(timezone.utc).isoformat()
+
+            sanitized_reply['comment'] = reply_text
+            sanitized_reply['selection'] = str(raw_reply.get('selection', '')).strip()
+            sanitized_replies.append(sanitized_reply)
+
+        sanitized_comment['comment'] = comment_text
+        sanitized_comment['selection'] = selection_text
+        sanitized_comment['replies'] = sanitized_replies
+        sanitized_comments.append(sanitized_comment)
+
+    return sanitized_comments, None
 
 
 @api_view(['GET','OPTIONS'])
@@ -193,11 +391,26 @@ def api_project_detail(request, project_id):
         }
 
         if collection:
+            brief_comments_payload = get_collection_brief_comments_payload(collection)
+            selection_comments_payload = get_collection_selection_comments_payload(collection)
             project_data['collection'] = {
                 'id': str(collection.id),
                 'description': collection.description,
+                'description_comments': brief_comments_payload['description_comments'],
+                'target_audience_comments': brief_comments_payload['target_audience_comments'],
                 'target_audience': collection.target_audience,
+                'campaign_season_comments': brief_comments_payload['campaign_season_comments'],
                 'campaign_season': collection.campaign_season,
+                'themes_comments': selection_comments_payload['themes_comments'],
+                'backgrounds_comments': selection_comments_payload['backgrounds_comments'],
+                'poses_comments': selection_comments_payload['poses_comments'],
+                'locations_comments': selection_comments_payload['locations_comments'],
+                'color_images_comments': selection_comments_payload['color_images_comments'],
+                'additional_instructions_comments': selection_comments_payload['additional_instructions_comments'],
+                'human_model_preview_comments': selection_comments_payload['human_model_preview_comments'],
+                'ai_model_preview_comments': selection_comments_payload['ai_model_preview_comments'],
+                'product_upload_comments': selection_comments_payload['product_upload_comments'],
+                'generated_product_images_comments': selection_comments_payload['generated_product_images_comments'],
                 'created_at': collection.created_at.isoformat(),
                 'items': []
             }
@@ -380,12 +593,28 @@ def api_collection_detail(request, collection_id):
     try:
         collection = Collection.objects.get(id=collection_id)
 
+        brief_comments_payload = get_collection_brief_comments_payload(collection)
+        selection_comments_payload = get_collection_selection_comments_payload(collection)
+
         collection_data = {
             'id': str(collection.id),
             'project_id': str(collection.project.id),
             'description': collection.description,
+            'description_comments': brief_comments_payload['description_comments'],
+            'target_audience_comments': brief_comments_payload['target_audience_comments'],
             'target_audience': collection.target_audience,
+            'campaign_season_comments': brief_comments_payload['campaign_season_comments'],
             'campaign_season': collection.campaign_season,
+            'themes_comments': selection_comments_payload['themes_comments'],
+            'backgrounds_comments': selection_comments_payload['backgrounds_comments'],
+            'poses_comments': selection_comments_payload['poses_comments'],
+            'locations_comments': selection_comments_payload['locations_comments'],
+            'color_images_comments': selection_comments_payload['color_images_comments'],
+            'additional_instructions_comments': selection_comments_payload['additional_instructions_comments'],
+            'human_model_preview_comments': selection_comments_payload['human_model_preview_comments'],
+            'ai_model_preview_comments': selection_comments_payload['ai_model_preview_comments'],
+            'product_upload_comments': selection_comments_payload['product_upload_comments'],
+            'generated_product_images_comments': selection_comments_payload['generated_product_images_comments'],
             'created_at': collection.created_at.isoformat(),
             'items': []
         }
@@ -529,12 +758,28 @@ def api_project_setup_description(request, project_id):
             'selected_model': item.selected_model if hasattr(item, 'selected_model') else None,
         }
 
+        brief_comments_payload = get_collection_brief_comments_payload(collection)
+        selection_comments_payload = get_collection_selection_comments_payload(collection)
+
         collection_data = {
             'id': str(collection.id),
             'project_id': str(collection.project.id),
             'description': collection.description,
+            'description_comments': brief_comments_payload['description_comments'],
+            'target_audience_comments': brief_comments_payload['target_audience_comments'],
             'target_audience': collection.target_audience,
+            'campaign_season_comments': brief_comments_payload['campaign_season_comments'],
             'campaign_season': collection.campaign_season,
+            'themes_comments': selection_comments_payload['themes_comments'],
+            'backgrounds_comments': selection_comments_payload['backgrounds_comments'],
+            'poses_comments': selection_comments_payload['poses_comments'],
+            'locations_comments': selection_comments_payload['locations_comments'],
+            'color_images_comments': selection_comments_payload['color_images_comments'],
+            'additional_instructions_comments': selection_comments_payload['additional_instructions_comments'],
+            'human_model_preview_comments': selection_comments_payload['human_model_preview_comments'],
+            'ai_model_preview_comments': selection_comments_payload['ai_model_preview_comments'],
+            'product_upload_comments': selection_comments_payload['product_upload_comments'],
+            'generated_product_images_comments': selection_comments_payload['generated_product_images_comments'],
             'created_at': collection.created_at.isoformat() if hasattr(collection, 'created_at') and collection.created_at else None,
             'items': [item_data]
         }
@@ -555,14 +800,14 @@ def api_project_setup_description(request, project_id):
 @csrf_exempt
 @authenticate
 def api_update_description_comments(request, project_id, collection_id):
-    """Update description comments without regenerating suggestions."""
+    """Update brief comments by type without regenerating suggestions."""
     try:
         try:
             project = get_project_by_id_or_slug(project_id)
         except DoesNotExist:
             return Response({'error': 'Project not found'}, status=404)
 
-        user_role = get_user_role_in_project(project, request.user)
+        user_role = get_user_role_in_project(request.user, project)
         if not user_role:
             return Response({'error': 'Access denied to this project'}, status=403)
 
@@ -572,61 +817,105 @@ def api_update_description_comments(request, project_id, collection_id):
             return Response({'error': 'Collection not found'}, status=404)
 
         data = json.loads(request.body)
-        description_comments = data.get('description_comments', [])
-        if not isinstance(description_comments, list):
-            description_comments = []
-
-        existing_comments = getattr(collection, 'description_comments', []) or []
-        existing_by_id = {
-            str(c.get('id')): c for c in existing_comments if isinstance(c, dict) and c.get('id')
+        comment_type = str(data.get('comment_type', 'description')).strip().lower()
+        comment_field_map = {
+            'description': 'description_comments',
+            'target_audience': 'target_audience_comments',
+            'campaign_season': 'campaign_season_comments',
         }
-        incoming_by_id = {
-            str(c.get('id')): c for c in description_comments if isinstance(c, dict) and c.get('id')
-        }
+        comment_field = comment_field_map.get(comment_type)
+        if not comment_field:
+            return Response({'error': 'Invalid comment type'}, status=400)
 
-        removed_comment_ids = [
-            comment_id for comment_id in existing_by_id.keys()
-            if comment_id not in incoming_by_id
-        ]
-        current_user_id = str(request.user.id)
-        for comment_id in removed_comment_ids:
-            author_id = str(existing_by_id[comment_id].get('authorId'))
-            if author_id and author_id != current_user_id:
-                return Response({'error': 'You can only delete your own comments'}, status=403)
+        payload_comments = data.get(comment_field, [])
+        if not isinstance(payload_comments, list):
+            payload_comments = []
 
-        sanitized_comments = []
-        for raw_comment in description_comments:
-            if not isinstance(raw_comment, dict):
-                continue
+        brief_comments = get_or_create_collection_brief_comments(collection, request.user)
+        existing_comments = getattr(brief_comments, comment_field, []) or []
+        sanitized_comments, sanitize_error = sanitize_comments_with_replies(
+            payload_comments,
+            existing_comments,
+            request.user
+        )
+        if sanitize_error:
+            return Response({'error': sanitize_error}, status=403)
 
-            comment_id = str(raw_comment.get('id') or '')
-            comment_text = str(raw_comment.get('comment', '')).strip()
-            selection_text = str(raw_comment.get('selection', '')).strip()
-
-            if not comment_id or not comment_text:
-                continue
-
-            existing_comment = existing_by_id.get(comment_id)
-            if existing_comment:
-                raw_comment['authorId'] = existing_comment.get('authorId')
-                raw_comment['authorName'] = existing_comment.get('authorName')
-                raw_comment['createdAt'] = existing_comment.get('createdAt')
-            else:
-                raw_comment['authorId'] = current_user_id
-                raw_comment['authorName'] = request.user.full_name or request.user.username or request.user.email
-                raw_comment['createdAt'] = raw_comment.get('createdAt') or datetime.now(timezone.utc).isoformat()
-
-            raw_comment['comment'] = comment_text
-            raw_comment['selection'] = selection_text
-            sanitized_comments.append(raw_comment)
-
-        collection.description_comments = sanitized_comments
-        collection.updated_by = request.user
-        collection.save()
+        setattr(brief_comments, comment_field, sanitized_comments)
+        brief_comments.updated_by = request.user
+        brief_comments.save()
 
         return Response({
             'success': True,
-            'description_comments': collection.description_comments or []
+            'comment_type': comment_type,
+            comment_field: sanitized_comments
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def api_update_selection_comments(request, project_id, collection_id):
+    """Update themes/backgrounds/poses/locations comments without regenerating suggestions."""
+    try:
+        try:
+            project = get_project_by_id_or_slug(project_id)
+        except DoesNotExist:
+            return Response({'error': 'Project not found'}, status=404)
+
+        user_role = get_user_role_in_project(request.user, project)
+        if not user_role:
+            return Response({'error': 'Access denied to this project'}, status=403)
+
+        try:
+            collection = Collection.objects.get(id=collection_id, project=project)
+        except DoesNotExist:
+            return Response({'error': 'Collection not found'}, status=404)
+
+        data = json.loads(request.body)
+        comment_type = str(data.get('comment_type', 'themes')).strip().lower()
+        comment_field_map = {
+            'themes': 'themes_comments',
+            'backgrounds': 'backgrounds_comments',
+            'poses': 'poses_comments',
+            'locations': 'locations_comments',
+            'color_images': 'color_images_comments',
+            'additional_instructions': 'additional_instructions_comments',
+            'human_model_preview': 'human_model_preview_comments',
+            'ai_model_preview': 'ai_model_preview_comments',
+            'product_upload': 'product_upload_comments',
+            'generated_product_images': 'generated_product_images_comments',
+        }
+        comment_field = comment_field_map.get(comment_type)
+        if not comment_field:
+            return Response({'error': 'Invalid comment type'}, status=400)
+
+        payload_comments = data.get(comment_field, [])
+        if not isinstance(payload_comments, list):
+            payload_comments = []
+
+        selection_comments = get_or_create_collection_selection_comments(collection, request.user)
+        existing_comments = getattr(selection_comments, comment_field, []) or []
+        sanitized_comments, sanitize_error = sanitize_comments_with_replies(
+            payload_comments,
+            existing_comments,
+            request.user
+        )
+        if sanitize_error:
+            return Response({'error': sanitize_error}, status=403)
+
+        setattr(selection_comments, comment_field, sanitized_comments)
+        selection_comments.updated_by = request.user
+        selection_comments.save()
+
+        return Response({
+            'success': True,
+            'comment_type': comment_type,
+            comment_field: sanitized_comments
         })
     except Exception as e:
         import traceback
