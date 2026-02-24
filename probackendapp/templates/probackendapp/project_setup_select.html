@@ -73,11 +73,12 @@
 
     <h2>Project Setup - Collection {{ collection }}</h2>
     
-    {% if item_obj.selected_themes or item_obj.selected_backgrounds or item_obj.selected_poses or item_obj.selected_locations or item_obj.selected_colors %}
+    {% if item_obj.selected_themes or item_obj.selected_outfits or item_obj.selected_backgrounds or item_obj.selected_poses or item_obj.selected_locations or item_obj.selected_colors %}
     <div style="background: #e8f5e8; border: 1px solid #4caf50; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
         <h4 style="margin: 0 0 10px 0; color: #2e7d32;">📋 Your Previous Selections Summary</h4>
         <p style="margin: 5px 0; font-size: 14px;">
             <strong>Themes:</strong> {{ item_obj.selected_themes|join:", "|default:"None" }}<br>
+            <strong>Outfits:</strong> {{ item_obj.selected_outfits|join:", "|default:"None" }}<br>
             <strong>Backgrounds:</strong> {{ item_obj.selected_backgrounds|join:", "|default:"None" }}<br>
             <strong>Poses:</strong> {{ item_obj.selected_poses|join:", "|default:"None" }}<br>
             <strong>Locations:</strong> {{ item_obj.selected_locations|join:", "|default:"None" }}<br>
@@ -139,6 +140,57 @@
 
             <br>
             <input type="file" name="uploaded_theme_images" multiple>
+        </div>
+
+        <!-- Outfits -->
+        <div>
+            <h3>Outfits</h3>
+            <p class="text-gray">AI suggestions and your previous selections are organized below. You can select from any category.</p>
+
+            {% if outfits_categorized.both %}
+            <div class="suggestion-category">
+                <div class="category-header category-both">✓ Previously Selected & AI Suggested</div>
+                {% for outfit in outfits_categorized.both %}
+                <div class="option-item option-both">
+                    <label>
+                        <input type="checkbox" name="outfits" value="{{ outfit }}" checked>
+                        {{ outfit }}
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if outfits_categorized.selected_only %}
+            <div class="suggestion-category">
+                <div class="category-header category-selected">✓ Your Previous Selections</div>
+                {% for outfit in outfits_categorized.selected_only %}
+                <div class="option-item option-selected">
+                    <label>
+                        <input type="checkbox" name="outfits" value="{{ outfit }}" checked>
+                        {{ outfit }}
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if outfits_categorized.suggested_only %}
+            <div class="suggestion-category">
+                <div class="category-header category-suggested">💡 AI Suggestions</div>
+                {% for outfit in outfits_categorized.suggested_only %}
+                <div class="option-item option-suggested">
+                    <label>
+                        <input type="checkbox" name="outfits" value="{{ outfit }}">
+                        {{ outfit }}
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <br>
+            <input type="file" name="uploaded_outfit_images" multiple>
         </div>
     
         <!-- Backgrounds -->

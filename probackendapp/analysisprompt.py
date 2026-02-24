@@ -17,6 +17,23 @@ STRICT RULES:
 """
 
 
+outfit_prompt = """
+Write one professional styling-direction paragraph defining the OUTFIT using:
+- garment types and silhouette
+- fabric/material and texture cues
+- color coordination and layering
+- overall styling mood for campaign/model shots
+
+STRICT RULES:
+• Do NOT use third-person narration
+• Do NOT say "this image", "the image shows"
+• Write as direct styling direction language
+• No lists, no JSON, no bullet points
+
+Return only one clean paragraph.
+"""
+
+
 background_prompt = """
 Write one professional scene-layout paragraph defining the BACKGROUND using:
 - background elements

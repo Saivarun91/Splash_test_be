@@ -98,6 +98,7 @@ def project_setup_description(request, project_id):
         # Generate suggestions (refresh on each submit)
         suggestions = request_suggestions(description, uploaded_image)
         item.suggested_themes = suggestions.get("themes", [])
+        item.suggested_outfits = suggestions.get("outfits", [])
         item.suggested_backgrounds = suggestions.get("backgrounds", [])
         item.suggested_poses = suggestions.get("poses", [])
         item.suggested_locations = suggestions.get("locations", [])
@@ -276,20 +277,21 @@ def project_setup_select(request, project_id, collection_id):
         # Save selected options
         # -----------------------------
         item.selected_themes = getlist("themes") or []
+        item.selected_outfits = getlist("outfits") or []
         item.selected_backgrounds = getlist("backgrounds") or []
         item.selected_poses = getlist("poses") or []
         item.selected_locations = getlist("locations") or []
         item.selected_colors = getlist("colors") or []
 
         # Save uploaded images for each category
-        for category in ["theme", "background", "pose", "location", "color"]:
+        for category in ["theme", "outfit", "background", "pose", "location", "color"]:
             files = request.FILES.getlist(f"uploaded_{category}_images")
             if files:
                 getattr(item, f"uploaded_{category}_images").extend(files)
 
         # Prepare uploaded images info for Gemini prompt
         uploaded_images_info = ""
-        for cat in ["theme", "background", "pose", "location", "color"]:
+        for cat in ["theme", "outfit", "background", "pose", "location", "color"]:
             imgs = getattr(item, f"uploaded_{cat}_images")
             if imgs:
                 uploaded_images_info += f"{cat.capitalize()} references: {', '.join([str(f) for f in imgs])}\n"
@@ -302,6 +304,7 @@ You are a professional creative AI assistant. Analyze the collection description
 
 Collection Description: {collection.description}
 Selected Themes: {', '.join(item.selected_themes) or 'None'}
+Selected Outfits: {', '.join(item.selected_outfits) or 'None'}
 Selected Backgrounds: {', '.join(item.selected_backgrounds) or 'None'}
 Selected Poses: {', '.join(item.selected_poses) or 'None'}
 Selected Locations: {', '.join(item.selected_locations) or 'None'}
@@ -390,11 +393,13 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
         "collection": collection,
         "item_obj": item,
         "themes": merge_unique(item.selected_themes, item.suggested_themes),
+        "outfits": merge_unique(item.selected_outfits, item.suggested_outfits),
         "backgrounds": merge_unique(item.selected_backgrounds, item.suggested_backgrounds),
         "poses": merge_unique(item.selected_poses, item.suggested_poses),
         "locations": merge_unique(item.selected_locations, item.suggested_locations),
         "colors": merge_unique(item.selected_colors, item.suggested_colors),
         "themes_categorized": categorize_options(item.selected_themes, item.suggested_themes),
+        "outfits_categorized": categorize_options(item.selected_outfits, item.suggested_outfits),
         "backgrounds_categorized": categorize_options(item.selected_backgrounds, item.suggested_backgrounds),
         "poses_categorized": categorize_options(item.selected_poses, item.suggested_poses),
         "locations_categorized": categorize_options(item.selected_locations, item.suggested_locations),
@@ -1590,8 +1595,13 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
 
     try:
         # === Credit Check and Deduction ===
-        from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
-        from users.models import User, Role
+        from CREDITS.utils import (
+            deduct_credits,
+            get_user_organization,
+            get_credit_settings,
+            deduct_user_credits
+        )
+        from users.models import User
 
         # Get dynamic credit settings
         credit_settings = get_credit_settings()
@@ -1605,24 +1615,40 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
         # Get collection first to access project
         collection = Collection.objects.get(id=collection_id)
 
-        # Check if user has organization - if not, allow generation without credit deduction
+        # Determine who pays
         organization = get_user_organization(user)
+
         if organization:
-            # Check and deduct credits before generation
             credit_result = deduct_credits(
                 organization=organization,
                 user=user,
                 amount=CREDITS_PER_IMAGE,
                 reason=f"Product model image generation - {prompt_key}",
-                project=collection.project if hasattr(
-                    collection, 'project') else None,
-                metadata={"type": "product_model_image",
-                          "prompt_key": prompt_key, "product_index": product_index}
+                project=collection.project if hasattr(collection, 'project') else None,
+                metadata={
+                    "type": "product_model_image",
+                    "prompt_key": prompt_key,
+                    "product_index": product_index,
+                    "wallet_type": "organization"
+                }
+            )
+        else:
+            credit_result = deduct_user_credits(
+                user=user,
+                amount=CREDITS_PER_IMAGE,
+                reason=f"Product model image generation - {prompt_key}",
+                project=collection.project if hasattr(collection, 'project') else None,
+                metadata={
+                    "type": "product_model_image",
+                    "prompt_key": prompt_key,
+                    "product_index": product_index,
+                    "wallet_type": "user"
+                }
             )
 
-            if not credit_result['success']:
-                return {"success": False, "error": credit_result['message']}
-        # If no organization, allow generation to proceed without credit deduction
+        # Stop if deduction failed
+        if not credit_result.get("success"):
+            return {"success": False, "error": credit_result.get("message", "Credit deduction failed")}
         if not collection.items:
             return {"success": False, "error": "No items found in collection."}
 

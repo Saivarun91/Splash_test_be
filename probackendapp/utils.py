@@ -128,8 +128,9 @@ Instructions:
 3. Make sure the ideas are cohesive and realistic to implement in a fashion/product photography or advertising context.
 4. Each category must contain short, descriptive, and clear prompts suitable for use with AI image generation tools.
 
-Generate JSON containing 5 types:
+Generate JSON containing 6 types:
 - Themes
+- Outfits
 - Backgrounds/Backdrops
 - Poses
 - Locations
@@ -149,15 +150,112 @@ Limit 10 prompts per category."""
     response_text = call_gemini_api(prompt)
     parsed = parse_gemini_response(response_text)
 
-    key_map = {
-        "Themes": "themes",
-        "Backgrounds/Backdrops": "backgrounds",
-        "Poses": "poses",
-        "Locations": "locations",
-        "Color palettes": "colors"
-    }
-    suggestions = {norm_key: parsed.get(api_key, [])[:10] for api_key, norm_key in key_map.items(
-    )} if parsed else {k: [] for k in key_map.values()}
+    if not parsed or not isinstance(parsed, dict):
+        suggestions = {
+            "themes": [],
+            "outfits": [],
+            "backgrounds": [],
+            "poses": [],
+            "locations": [],
+            "colors": [],
+        }
+        parsed = {}
+    else:
+        lowered_map = {
+            str(k).strip().lower(): v for k, v in parsed.items() if isinstance(k, str)
+        }
+
+        def pick_list(*aliases):
+            for alias in aliases:
+                value = parsed.get(alias)
+                if isinstance(value, list) and value:
+                    return value[:10]
+                value = lowered_map.get(str(alias).strip().lower())
+                if isinstance(value, list) and value:
+                    return value[:10]
+            return []
+
+        suggestions = {
+            "themes": pick_list("Themes", "Theme", "themes", "theme"),
+            "outfits": pick_list(
+                "Outfits",
+                "Outfit",
+                "Outfit Ideas",
+                "Outfit Suggestions",
+                "Styling",
+                "Wardrobe",
+                "outfits",
+                "outfit",
+            ),
+            "backgrounds": pick_list(
+                "Backgrounds/Backdrops",
+                "Backgrounds",
+                "Backdrops",
+                "backgrounds",
+                "background",
+            ),
+            "poses": pick_list("Poses", "Pose Ideas", "poses", "pose"),
+            "locations": pick_list("Locations", "Location", "locations", "location"),
+            "colors": pick_list(
+                "Color palettes",
+                "Color Palettes",
+                "Colors",
+                "color palettes",
+                "colors",
+            ),
+        }
+
+    # Fallback: if prompt/template omitted outfit keys, generate outfits separately.
+    if not suggestions["outfits"]:
+        outfit_prompt = f"""Generate only outfit ideas for this collection.
+
+Collection Description: {description}
+Target Audience: {target_audience if target_audience else "Not specified"}
+Campaign Season: {campaign_season if campaign_season else "Not specified"}
+
+Return valid JSON only in this exact format:
+{{
+  "Outfits": ["...", "..."]
+}}
+
+Give up to 10 concise, practical outfit suggestions."""
+        outfit_text = call_gemini_api(outfit_prompt)
+        outfit_parsed = parse_gemini_response(outfit_text)
+        if isinstance(outfit_parsed, dict):
+            outfit_candidates = (
+                outfit_parsed.get("Outfits")
+                or outfit_parsed.get("outfits")
+                or outfit_parsed.get("Outfit Ideas")
+                or outfit_parsed.get("Styling")
+                or []
+            )
+            if isinstance(outfit_candidates, list):
+                suggestions["outfits"] = outfit_candidates[:10]
+        # Fallback parser for non-JSON responses (bullets/numbered lines/plain text)
+        if not suggestions["outfits"] and isinstance(outfit_text, str):
+            cleaned_lines = []
+            for raw_line in outfit_text.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith("{") or line.startswith("}") or ":" in line and line.lower().startswith("outfits"):
+                    continue
+                line = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
+                if len(line) < 3:
+                    continue
+                cleaned_lines.append(line)
+            deduped = []
+            seen = set()
+            for line in cleaned_lines:
+                key = line.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(line)
+                if len(deduped) >= 10:
+                    break
+            suggestions["outfits"] = deduped
+
     return suggestions
 
 

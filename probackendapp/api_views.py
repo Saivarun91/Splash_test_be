@@ -114,6 +114,7 @@ def get_collection_selection_comments_payload(collection):
     selection_comments = CollectionSelectionComments.objects(collection=collection).first()
     if selection_comments:
         themes_comments = selection_comments.themes_comments or []
+        outfits_comments = selection_comments.outfits_comments or []
         backgrounds_comments = selection_comments.backgrounds_comments or []
         poses_comments = selection_comments.poses_comments or []
         locations_comments = selection_comments.locations_comments or []
@@ -125,6 +126,7 @@ def get_collection_selection_comments_payload(collection):
         generated_product_images_comments = selection_comments.generated_product_images_comments or []
     else:
         themes_comments = []
+        outfits_comments = []
         backgrounds_comments = []
         poses_comments = []
         locations_comments = []
@@ -137,6 +139,7 @@ def get_collection_selection_comments_payload(collection):
 
     return {
         'themes_comments': themes_comments,
+        'outfits_comments': outfits_comments,
         'backgrounds_comments': backgrounds_comments,
         'poses_comments': poses_comments,
         'locations_comments': locations_comments,
@@ -402,6 +405,7 @@ def api_project_detail(request, project_id):
                 'campaign_season_comments': brief_comments_payload['campaign_season_comments'],
                 'campaign_season': collection.campaign_season,
                 'themes_comments': selection_comments_payload['themes_comments'],
+                'outfits_comments': selection_comments_payload['outfits_comments'],
                 'backgrounds_comments': selection_comments_payload['backgrounds_comments'],
                 'poses_comments': selection_comments_payload['poses_comments'],
                 'locations_comments': selection_comments_payload['locations_comments'],
@@ -418,16 +422,19 @@ def api_project_detail(request, project_id):
             for item in collection.items:
                 item_data = {
                     'suggested_themes': item.suggested_themes or [],
+                    'suggested_outfits': item.suggested_outfits or [],
                     'suggested_backgrounds': item.suggested_backgrounds or [],
                     'suggested_poses': item.suggested_poses or [],
                     'suggested_locations': item.suggested_locations or [],
                     'suggested_colors': item.suggested_colors or [],
                     'selected_themes': item.selected_themes or [],
+                    'selected_outfits': item.selected_outfits or [],
                     'selected_backgrounds': item.selected_backgrounds or [],
                     'selected_poses': item.selected_poses or [],
                     'selected_locations': item.selected_locations or [],
                     'selected_colors': item.selected_colors or [],
                     'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images],
+                    'uploaded_outfit_images': [img.to_mongo().to_dict() for img in item.uploaded_outfit_images],
                     'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images],
                     'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
                     'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
@@ -606,6 +613,7 @@ def api_collection_detail(request, collection_id):
             'campaign_season_comments': brief_comments_payload['campaign_season_comments'],
             'campaign_season': collection.campaign_season,
             'themes_comments': selection_comments_payload['themes_comments'],
+            'outfits_comments': selection_comments_payload['outfits_comments'],
             'backgrounds_comments': selection_comments_payload['backgrounds_comments'],
             'poses_comments': selection_comments_payload['poses_comments'],
             'locations_comments': selection_comments_payload['locations_comments'],
@@ -622,16 +630,19 @@ def api_collection_detail(request, collection_id):
         for item in collection.items:
             item_data = {
                 'suggested_themes': item.suggested_themes or [],
+                'suggested_outfits': item.suggested_outfits or [],
                 'suggested_backgrounds': item.suggested_backgrounds or [],
                 'suggested_poses': item.suggested_poses or [],
                 'suggested_locations': item.suggested_locations or [],
                 'suggested_colors': item.suggested_colors or [],
                 'selected_themes': item.selected_themes or [],
+                'selected_outfits': item.selected_outfits or [],
                 'selected_backgrounds': item.selected_backgrounds or [],
                 'selected_poses': item.selected_poses or [],
                 'selected_locations': item.selected_locations or [],
                 'selected_colors': item.selected_colors or [],
                 'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images],
+                'uploaded_outfit_images': [img.to_mongo().to_dict() for img in item.uploaded_outfit_images],
                 'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images],
                 'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
                 'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
@@ -718,6 +729,7 @@ def api_project_setup_description(request, project_id):
             suggestions = request_suggestions(
                 description, None, target_audience, campaign_season)
             item.suggested_themes = suggestions.get("themes", [])
+            item.suggested_outfits = suggestions.get("outfits", [])
             item.suggested_backgrounds = suggestions.get("backgrounds", [])
             item.suggested_poses = suggestions.get("poses", [])
             item.suggested_locations = suggestions.get("locations", [])
@@ -725,6 +737,7 @@ def api_project_setup_description(request, project_id):
         else:
             # No description provided - clear suggestions (user will use uploaded images instead)
             item.suggested_themes = []
+            item.suggested_outfits = []
             item.suggested_backgrounds = []
             item.suggested_poses = []
             item.suggested_locations = []
@@ -735,16 +748,19 @@ def api_project_setup_description(request, project_id):
         # Prepare collection response data - match the structure expected by frontend (items array)
         item_data = {
             'suggested_themes': item.suggested_themes or [],
+            'suggested_outfits': item.suggested_outfits or [],
             'suggested_backgrounds': item.suggested_backgrounds or [],
             'suggested_poses': item.suggested_poses or [],
             'suggested_locations': item.suggested_locations or [],
             'suggested_colors': item.suggested_colors or [],
             'selected_themes': item.selected_themes or [],
+            'selected_outfits': item.selected_outfits or [],
             'selected_backgrounds': item.selected_backgrounds or [],
             'selected_poses': item.selected_poses or [],
             'selected_locations': item.selected_locations or [],
             'selected_colors': item.selected_colors or [],
             'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images] if item.uploaded_theme_images else [],
+            'uploaded_outfit_images': [img.to_mongo().to_dict() for img in item.uploaded_outfit_images] if item.uploaded_outfit_images else [],
             'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images] if item.uploaded_background_images else [],
             'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images] if item.uploaded_pose_images else [],
             'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images] if item.uploaded_location_images else [],
@@ -771,6 +787,7 @@ def api_project_setup_description(request, project_id):
             'campaign_season_comments': brief_comments_payload['campaign_season_comments'],
             'campaign_season': collection.campaign_season,
             'themes_comments': selection_comments_payload['themes_comments'],
+            'outfits_comments': selection_comments_payload['outfits_comments'],
             'backgrounds_comments': selection_comments_payload['backgrounds_comments'],
             'poses_comments': selection_comments_payload['poses_comments'],
             'locations_comments': selection_comments_payload['locations_comments'],
@@ -880,6 +897,7 @@ def api_update_selection_comments(request, project_id, collection_id):
         comment_type = str(data.get('comment_type', 'themes')).strip().lower()
         comment_field_map = {
             'themes': 'themes_comments',
+            'outfits': 'outfits_comments',
             'backgrounds': 'backgrounds_comments',
             'poses': 'poses_comments',
             'locations': 'locations_comments',
@@ -932,7 +950,7 @@ def analyze_uploaded_image(cloud_url, category):
     """
     try:
         from .analysisprompt import (
-            theme_prompt, background_prompt, pose_prompt,
+            theme_prompt, outfit_prompt, background_prompt, pose_prompt,
             location_prompt, color_prompt
         )
         from .utils import call_gemini_api
@@ -940,6 +958,7 @@ def analyze_uploaded_image(cloud_url, category):
         # Map category to appropriate prompt
         category_prompts = {
             'theme': theme_prompt,
+            'outfit': outfit_prompt,
             'background': background_prompt,
             'pose': pose_prompt,
             'location': location_prompt,
@@ -1292,6 +1311,7 @@ def api_upload_workflow_image(request, project_id, collection_id):
         # Normalize category (convert plural to singular)
         category_mapping = {
             'themes': 'theme',
+            'outfits': 'outfit',
             'backgrounds': 'background',
             'poses': 'pose',
             'locations': 'location',
@@ -1301,7 +1321,7 @@ def api_upload_workflow_image(request, project_id, collection_id):
         # Convert plural to singular if needed
         normalized_category = category_mapping.get(category, category)
 
-        if normalized_category not in ['theme', 'background', 'pose', 'location', 'color']:
+        if normalized_category not in ['theme', 'outfit', 'background', 'pose', 'location', 'color']:
             print(
                 f"DEBUG: Invalid category: {category} (normalized: {normalized_category})")
             return Response({'error': 'Invalid category'}, status=400)
@@ -1486,6 +1506,7 @@ def api_remove_workflow_image(request, project_id, collection_id):
         # Normalize category (convert plural to singular)
         category_mapping = {
             'themes': 'theme',
+            'outfits': 'outfit',
             'backgrounds': 'background',
             'poses': 'pose',
             'locations': 'location',
@@ -1493,7 +1514,7 @@ def api_remove_workflow_image(request, project_id, collection_id):
         }
         normalized_category = category_mapping.get(category, category)
 
-        if normalized_category not in ['theme', 'background', 'pose', 'location', 'color']:
+        if normalized_category not in ['theme', 'outfit', 'background', 'pose', 'location', 'color']:
             return Response({'error': 'Invalid category'}, status=400)
 
         category = normalized_category
@@ -1558,7 +1579,7 @@ def api_project_setup_select(request, project_id, collection_id):
             # Handle FormData (with image uploads)
             data = json.loads(request.POST.get('selections', '{}'))
             uploaded_files = {}
-            for category in ['theme', 'background', 'pose', 'location', 'color']:
+            for category in ['theme', 'outfit', 'background', 'pose', 'location', 'color']:
                 files = request.FILES.getlist(f'uploaded_{category}_images')
                 if files:
                     uploaded_files[category] = files
@@ -1581,6 +1602,7 @@ def api_project_setup_select(request, project_id, collection_id):
 
         # Update selected items
         item.selected_themes = data.get('themes', [])
+        item.selected_outfits = data.get('outfits', [])
         item.selected_backgrounds = data.get('backgrounds', [])
         item.selected_poses = data.get('poses', [])
         item.selected_locations = data.get('locations', [])
@@ -1601,6 +1623,7 @@ def api_project_setup_select(request, project_id, collection_id):
         # Collect analysis by category for targeted prompt generation
         category_analysis = {
             'theme': [],
+            'outfit': [],
             'background': [],
             'pose': [],
             'location': [],
@@ -1611,7 +1634,7 @@ def api_project_setup_select(request, project_id, collection_id):
 
         # Check each category for uploaded images and collect their stored analysis
         # Use master analysis if multiple images exist, otherwise use individual analysis
-        for category in ['theme', 'background', 'pose', 'location', 'color']:
+        for category in ['theme', 'outfit', 'background', 'pose', 'location', 'color']:
             category_field = f"uploaded_{category}_images"
             if hasattr(item, category_field):
                 uploaded_imgs = getattr(item, category_field)
@@ -1673,7 +1696,7 @@ def api_project_setup_select(request, project_id, collection_id):
         # Generate master analysis for categories with multiple images (only if not already present)
         # For each category with more than one image, generate a master analysis for each image
         # that combines all analyses from that category into a comprehensive paragraph
-        for category in ['theme', 'background', 'pose', 'location', 'color']:
+        for category in ['theme', 'outfit', 'background', 'pose', 'location', 'color']:
             category_field = f"uploaded_{category}_images"
             if hasattr(item, category_field):
                 uploaded_imgs = getattr(item, category_field)
@@ -1884,9 +1907,9 @@ Individual analyses:
         background_replace_analysis = build_analysis_string(
             ['theme', 'background'])
         model_image_analysis = build_analysis_string(
-            ['theme', 'background', 'pose', 'color'])
+            ['theme', 'outfit', 'background', 'pose', 'color'])
         campaign_image_analysis = build_analysis_string(
-            ['theme', 'background', 'pose', 'location', 'color'])
+            ['theme', 'outfit', 'background', 'pose', 'location', 'color'])
 
         # Prepare color information for model_image (if no color images uploaded)
         # These will be used in the prompt to show color priority
@@ -1907,7 +1930,7 @@ Individual analyses:
         # Build full uploaded images analysis for general context (used in the prompt)
         # Use master analysis if multiple images exist, otherwise use individual analysis
         uploaded_images_analysis = ""
-        for category in ['theme', 'background', 'pose', 'location', 'color']:
+        for category in ['theme', 'outfit', 'background', 'pose', 'location', 'color']:
             if category_analysis[category]:
                 category_field = f"uploaded_{category}_images"
                 uploaded_imgs = getattr(item, category_field, []) if hasattr(
@@ -1937,6 +1960,7 @@ Individual analyses:
         # Determine final selections - prioritize uploaded images over suggestions
         # If images are uploaded for a category, ignore selected suggestions for that category
         final_themes = []
+        final_outfits = []
         final_backgrounds = []
         final_poses = []
         final_locations = []
@@ -1946,6 +1970,10 @@ Individual analyses:
         if 'theme' not in categories_with_uploads:
             final_themes = item.selected_themes if item.selected_themes else (
                 item.suggested_themes[:3] if item.suggested_themes else [])
+
+        if 'outfit' not in categories_with_uploads:
+            final_outfits = item.selected_outfits if item.selected_outfits else (
+                item.suggested_outfits[:3] if item.suggested_outfits else [])
 
         if 'background' not in categories_with_uploads:
             final_backgrounds = item.selected_backgrounds if item.selected_backgrounds else (
@@ -2015,6 +2043,7 @@ ALL USER-UPLOADED REFERENCE IMAGES (for context):
 
 SELECTED SUGGESTIONS (use only for categories without uploaded images):
 Themes: {themes}
+Outfits: {outfits}
 Backgrounds: {backgrounds}
 Poses: {poses}
 Locations: {locations}
@@ -2028,7 +2057,7 @@ RULES FOR PROMPT CREATION:
 5. Be specific — describe lighting, materials, perspective, model type, emotion, background details, and ALL elements from the analyses.
 6. Keep prompts actionable and detailed for AI image generation systems.
 7. COLOR PRIORITY: If picked colors are provided, use them as the primary color scheme. If only selected suggestions are provided, use those instead.
-8. MODEL ATTIRE: For MODEL_IMAGE and CAMPAIGN_IMAGE, the model's attire MUST be changed according to the theme analysis. Extract specific clothing details, fabric types, colors, patterns, and styling elements from theme analysis.
+8. MODEL ATTIRE: For MODEL_IMAGE and CAMPAIGN_IMAGE, the model's attire MUST follow theme + outfit direction. Extract specific clothing details, fabric types, colors, patterns, and styling elements from theme/outfit analysis and selections.
 9. MODEL CONSISTENCY (CRITICAL): For MODEL_IMAGE and CAMPAIGN_IMAGE, the model MUST look EXACTLY the same across ALL generated images. Maintain EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age - maintain exact same age look), EXACT same skin characteristics (skin texture, tone, undertones, complexion, facial maturity), EXACT same hair (color, texture, style, length, hairline), and EXACT same body proportions (height, build, body shape, muscle definition) across ALL images.
 10. MODEL ACCURACY: For MODEL_IMAGE and CAMPAIGN_IMAGE, ensure the model is 100% accurate - realistic human features, accurate facial proportions, natural body proportions, authentic skin texture, and lifelike appearance. No distortions, no unrealistic features, no AI artifacts.
 {global_instruction_rule}
@@ -2042,16 +2071,16 @@ IMPORTANT - USE SPECIFIC ANALYSIS FOR EACH PROMPT TYPE:
    - Analysis to use: NONE (ignore all uploaded images for this prompt)
 
 2. BACKGROUND_REPLACE:
-   - USE ONLY theme and background image analysis
-   - Incorporate visual elements, style, and aesthetic from theme and background images
+   - USE theme, outfit, and background image analysis
+   - Incorporate visual elements, style, and aesthetic from theme/outfit/background images
    - Maintain product integrity while applying themed background
    - Analysis to use: {background_replace_analysis}
 
 3. MODEL_IMAGE:
-   - CRITICAL: MUST take ALL analyses into consideration (theme, background, pose, and color image analysis)
+   - CRITICAL: MUST take ALL analyses into consideration (theme, outfit, background, pose, and color image analysis)
    - For colors: prioritize uploaded color images if available, otherwise use picked colors, otherwise use selected colors
    - Incorporate poses, expressions, styling, and color palettes from uploaded images
-   - MANDATORY: Change the attire of the model according to the theme analysis. The model's clothing, style, and overall appearance MUST match the theme and background aesthetic from the uploaded images. Extract specific clothing details, fabric types, colors, and styling elements from the theme analysis.
+   - MANDATORY: Change the attire of the model according to theme + outfit analysis. The model's clothing, style, and overall appearance MUST match the theme, outfit, and background aesthetic from the uploaded images. Extract specific clothing details, fabric types, colors, and styling elements from theme + outfit analysis.
    - MODEL CONSISTENCY REQUIREMENT (CRITICAL): The model must look EXACTLY the same across ALL generated images with:
      * EXACT same facial structure: jawline, cheekbones, chin, forehead, facial proportions, face width, face length
      * EXACT same eye structure: eye shape, eye size, eye spacing, eyelid shape, eyebrow shape and position
@@ -2066,9 +2095,9 @@ IMPORTANT - USE SPECIFIC ANALYSIS FOR EACH PROMPT TYPE:
    - Color priority: Uploaded color images > Picked colors ({picked_colors_for_model}) > Selected colors ({selected_colors_for_model})
 
 4. CAMPAIGN_IMAGE:
-   - CRITICAL: MUST take ALL category analyses into consideration (theme, background, pose, location, color)
+   - CRITICAL: MUST take ALL category analyses into consideration (theme, outfit, background, pose, location, color)
    - Incorporate comprehensive visual elements from ALL uploaded reference images - every detail matters
-   - MANDATORY: Change the attire of the model according to the theme analysis. The model's clothing, style, and overall appearance MUST match the theme aesthetic from the uploaded images. Extract specific clothing details, fabric types, colors, and styling elements from the theme analysis.
+   - MANDATORY: Change the attire of the model according to theme + outfit analysis. The model's clothing, style, and overall appearance MUST match the theme/outfit aesthetic from the uploaded images. Extract specific clothing details, fabric types, colors, and styling elements from theme + outfit analysis.
    - MODEL CONSISTENCY REQUIREMENT (CRITICAL): The model must look EXACTLY the same across ALL generated images with:
      * EXACT same facial structure: jawline, cheekbones, chin, forehead, facial proportions, face width, face length
      * EXACT same eye structure: eye shape, eye size, eye spacing, eyelid shape, eyebrow shape and position
@@ -2085,9 +2114,9 @@ IMPORTANT - USE SPECIFIC ANALYSIS FOR EACH PROMPT TYPE:
 Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 {{
     "white_background": "Detailed prompt for white background product photography (DO NOT use uploaded image analysis)",
-    "background_replace": "Detailed prompt using ONLY theme and background analysis. Incorporate visual elements, style, and aesthetic from theme and background images.",
-    "model_image": "Detailed prompt using ALL analyses (theme, background, pose, and color). MUST change model attire to match theme analysis exactly. CRITICAL: Model must look EXACTLY the same with EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age), EXACT same skin characteristics, EXACT same hair, and EXACT same body proportions across ALL images. Model must be 100% accurate with realistic features, accurate facial proportions, natural body proportions, and lifelike appearance. Include specific clothing details, fabric types, colors, and styling from theme analysis.",
-    "campaign_image": "Detailed prompt using ALL category analyses (theme, background, pose, location, color). MUST change model attire to match theme analysis exactly. CRITICAL: Model must look EXACTLY the same with EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age), EXACT same skin characteristics, EXACT same hair, and EXACT same body proportions across ALL images. Model must be 100% accurate with realistic features, accurate facial proportions, natural body proportions, and lifelike appearance. Include specific clothing details, fabric types, colors, and styling from theme analysis. Create a cohesive campaign shot capturing mood, composition, and style from all references."
+    "background_replace": "Detailed prompt using theme, outfit, and background analysis. Incorporate visual elements, style, and aesthetic from theme/outfit/background images.",
+    "model_image": "Detailed prompt using ALL analyses (theme, outfit, background, pose, and color). MUST change model attire to match theme + outfit analysis exactly. CRITICAL: Model must look EXACTLY the same with EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age), EXACT same skin characteristics, EXACT same hair, and EXACT same body proportions across ALL images. Model must be 100% accurate with realistic features, accurate facial proportions, natural body proportions, and lifelike appearance. Include specific clothing details, fabric types, colors, and styling from theme + outfit analysis.",
+    "campaign_image": "Detailed prompt using ALL category analyses (theme, outfit, background, pose, location, color). MUST change model attire to match theme + outfit analysis exactly. CRITICAL: Model must look EXACTLY the same with EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age), EXACT same skin characteristics, EXACT same hair, and EXACT same body proportions across ALL images. Model must be 100% accurate with realistic features, accurate facial proportions, natural body proportions, and lifelike appearance. Include specific clothing details, fabric types, colors, and styling from theme + outfit analysis. Create a cohesive campaign shot capturing mood, composition, and style from all references."
 }}"""
 
             gemini_prompt = get_prompt_from_db(
@@ -2101,6 +2130,7 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
                 picked_colors_for_model=picked_colors_for_model or 'None',
                 selected_colors_for_model=selected_colors_for_model or 'None',
                 themes=', '.join(final_themes) or 'None',
+                outfits=', '.join(final_outfits) or 'None',
                 backgrounds=', '.join(final_backgrounds) or 'None',
                 poses=', '.join(final_poses) or 'None',
                 locations=', '.join(final_locations) or 'None',
@@ -2114,6 +2144,7 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 
 Collection Description: {collection_description}
 Selected Themes: {themes}
+Selected Outfits: {outfits}
 Selected Backgrounds: {backgrounds}
 Selected Poses: {poses}
 Selected Locations: {locations}
@@ -2141,6 +2172,7 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
                 default_prompt,
                 collection_description=collection_desc_text,
                 themes=', '.join(final_themes) or 'None',
+                outfits=', '.join(final_outfits) or 'None',
                 backgrounds=', '.join(final_backgrounds) or 'None',
                 poses=', '.join(final_poses) or 'None',
                 locations=', '.join(final_locations) or 'None',
@@ -2150,12 +2182,24 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
                 global_instruction_rule=global_instruction_rule
             )
 
+        # Force outfit context in case legacy DB templates still contain old wording.
+        gemini_prompt = gemini_prompt.replace(
+            "theme, background, pose, and color",
+            "theme, outfit, background, pose, and color",
+        ).replace(
+            "ALL category analysis",
+            "ALL category analyses (theme, outfit, background, pose, location, color)",
+        ).replace(
+            "match theme analysis",
+            "match theme + outfit analysis",
+        )
+
         # Debug information
         print(
             f"DEBUG: Categories with uploaded images: {categories_with_uploads}")
         print(f"DEBUG: Has uploaded images: {has_uploaded_images}")
         print(
-            f"DEBUG: Final selections - Themes: {final_themes}, Backgrounds: {final_backgrounds}, Poses: {final_poses}, Locations: {final_locations}, Colors: {final_colors}")
+            f"DEBUG: Final selections - Themes: {final_themes}, Outfits: {final_outfits}, Backgrounds: {final_backgrounds}, Poses: {final_poses}, Locations: {final_locations}, Colors: {final_colors}")
 
         # Call Gemini API
         print(f"DEBUG: Gemini prompt: {gemini_prompt}")
@@ -2168,8 +2212,8 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
             ai_response = {
                 "white_background": "Professional product photography with clean white background, studio lighting, sharp focus on product details",
                 "background_replace": "Same product with themed background replacement, maintaining product integrity and lighting",
-                "model_image": "Realistic model wearing/holding the product, professional fashion photography, accurate facial features and body proportions, photo focused mainly on the product",
-                "campaign_image": "Stylish campaign shot with model in themed setting, creative composition, promotional quality",
+                "model_image": "Realistic model wearing/holding the product, using theme + outfit references for attire styling, professional fashion photography, accurate facial features and body proportions, photo focused mainly on the product",
+                "campaign_image": "Stylish campaign shot with model in themed setting, using all category references including theme + outfit for styling, creative composition, promotional quality",
             }
 
         # Ensure all required keys exist
@@ -2177,7 +2221,12 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
                          "background_replace", "model_image", "campaign_image"]
         for key in required_keys:
             if key not in ai_response or not ai_response[key]:
-                ai_response[key] = f"Generated prompt for {key.replace('_', ' ')} based on your collection theme"
+                if key == "model_image":
+                    ai_response[key] = "Generated prompt for model image based on collection theme + outfit, including outfit-aware styling direction."
+                elif key == "campaign_image":
+                    ai_response[key] = "Generated prompt for campaign image based on ALL categories including theme + outfit references."
+                else:
+                    ai_response[key] = f"Generated prompt for {key.replace('_', ' ')} based on your collection theme"
 
         # Save prompts in item
         item.final_moodboard_prompt = gemini_prompt
@@ -2193,6 +2242,7 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
             'success': True,
             'selected': {
                 'themes': item.selected_themes,
+                'outfits': item.selected_outfits,
                 'backgrounds': item.selected_backgrounds,
                 'poses': item.selected_poses,
                 'locations': item.selected_locations,

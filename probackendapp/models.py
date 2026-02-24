@@ -146,12 +146,14 @@ class UploadedImage(EmbeddedDocument):
 
 class CollectionItem(EmbeddedDocument):
     suggested_themes = ListField(StringField(), default=list)
+    suggested_outfits = ListField(StringField(), default=list)
     suggested_backgrounds = ListField(StringField(), default=list)
     suggested_poses = ListField(StringField(), default=list)
     suggested_locations = ListField(StringField(), default=list)
     suggested_colors = ListField(StringField(), default=list)
 
     selected_themes = ListField(StringField(), default=list)
+    selected_outfits = ListField(StringField(), default=list)
     selected_backgrounds = ListField(StringField(), default=list)
     selected_poses = ListField(StringField(), default=list)
     selected_locations = ListField(StringField(), default=list)
@@ -167,6 +169,8 @@ class CollectionItem(EmbeddedDocument):
 
     # New structure for uploaded images with both local and cloud storage
     uploaded_theme_images = ListField(
+        EmbeddedDocumentField(UploadedImage), default=list)
+    uploaded_outfit_images = ListField(
         EmbeddedDocumentField(UploadedImage), default=list)
     uploaded_background_images = ListField(
         EmbeddedDocumentField(UploadedImage), default=list)
@@ -249,6 +253,7 @@ class CollectionSelectionComments(Document):
     """Stores selection field comments in a dedicated collection."""
     collection = ReferenceField(Collection, required=True, unique=True, reverse_delete_rule=2)
     themes_comments = ListField(DictField(), default=list)
+    outfits_comments = ListField(DictField(), default=list)
     backgrounds_comments = ListField(DictField(), default=list)
     poses_comments = ListField(DictField(), default=list)
     locations_comments = ListField(DictField(), default=list)

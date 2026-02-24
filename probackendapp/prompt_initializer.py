@@ -20,7 +20,7 @@ def initialize_default_prompts():
         {
             "prompt_key": "suggestion_prompt_base",
             "title": "Suggestion Generation Base Prompt",
-            "description": "Base prompt for generating visual suggestions (themes, backgrounds, poses, locations, colors) from collection description",
+            "description": "Base prompt for generating visual suggestions (themes, outfits, backgrounds, poses, locations, colors) from collection description",
             "prompt_content": """You are a highly skilled AI creative director and visual concept designer.
 Your job is to generate structured, high-quality visual prompt suggestions for an AI image generation system.
 
@@ -45,8 +45,9 @@ Instructions:
 3. Make sure the ideas are cohesive and realistic to implement in a fashion/product photography or advertising context.
 4. Each category must contain short, descriptive, and clear prompts suitable for use with AI image generation tools.
 
-Generate JSON containing 5 types:
+Generate JSON containing 6 types:
 - Themes
+- Outfits
 - Backgrounds/Backdrops
 - Poses
 - Locations
@@ -70,6 +71,7 @@ USER-UPLOADED REFERENCE IMAGES (ANALYZE THESE IN DETAIL):
 
 SELECTED SUGGESTIONS (use only for categories without uploaded images):
 Themes: {themes}
+Outfits: {outfits}
 Backgrounds: {backgrounds}
 Poses: {poses}
 Locations: {locations}
@@ -112,6 +114,7 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 
 Collection Description: {collection_description}
 Selected Themes: {themes}
+Selected Outfits: {outfits}
 Selected Backgrounds: {backgrounds}
 Selected Poses: {poses}
 Selected Locations: {locations}
@@ -132,11 +135,11 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
             "instructions": """# INSTRUCTIONS:
 # 1. Analyze the collection description and user selections carefully
 # 2. Create prompts that are specific, detailed, and actionable for AI image generation
-# 3. Ensure prompts match the selected themes, backgrounds, poses, locations, and colors
+# 3. Ensure prompts match the selected themes, outfits, backgrounds, poses, locations, and colors
 # 4. Maintain consistency across all four prompt types
 # 5. Focus on product clarity and professional photography standards""",
             "rules": """RULES FOR PROMPT CREATION:
-1. Use the selected themes, backgrounds, poses, locations, and colors as primary guidance
+1. Use the selected themes, outfits, backgrounds, poses, locations, and colors as primary guidance
 2. Be specific — describe lighting, materials, perspective, model type, emotion, and background details
 3. Keep prompts actionable and detailed for AI image generation systems
 4. COLOR PRIORITY: If picked colors are provided, use them as the primary color scheme. If only selected suggestions are provided, use those instead
@@ -846,6 +849,14 @@ def get_prompt_from_db(prompt_key, default_prompt=None, **format_kwargs):
             prompt_key=prompt_key, is_active=True).first()
         if prompt:
             prompt_content = prompt.prompt_content
+            # Backward-compatibility patch: inject outfit placeholders into legacy DB prompts.
+            if prompt_key == "suggestion_prompt_base" and "- Outfits" not in prompt_content:
+                prompt_content = prompt_content.replace("- Themes", "- Themes\n- Outfits")
+                prompt_content = prompt_content.replace("Generate JSON containing 5 types:", "Generate JSON containing 6 types:")
+            if prompt_key == "generation_prompt_with_images" and "Outfits: {outfits}" not in prompt_content:
+                prompt_content = prompt_content.replace("Themes: {themes}", "Themes: {themes}\nOutfits: {outfits}")
+            if prompt_key == "generation_prompt_simple" and "Selected Outfits: {outfits}" not in prompt_content:
+                prompt_content = prompt_content.replace("Selected Themes: {themes}", "Selected Themes: {themes}\nSelected Outfits: {outfits}")
             instructions = prompt.instructions or ""
             rules = prompt.rules or ""
 
