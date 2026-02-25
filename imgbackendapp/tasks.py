@@ -1277,19 +1277,35 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         # Get the previous generated image URL from Cloudinary
         prev_generated_url = prev_doc.generated_image_url
 
-        # Combine the original prompt with the new prompt; include stored reference analysis if any
+        # Build prompt using admin-configured regeneration prompt (same for all types: white background, background replace, model, campaign)
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
         reference_analysis = getattr(prev_doc, "reference_analysis", None) or ""
-        ref_prefix = f"Reference context: {reference_analysis}. " if reference_analysis else ""
-        combined_prompt = f"{ref_prefix}{original_prompt}. {new_prompt}"
         measurements = getattr(prev_doc, "measurements", None)
-        measurements_text = f"measurements: {measurements}. " if measurements else ""
-        
+        measurements_placeholder = f"measurements: {measurements}. " if measurements else ""
+        image_type = getattr(prev_doc, "type", None) or ""
+
+        from probackendapp.prompt_initializer import get_prompt_from_db
+        default_regen_prompt = (
+            "Reference context: {reference_analysis}. {original_prompt}. User modifications: {new_prompt}. {measurements}"
+        )
+        combined_prompt = get_prompt_from_db(
+            "image_regeneration_prompt",
+            default_prompt=default_regen_prompt,
+            reference_analysis=reference_analysis,
+            original_prompt=original_prompt or "",
+            new_prompt=new_prompt or "",
+            measurements=measurements_placeholder,
+            image_type=image_type,
+        )
+        if not combined_prompt:
+            combined_prompt = f"Reference context: {reference_analysis}. {original_prompt}. {new_prompt}. {measurements_placeholder}"
+        measurements_text = measurements_placeholder
+
         # Download the previous generated image from Cloudinary
         with urlopen(prev_generated_url) as resp:
             img_bytes = resp.read()
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-
+        
         # Generate new image using Gemini
         generated_bytes = None
 
@@ -1359,6 +1375,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
             else:
                 raise Exception(
                     "Could not process image using fallback method.")
+       
 
         # Save regenerated image locally
         regen_filename = f"regen_{image_id}_{int(time.time())}.jpg"
@@ -1415,6 +1432,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
                     "model_image_url": getattr(prev_doc, 'model_image_url', None)
                 }
             )
+            
         except Exception as history_error:
             print(f"Error tracking regeneration history: {history_error}")
 
