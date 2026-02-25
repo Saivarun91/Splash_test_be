@@ -353,3 +353,50 @@ def deduct_user_credits(user, amount, reason="Image generation", project=None, m
             'message': f'Error deducting credits: {str(e)}',
             'balance_after': user.credit_balance if user else 0
         }
+
+
+def add_user_credits(user, amount, reason="Credit top-up", metadata=None):
+    """
+    Add credits to a single user (not in any organization) and record a ledger entry.
+    So the credits usage logs show both debits (usage) and credits (top-ups).
+
+    Args:
+        user: User instance
+        amount: Number of credits to add
+        reason: Reason for credit addition
+        metadata: Optional metadata dict
+
+    Returns:
+        dict: {'success': bool, 'message': str, 'balance_after': int}
+    """
+    try:
+        user.reload()
+        user.credit_balance = (user.credit_balance or 0) + amount
+        user.updated_at = datetime.utcnow()
+        user.save()
+
+        CreditLedger(
+            user=user,
+            organization=None,
+            project=None,
+            change_type="credit",
+            credits_changed=amount,
+            balance_after=user.credit_balance,
+            reason=reason,
+            metadata=metadata or {},
+            created_by=user,
+            updated_by=user,
+            updated_at=datetime.utcnow()
+        ).save()
+
+        return {
+            'success': True,
+            'message': 'Credits added successfully',
+            'balance_after': user.credit_balance
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f'Error adding credits: {str(e)}',
+            'balance_after': user.credit_balance if user else 0
+        }

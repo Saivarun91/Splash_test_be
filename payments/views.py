@@ -10,7 +10,7 @@ from users.models import User, Role
 from plans.models import Plan
 from .models import PaymentTransaction, ContactSalesSubmission
 from invoices.models import InvoiceConfig
-from CREDITS.utils import add_credits
+from CREDITS.utils import add_credits, add_user_credits
 import json
 import traceback
 from django.conf import settings
@@ -305,17 +305,29 @@ def verify_razorpay_payment(request):
                     payment_transaction.save()
                     return JsonResponse({'error': f'Failed to add credits: {result["message"]}'}, status=500)
             else:
-                # Single user payment - add credits directly to user
+                # Single user payment - add credits and record ledger entry (so logs show all usage)
                 user = payment_transaction.user
-                user.credit_balance = (user.credit_balance or 0) + payment_transaction.credits
-                
+                result = add_user_credits(
+                    user,
+                    payment_transaction.credits,
+                    reason=f"Credit purchase via Razorpay - Order: {order_id}",
+                    metadata={
+                        'payment_id': payment_id,
+                        'order_id': order_id,
+                        'amount': payment_transaction.amount
+                    }
+                )
+                if not result['success']:
+                    payment_transaction.status = 'failed'
+                    payment_transaction.save()
+                    return JsonResponse({'error': result['message']}, status=500)
+                balance_after = result['balance_after']
                 # If this is a plan subscription, update user's plan
                 if payment_transaction.plan:
+                    user.reload()
                     user.plan = payment_transaction.plan
-                
-                user.save()
-                balance_after = user.credit_balance
-            
+                    user.save()
+
             # Update payment transaction
             payment_transaction.razorpay_payment_id = payment_id
             payment_transaction.razorpay_signature = signature

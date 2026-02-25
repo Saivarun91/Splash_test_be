@@ -311,8 +311,8 @@ def organization_credit_summary(request, organization_id):
 @authenticate
 def user_credit_usage(request):
     """
-    Get credit usage for the authenticated user (individual user, no organization).
-    Returns ledger entries where user=request.user and organization is None.
+    Get all credit usage for the authenticated user (individual and organization).
+    Returns all ledger entries where user=request.user so the logs page shows full history.
     """
     try:
         user = request.user
@@ -320,7 +320,7 @@ def user_credit_usage(request):
         end_date = request.GET.get('end_date')
         change_type = request.GET.get('change_type')
 
-        query = Q(user=user) & (Q(organization=None) | Q(organization__exists=False))
+        query = Q(user=user)
 
         if start_date:
             try:
