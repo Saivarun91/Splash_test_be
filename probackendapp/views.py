@@ -484,71 +484,55 @@ def generate_ai_images_background(collection_id, user_id):
     IMPORTANT: After changing this function, restart the Celery worker so it
     loads the new code (e.g. stop and run: celery -A imgbackend worker -l info -P solo -c 1).
     """
-    # === Credit Check and Deduction ===
-    from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings , deduct_user_credits
+    # === Credit: reserve (lock) then complete or release after generation ===
+    from CREDITS.utils import (
+        reserve_credits,
+        complete_reservation,
+        release_reservation,
+        get_user_organization,
+        get_credit_settings,
+    )
     from users.models import User
 
-    # Get dynamic credit settings
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings['credits_per_image_generation']
-    # This function generates 4 AI model images, so total credits = 4 * 2 = 8
     TOTAL_IMAGES_TO_GENERATE = 4
     TOTAL_CREDITS_NEEDED = TOTAL_IMAGES_TO_GENERATE * CREDITS_PER_IMAGE
 
-    # Get user
     user = User.objects(id=user_id).first()
     if not user:
         return {"success": False, "error": "User not found"}
 
-    # Get collection first to access project
     try:
         collection = Collection.objects.get(id=collection_id)
     except Collection.DoesNotExist:
         return {"success": False, "error": "Collection not found."}
 
-    # Check if user has organization - if not, allow generation without credit deduction
-    # === Credit Check and Deduction ===
     organization = get_user_organization(user)
-
-# Determine who pays
-    if organization:
-        credit_result = deduct_credits(
-            organization=organization,
-            user=user,
-            amount=TOTAL_CREDITS_NEEDED,
-            reason=f"AI model images generation ({TOTAL_IMAGES_TO_GENERATE} images)",
-            project=collection.project if hasattr(collection, 'project') else None,
-            metadata={
-                "type": "generate_ai_images_background",
-                "total_images": TOTAL_IMAGES_TO_GENERATE,
-                "wallet_type": "organization"
-            }
-        )
-    else:
-        credit_result = deduct_user_credits(
-            user=user,
-            amount=TOTAL_CREDITS_NEEDED,
-            reason=f"AI model images generation ({TOTAL_IMAGES_TO_GENERATE} images)",
-            project=collection.project if hasattr(collection, 'project') else None,
-            metadata={
-                "type": "generate_ai_images_background",
-                "total_images": TOTAL_IMAGES_TO_GENERATE,
-                "wallet_type": "user"
-            }
-        )
-
+    credit_result = reserve_credits(
+        organization=organization,
+        user=user,
+        amount=TOTAL_CREDITS_NEEDED,
+        reason=f"AI model images generation ({TOTAL_IMAGES_TO_GENERATE} images)",
+        project=collection.project if hasattr(collection, 'project') else None,
+        metadata={
+            "type": "generate_ai_images_background",
+            "total_images": TOTAL_IMAGES_TO_GENERATE,
+            "wallet_type": "organization" if organization else "user",
+        },
+    )
     if not credit_result['success']:
         return {"success": False, "error": credit_result['message']}
+    reservation_id = credit_result['reservation_id']
 
-    # If no organization, allow generation to proceed without credit deduction
+    if not has_genai:
+        release_reservation(reservation_id)
+        return {"success": False, "error": "Gemini SDK not available."}
 
     description = (getattr(collection, "description", "") or "").strip()
     # target_audience = (getattr(collection, "target_audience", "") or "").strip()
     # campaign_season = (getattr(collection, "campaign_season", "") or "").strip()
     generated_images = []
-
-    if not has_genai:
-        return {"success": False, "error": "Gemini SDK not available."}
 
     client = genai.Client(api_key=settings.GOOGLE_API_KEY)
     model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
@@ -710,6 +694,12 @@ def generate_ai_images_background(collection_id, user_id):
         report_handled_exception(e, context={"user_id": user_id})
         print(f"⚠️ Error collecting saved images: {e}")
         traceback.print_exc()
+
+    # Complete (deduct) only if at least one image was generated; otherwise release
+    if len(generated_images) > 0:
+        complete_reservation(reservation_id)
+    else:
+        release_reservation(reservation_id)
 
     return {
         "success": True,
@@ -1593,86 +1583,73 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
 
     from .job_models import ImageGenerationJob
 
+    from CREDITS.utils import (
+        reserve_credits,
+        complete_reservation,
+        release_reservation,
+        get_user_organization,
+        get_credit_settings,
+    )
+    from users.models import User
+
+    credit_settings = get_credit_settings()
+    CREDITS_PER_IMAGE = credit_settings['credits_per_image_generation']
+    user = User.objects(id=user_id).first()
+    if not user:
+        return {"success": False, "error": "User not found"}
+
     try:
-        # === Credit Check and Deduction ===
-        from CREDITS.utils import (
-            deduct_credits,
-            get_user_organization,
-            get_credit_settings,
-            deduct_user_credits
-        )
-        from users.models import User
-
-        # Get dynamic credit settings
-        credit_settings = get_credit_settings()
-        CREDITS_PER_IMAGE = credit_settings['credits_per_image_generation']
-
-        # Get user
-        user = User.objects(id=user_id).first()
-        if not user:
-            return {"success": False, "error": "User not found"}
-
-        # Get collection first to access project
         collection = Collection.objects.get(id=collection_id)
+    except Collection.DoesNotExist:
+        return {"success": False, "error": "Collection not found."}
 
-        # Determine who pays
-        organization = get_user_organization(user)
+    organization = get_user_organization(user)
+    credit_result = reserve_credits(
+        organization=organization,
+        user=user,
+        amount=CREDITS_PER_IMAGE,
+        reason=f"Product model image generation - {prompt_key}",
+        project=collection.project if hasattr(collection, 'project') else None,
+        metadata={
+            "type": "product_model_image",
+            "prompt_key": prompt_key,
+            "product_index": product_index,
+            "wallet_type": "organization" if organization else "user",
+        },
+    )
+    if not credit_result.get("success"):
+        return {"success": False, "error": credit_result.get("message", "Credit deduction failed")}
+    reservation_id = credit_result["reservation_id"]
 
-        if organization:
-            credit_result = deduct_credits(
-                organization=organization,
-                user=user,
-                amount=CREDITS_PER_IMAGE,
-                reason=f"Product model image generation - {prompt_key}",
-                project=collection.project if hasattr(collection, 'project') else None,
-                metadata={
-                    "type": "product_model_image",
-                    "prompt_key": prompt_key,
-                    "product_index": product_index,
-                    "wallet_type": "organization"
-                }
-            )
-        else:
-            credit_result = deduct_user_credits(
-                user=user,
-                amount=CREDITS_PER_IMAGE,
-                reason=f"Product model image generation - {prompt_key}",
-                project=collection.project if hasattr(collection, 'project') else None,
-                metadata={
-                    "type": "product_model_image",
-                    "prompt_key": prompt_key,
-                    "product_index": product_index,
-                    "wallet_type": "user"
-                }
-            )
-
-        # Stop if deduction failed
-        if not credit_result.get("success"):
-            return {"success": False, "error": credit_result.get("message", "Credit deduction failed")}
+    try:
         if not collection.items:
+            release_reservation(reservation_id)
             return {"success": False, "error": "No items found in collection."}
 
         item = collection.items[0]
 
         if not hasattr(item, "selected_model") or not item.selected_model:
+            release_reservation(reservation_id)
             return {"success": False, "error": "No model selected. Please select a model first."}
 
         selected_model = item.selected_model
         model_local_path = selected_model.get("local")
         model_cloud_url = selected_model.get("cloud")
 
-        # Check if model local path exists, if not try to download from cloud URL
         if not model_local_path or not os.path.exists(model_local_path):
+            release_reservation(reservation_id)
             return {"success": False, "error": "Selected model image not found on server."}
 
         if not hasattr(item, "generated_prompts") or not item.generated_prompts:
+            release_reservation(reservation_id)
             return {"success": False, "error": "No generated prompts found."}
 
-        # Bound check for product index
         if product_index < 0 or product_index >= len(item.product_images):
+            release_reservation(reservation_id)
             return {"success": False, "error": "Invalid product index."}
 
         if prompt_key not in item.generated_prompts:
+            release_reservation(reservation_id)
             return {"success": False, "error": f"Prompt key '{prompt_key}' not found."}
 
         # Read model image once
@@ -2060,6 +2037,7 @@ Follow this specific style prompt: {prompt_text}"""
                 print(
                     f"Error updating ImageGenerationJob {job_id}: {job_error}")
 
+        complete_reservation(reservation_id)
         return {
             "success": True,
             "cloud_url": cloud_upload["secure_url"],
@@ -2071,6 +2049,10 @@ Follow this specific style prompt: {prompt_text}"""
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, context={"user_id": user_id, "path": "generate_single_product_model_image_background", "job_id": job_id})
+        try:
+            release_reservation(reservation_id)
+        except Exception:
+            pass
         if job_id:
             try:
                 job = ImageGenerationJob.objects(job_id=job_id).first()
@@ -3326,31 +3308,31 @@ def regenerate_product_model_image(request, collection_id):
     # Get user from authentication middleware
     user = request.user
 
-    # === Credit Check and Deduction ===
-    from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
+    # === Credit: reserve (lock) then complete or release after regeneration ===
+    from CREDITS.utils import (
+        reserve_credits,
+        complete_reservation,
+        release_reservation,
+        get_user_organization,
+        get_credit_settings,
+    )
     from users.models import Role
 
-    # Get dynamic credit settings
     credit_settings = get_credit_settings()
     CREDITS_PER_REGENERATION = credit_settings['credits_per_regeneration']
-
-    # Check if user has organization - if not, allow generation without credit deduction
     organization = get_user_organization(user)
+    reservation_id = None
     if organization:
-        # Check and deduct credits before regeneration
-        credit_result = deduct_credits(
+        credit_result = reserve_credits(
             organization=organization,
             user=user,
             amount=CREDITS_PER_REGENERATION,
             reason="Product model image regeneration",
-            project=None,
-            metadata={"type": "regenerate_product_model_image",
-                      "collection_id": collection_id}
+            metadata={"type": "regenerate_product_model_image", "collection_id": collection_id},
         )
-
         if not credit_result['success']:
             return Response({"success": False, "error": credit_result['message']}, status=400)
-    # If no organization, allow generation to proceed without credit deduction
+        reservation_id = credit_result['reservation_id']
 
     try:
         data = json.loads(request.body)
@@ -3364,6 +3346,8 @@ def regenerate_product_model_image(request, collection_id):
         if not (product_image_path and generated_image_path):
             print("Missing parameters", product_image_path,
                   generated_image_path, new_prompt)
+            if reservation_id:
+                release_reservation(reservation_id)
             return Response({"success": False, "error": "Missing parameters"}, status=400)
 
         # Load collection and item
@@ -3402,6 +3386,8 @@ def regenerate_product_model_image(request, collection_id):
                 break
 
         if not target_generated:
+            if reservation_id:
+                release_reservation(reservation_id)
             return Response({"success": False, "error": "Generated image not found"}, status=404)
 
         # --- Google GenAI setup ---
@@ -3417,11 +3403,15 @@ def regenerate_product_model_image(request, collection_id):
                 item, 'selected_model') else None
 
         if not model_to_use:
+            if reservation_id:
+                release_reservation(reservation_id)
             return Response({"success": False, "error": "No model specified for regeneration"})
 
         # Load model image
         model_local_path = model_to_use.get("local")
         if not model_local_path or not os.path.exists(model_local_path):
+            if reservation_id:
+                release_reservation(reservation_id)
             return Response({"success": False, "error": "Model image not found"})
 
         with open(model_local_path, "rb") as f:
@@ -3430,6 +3420,8 @@ def regenerate_product_model_image(request, collection_id):
 
         # Load product image
         if not os.path.exists(product_image_path):
+            if reservation_id:
+                release_reservation(reservation_id)
             return Response({"success": False, "error": "Product image not found"})
 
         with open(product_image_path, "rb") as f:
@@ -3512,6 +3504,8 @@ def regenerate_product_model_image(request, collection_id):
                 break
 
         if not generated_bytes:
+            if reservation_id:
+                release_reservation(reservation_id)
             return Response({"success": False, "error": "No image generated by GenAI"})
 
         # --- Save new regenerated image locally ---
@@ -3579,6 +3573,8 @@ def regenerate_product_model_image(request, collection_id):
         except Exception as history_error:
             print(f"Error tracking regeneration history: {history_error}")
 
+        if reservation_id:
+            complete_reservation(reservation_id)
         return Response({
             "success": True,
             "url": cloud_url,
@@ -3596,4 +3592,9 @@ def regenerate_product_model_image(request, collection_id):
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=request)
+        if reservation_id:
+            try:
+                release_reservation(reservation_id)
+            except Exception:
+                pass
         return Response({"success": False, "error": str(e)}, status=500)

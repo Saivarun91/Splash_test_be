@@ -34,6 +34,82 @@ import jwt
 
 logger = logging.getLogger(__name__)
 
+
+def get_display_url(request, local_path=None, cloud_url=None):
+    """Return URL for viewing: local media URL if local_path exists, else cloud_url."""
+    if local_path and os.path.exists(local_path):
+        try:
+            rel = os.path.relpath(os.path.abspath(local_path), os.path.abspath(settings.MEDIA_ROOT))
+            return request.build_absolute_uri((settings.MEDIA_URL or "/media/") + rel.replace("\\", "/"))
+        except (ValueError, TypeError):
+            pass
+    return cloud_url or ""
+
+
+def _workflow_images_display_urls(request, images_list):
+    """Convert workflow category images to dicts with local URL for viewing when available."""
+    if not images_list:
+        return []
+    out = []
+    for img in images_list:
+        d = img.to_mongo().to_dict() if hasattr(img, "to_mongo") else (img if isinstance(img, dict) else {})
+        if isinstance(d, dict):
+            u = get_display_url(request, d.get("local_path"), d.get("cloud_url"))
+            d = dict(d)
+            d["cloud_url"] = u
+        out.append(d)
+    return out
+
+
+def _model_images_with_display_urls(request, uploaded_model_images, selected_model):
+    """Return uploaded_model_images and selected_model with local URLs for viewing when available."""
+    models = list(uploaded_model_images or [])
+    out_models = []
+    for m in models:
+        if not isinstance(m, dict):
+            out_models.append(m)
+            continue
+        url = get_display_url(request, m.get("local"), m.get("cloud"))
+        out_models.append(dict(m, cloud=url))
+    sel = selected_model if isinstance(selected_model, dict) else None
+    out_sel = None
+    if sel and (sel.get("local") or sel.get("cloud")):
+        out_sel = dict(sel, cloud=get_display_url(request, sel.get("local"), sel.get("cloud")))
+    return out_models, out_sel
+
+
+def _product_images_with_display_urls(request, product_images):
+    """Serialize product_images with local URLs for viewing when available."""
+    out = []
+    for product_img in product_images:
+        uploaded_url = get_display_url(
+            request,
+            getattr(product_img, "uploaded_image_path", None),
+            getattr(product_img, "uploaded_image_url", None),
+        )
+        generated = getattr(product_img, "generated_images", None) or []
+        generated_with_urls = []
+        for g in generated:
+            if not isinstance(g, dict):
+                generated_with_urls.append(g)
+                continue
+            disp = get_display_url(request, g.get("local_path"), g.get("image_url") or g.get("cloud_url"))
+            entry = dict(g)
+            entry["image_url"] = disp
+            if "cloud_url" in entry:
+                entry["cloud_url"] = disp
+            generated_with_urls.append(entry)
+        out.append({
+            "uploaded_image_url": uploaded_url,
+            "uploaded_image_path": getattr(product_img, "uploaded_image_path", None),
+            "generated_images": generated_with_urls,
+            "generation_selections": getattr(product_img, "generation_selections", None) or {
+                "plainBg": False, "bgReplace": False, "model": False, "campaign": False
+            },
+        })
+    return out
+
+
 # -------------------------
 # Project API Views
 # -------------------------
@@ -433,34 +509,21 @@ def api_project_detail(request, project_id):
                     'selected_poses': item.selected_poses or [],
                     'selected_locations': item.selected_locations or [],
                     'selected_colors': item.selected_colors or [],
-                    'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images],
-                    'uploaded_outfit_images': [img.to_mongo().to_dict() for img in item.uploaded_outfit_images],
-                    'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images],
-                    'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
-                    'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
-                    'uploaded_color_images': [img.to_mongo().to_dict() for img in item.uploaded_color_images],
+                    'uploaded_theme_images': _workflow_images_display_urls(request, item.uploaded_theme_images),
+                    'uploaded_outfit_images': _workflow_images_display_urls(request, item.uploaded_outfit_images),
+                    'uploaded_background_images': _workflow_images_display_urls(request, item.uploaded_background_images),
+                    'uploaded_pose_images': _workflow_images_display_urls(request, item.uploaded_pose_images),
+                    'uploaded_location_images': _workflow_images_display_urls(request, item.uploaded_location_images),
+                    'uploaded_color_images': _workflow_images_display_urls(request, item.uploaded_color_images),
                     'generated_prompts': item.generated_prompts or {},
                     'generated_model_images': item.generated_model_images or [],
                     'moodboard_explanation': item.moodboard_explanation or "",
-                    'uploaded_model_images': item.uploaded_model_images or [],
-                    'selected_model': item.selected_model if hasattr(item, 'selected_model') else None,
                     'product_images': []
                 }
-
-                # Add product images data
-                for product_img in item.product_images:
-                    product_data = {
-                        'uploaded_image_url': product_img.uploaded_image_url,
-                        'uploaded_image_path': product_img.uploaded_image_path,
-                        'generated_images': product_img.generated_images or [],
-                        'generation_selections': product_img.generation_selections if hasattr(product_img, 'generation_selections') and product_img.generation_selections else {
-                            'plainBg': False,
-                            'bgReplace': False,
-                            'model': False,
-                            'campaign': False
-                        }
-                    }
-                    item_data['product_images'].append(product_data)
+                item_data['uploaded_model_images'], item_data['selected_model'] = _model_images_with_display_urls(
+                    request, item.uploaded_model_images, getattr(item, 'selected_model', None))
+                # Add product images data (use local URLs for viewing when available)
+                item_data['product_images'] = _product_images_with_display_urls(request, item.product_images)
 
                 project_data['collection']['items'].append(item_data)
         # print("project_data", project_data)
@@ -641,35 +704,23 @@ def api_collection_detail(request, collection_id):
                 'selected_poses': item.selected_poses or [],
                 'selected_locations': item.selected_locations or [],
                 'selected_colors': item.selected_colors or [],
-                'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images],
-                'uploaded_outfit_images': [img.to_mongo().to_dict() for img in item.uploaded_outfit_images],
-                'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images],
-                'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
-                'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
-                'uploaded_color_images': [img.to_mongo().to_dict() for img in item.uploaded_color_images],
+                'uploaded_theme_images': _workflow_images_display_urls(request, item.uploaded_theme_images),
+                'uploaded_outfit_images': _workflow_images_display_urls(request, item.uploaded_outfit_images),
+                'uploaded_background_images': _workflow_images_display_urls(request, item.uploaded_background_images),
+                'uploaded_pose_images': _workflow_images_display_urls(request, item.uploaded_pose_images),
+                'uploaded_location_images': _workflow_images_display_urls(request, item.uploaded_location_images),
+                'uploaded_color_images': _workflow_images_display_urls(request, item.uploaded_color_images),
                 'generated_prompts': item.generated_prompts or {},
                 'generated_model_images': item.generated_model_images or [],
                 'picked_colors': item.picked_colors or [],
                 "global_instructions": item.global_instructions or "",
                 'moodboard_explanation': item.moodboard_explanation or "",
-                'uploaded_model_images': item.uploaded_model_images or [],
-                'selected_model': item.selected_model if hasattr(item, 'selected_model') else None,
                 'product_images': []
             }
-
-            for product_img in item.product_images:
-                product_data = {
-                    'uploaded_image_url': product_img.uploaded_image_url,
-                    'uploaded_image_path': product_img.uploaded_image_path,
-                    'generated_images': product_img.generated_images or [],
-                    'generation_selections': product_img.generation_selections if hasattr(product_img, 'generation_selections') and product_img.generation_selections else {
-                        'plainBg': False,
-                        'bgReplace': False,
-                        'model': False,
-                        'campaign': False
-                    }
-                }
-                item_data['product_images'].append(product_data)
+            item_data['uploaded_model_images'], item_data['selected_model'] = _model_images_with_display_urls(
+                request, item.uploaded_model_images, getattr(item, 'selected_model', None))
+            # Use local URLs for viewing when available
+            item_data['product_images'] = _product_images_with_display_urls(request, item.product_images)
 
             collection_data['items'].append(item_data)
 
@@ -1457,13 +1508,14 @@ def api_upload_workflow_image(request, project_id, collection_id):
         collection.items[0] = item
         collection.save()
 
-        # Return the uploaded images data
+        # Return the uploaded images data (use local URL for viewing when available)
         response_data = []
         for img in uploaded_images:
+            display_url = get_display_url(request, getattr(img, 'local_path', None), getattr(img, 'cloud_url', None))
             response_data.append({
                 'id': str(img.id) if hasattr(img, 'id') else None,
                 'local_path': img.local_path,
-                'cloud_url': img.cloud_url,
+                'cloud_url': display_url,
                 'original_filename': img.original_filename,
                 'uploaded_by': img.uploaded_by,
                 'uploaded_at': img.uploaded_at.isoformat(),
@@ -2628,10 +2680,18 @@ def api_job_images(request, job_id):
                     'product_images': []
                 }
                 for product_img in item.product_images:
+                    gen_list = product_img.generated_images or []
+                    gen_with_urls = []
+                    for g in gen_list:
+                        if isinstance(g, dict):
+                            u = get_display_url(request, g.get('local_path'), g.get('image_url') or g.get('cloud_url'))
+                            gen_with_urls.append(dict(g, image_url=u, cloud_url=u))
+                        else:
+                            gen_with_urls.append(g)
                     product_data = {
-                        'uploaded_image_url': product_img.uploaded_image_url,
+                        'uploaded_image_url': get_display_url(request, getattr(product_img, 'uploaded_image_path', None), getattr(product_img, 'uploaded_image_url', None)),
                         'uploaded_image_path': product_img.uploaded_image_path,
-                        'generated_images': product_img.generated_images or []
+                        'generated_images': gen_with_urls
                     }
                     collection_data['product_images'].append(product_data)
         except Exception as coll_error:
@@ -2683,20 +2743,28 @@ def api_collection_images_status(request, collection_id):
             for p in item.product_images
         )
 
+        products_payload = []
+        for idx, p in enumerate(item.product_images):
+            gen_list = p.generated_images or []
+            gen_with_urls = []
+            for g in gen_list:
+                if isinstance(g, dict):
+                    u = get_display_url(request, g.get('local_path'), g.get('image_url') or g.get('cloud_url'))
+                    gen_with_urls.append(dict(g, image_url=u, cloud_url=u))
+                else:
+                    gen_with_urls.append(g)
+            products_payload.append({
+                "index": idx,
+                "uploaded_image_url": get_display_url(request, getattr(p, 'uploaded_image_path', None), getattr(p, 'uploaded_image_url', None)),
+                "generated_count": len(gen_list),
+                "generated_images": gen_with_urls
+            })
         return Response({
             "success": True,
             "has_images": total_generated > 0,
             "total_products": total_products,
             "total_generated_images": total_generated,
-            "products": [
-                {
-                    "index": idx,
-                    "uploaded_image_url": p.uploaded_image_url,
-                    "generated_count": len(p.generated_images) if p.generated_images else 0,
-                    "generated_images": p.generated_images or []
-                }
-                for idx, p in enumerate(item.product_images)
-            ]
+            "products": products_payload
         })
     except DoesNotExist:
         return Response({"success": False, "error": "Collection not found"}, status=404)
@@ -3354,13 +3422,13 @@ def api_recent_history(request):
         # Combine and format the results
         combined_history = []
 
-        # Add project-based history
+        # Add project-based history (use local URL for viewing when available)
         for item in project_history:
             combined_history.append({
                 'id': str(item.id),
                 'type': 'project_image',
                 'image_type': item.image_type,
-                'image_url': item.image_url,
+                'image_url': get_display_url(request, getattr(item, 'local_path', None), getattr(item, 'image_url', None)),
                 'prompt': item.prompt,
                 'original_prompt': item.original_prompt,
                 'parent_image_id': item.parent_image_id,
@@ -3375,13 +3443,19 @@ def api_recent_history(request):
                 'metadata': item.metadata or {}
             })
 
-        # Add individual image history
+        # Add individual image history (local URLs from imgbackend)
         for item in individual_history:
+            img_url = item.generated_image_url
+            if img_url and isinstance(img_url, str) and img_url.startswith("/") and not img_url.startswith("//"):
+                img_url = request.build_absolute_uri(img_url)
+            up_url = item.uploaded_image_url
+            if up_url and isinstance(up_url, str) and up_url.startswith("/") and not up_url.startswith("//"):
+                up_url = request.build_absolute_uri(up_url)
             combined_history.append({
                 'id': str(item.id),
                 'type': 'individual_image',
                 'image_type': item.type,
-                'image_url': item.generated_image_url,
+                'image_url': img_url,
                 'prompt': item.prompt,
                 'original_prompt': item.original_prompt,
                 'parent_image_id': str(item.parent_image_id) if item.parent_image_id else None,
@@ -3389,7 +3463,7 @@ def api_recent_history(request):
                 'project': None,
                 'collection': None,
                 'metadata': {
-                    'uploaded_image_url': item.uploaded_image_url,
+                    'uploaded_image_url': up_url,
                     'model_image_url': getattr(item, 'model_image_url', None)
                 }
             })
@@ -3734,7 +3808,7 @@ def api_collection_history(request, collection_id):
                     filtered_history.append(item)
             collection_history = filtered_history
 
-        # Get product images from collection to match with history
+        # Get product images from collection to match with history (use local URLs for viewing)
         product_images_map = {}
         if collection.items:
             for item in collection.items:
@@ -3742,7 +3816,7 @@ def api_collection_history(request, collection_id):
                     product_key = product_img.uploaded_image_path or product_img.uploaded_image_url
                     if product_key:
                         product_images_map[product_key] = {
-                            'uploaded_image_url': product_img.uploaded_image_url,
+                            'uploaded_image_url': get_display_url(request, getattr(product_img, 'uploaded_image_path', None), getattr(product_img, 'uploaded_image_url', None)),
                             'uploaded_image_path': product_img.uploaded_image_path
                         }
 
@@ -3791,11 +3865,11 @@ def api_collection_history(request, collection_id):
                     'history': []
                 }
 
-            # Add history item
+            # Add history item (use local URL for viewing when available)
             history_by_product[product_key]['history'].append({
                 'id': str(item.id),
                 'image_type': item.image_type,
-                'image_url': item.image_url,
+                'image_url': get_display_url(request, getattr(item, 'local_path', None), getattr(item, 'image_url', None)),
                 'prompt': item.prompt,
                 'original_prompt': item.original_prompt,
                 'parent_image_id': item.parent_image_id,

@@ -14,12 +14,69 @@ from CREDITS.utils import get_image_model_name
 from PIL import Image
 import numpy as np
 import cv2
-import cloudinary.uploader
 from .mongo_models import OrnamentMongo
 from .models import Ornament
 from bson import ObjectId
 from common.error_reporter import report_handled_exception
 from common.user_friendly_errors import get_user_friendly_message
+
+
+def _path_to_media_url(full_path):
+    """Convert absolute file path under MEDIA_ROOT to relative URL (e.g. /media/generated_ornaments/x.jpg)."""
+    if not full_path or not getattr(settings, "MEDIA_ROOT", None):
+        return full_path
+    try:
+        rel = os.path.relpath(
+            os.path.abspath(full_path), os.path.abspath(settings.MEDIA_ROOT)
+        )
+        return (settings.MEDIA_URL + rel).replace("\\", "/")
+    except (ValueError, TypeError):
+        return full_path
+
+
+def _url_or_path_to_bytes(url_or_path):
+    """Get image bytes from either a local /media/ URL/path or a remote http URL."""
+    if not url_or_path:
+        return None
+    try:
+        if url_or_path.startswith("/") and getattr(settings, "MEDIA_URL", "").rstrip("/") in url_or_path:
+            # Local media URL: /media/generated_ornaments/foo.jpg -> MEDIA_ROOT/generated_ornaments/foo.jpg
+            prefix = (settings.MEDIA_URL or "/media/").rstrip("/")
+            rel = url_or_path[len(prefix):].lstrip("/")
+            local_path = os.path.join(settings.MEDIA_ROOT, rel.replace("/", os.sep))
+            if os.path.exists(local_path):
+                with open(local_path, "rb") as f:
+                    return f.read()
+        if not url_or_path.startswith("http"):
+            # Treat as filesystem path
+            if os.path.exists(url_or_path):
+                with open(url_or_path, "rb") as f:
+                    return f.read()
+            abs_path = os.path.join(settings.MEDIA_ROOT, url_or_path.lstrip("/").replace("/", os.sep))
+            if os.path.exists(abs_path):
+                with open(abs_path, "rb") as f:
+                    return f.read()
+        # Remote URL
+        from urllib.request import urlopen
+        with urlopen(url_or_path) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
+
+def _finish_credit_reservation(credit_reservation_id, success, task_self=None):
+    """On success: complete (deduct). On failure: release only when not retrying."""
+    if not credit_reservation_id:
+        return
+    from CREDITS.utils import complete_reservation, release_reservation
+    if success:
+        complete_reservation(credit_reservation_id)
+    else:
+        max_retries = getattr(task_self, "max_retries", 3)
+        retries = getattr(getattr(task_self, "request", None), "retries", 0)
+        if retries >= max_retries:
+            release_reservation(credit_reservation_id)
+
 
 # Check for Gemini SDK
 try:
@@ -83,7 +140,7 @@ def analyze_reference_image_with_genai(image_path, context):
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_prompt, dimension):
+def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_prompt, dimension, credit_reservation_id=None):
     """
     Celery task to generate white background image.
     
@@ -195,35 +252,24 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
                 raise Exception(
                     "Could not extract ornament using fallback method.")
 
-        # Upload original and generated to Cloudinary
-        ornament_buf = BytesIO(img_bytes)
-        ornament_buf.seek(0)
-        upload_orig = cloudinary.uploader.upload(
-            ornament_buf,
-            folder="ornaments",
-            public_id=f"ornament_original_{ornament.id}",
-            overwrite=True
-        )
-        uploaded_image_url = upload_orig["secure_url"]
+        # Save generated image locally and use local URLs for viewing
+        filename = f"{ornament.id}_generated.jpg"
+        gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
+        os.makedirs(gen_dir, exist_ok=True)
+        local_generated_path = os.path.join(gen_dir, filename)
+        with open(local_generated_path, "wb") as f:
+            f.write(generated_bytes)
 
-        buf = BytesIO(generated_bytes)
-        buf.seek(0)
-        upload_gen = cloudinary.uploader.upload(
-            buf,
-            folder="ornaments",
-            public_id=f"ornament_generated_{ornament.id}",
-            overwrite=True
-        )
-        generated_image_url = upload_gen["secure_url"]
+        uploaded_image_url = _path_to_media_url(ornament.image.path)
+        generated_image_url = _path_to_media_url(local_generated_path)
 
         # Save in MongoDB
-        filename = f"{ornament.id}_generated.jpg"
         ornament_doc = OrnamentMongo(
             prompt=text_prompt,
             uploaded_image_url=uploaded_image_url,
             generated_image_url=generated_image_url,
             uploaded_image_path=ornament.image.path,
-            generated_image_path=filename,
+            generated_image_path=local_generated_path,
             type="white_background",
             user_id=user_id,
             original_prompt=text_prompt
@@ -252,6 +298,7 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
         ornament.generated_image.save(
             filename, ContentFile(generated_bytes), save=True)
 
+        _finish_credit_reservation(credit_reservation_id, True, self)
         return {
             "success": True,
             "message": "Image generated successfully",
@@ -266,6 +313,7 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
+        _finish_credit_reservation(credit_reservation_id, False, self)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -302,15 +350,10 @@ def generate_white_background_batch_task(
             text_prompt = f"{text_prompt} Generate the image in {dimension} aspect ratio (width:height)."
 
         results = []
-        ornament_buf = BytesIO(img_bytes)
-        ornament_buf.seek(0)
-        upload_orig = cloudinary.uploader.upload(
-            ornament_buf,
-            folder="ornaments",
-            public_id=f"ornament_original_{ornament.id}",
-            overwrite=True,
-        )
-        uploaded_image_url = upload_orig["secure_url"]
+        uploaded_image_url = _path_to_media_url(ornament.image.path)
+
+        gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
+        os.makedirs(gen_dir, exist_ok=True)
 
         for index in range(num_images):
             generated_bytes = None
@@ -374,20 +417,18 @@ def generate_white_background_batch_task(
                 })
                 continue
 
-            buf = BytesIO(generated_bytes)
-            buf.seek(0)
-            public_id = f"ornament_generated_{ornament.id}_batch_{index}"
-            upload_gen = cloudinary.uploader.upload(
-                buf, folder="ornaments", public_id=public_id, overwrite=True
-            )
-            generated_image_url = upload_gen["secure_url"]
             filename = f"{ornament.id}_generated_batch_{index}.jpg"
+            local_generated_path = os.path.join(gen_dir, filename)
+            with open(local_generated_path, "wb") as f:
+                f.write(generated_bytes)
+            generated_image_url = _path_to_media_url(local_generated_path)
+
             ornament_doc = OrnamentMongo(
                 prompt=text_prompt,
                 uploaded_image_url=uploaded_image_url,
                 generated_image_url=generated_image_url,
                 uploaded_image_path=ornament.image.path,
-                generated_image_path=filename,
+                generated_image_path=local_generated_path,
                 type="white_background",
                 user_id=user_id,
                 original_prompt=text_prompt,
@@ -439,7 +480,7 @@ def generate_white_background_batch_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def change_background_task(self, uploaded_image_path, user_id, bg_color, background_image_path, prompt, dimension, batch_index=None, reference_analysis=None):
+def change_background_task(self, uploaded_image_path, user_id, bg_color, background_image_path, prompt, dimension, batch_index=None, reference_analysis=None, credit_reservation_id=None):
     """
     Celery task to change background of an image.
     When batch_index is set, uses unique paths/ids for multi-image generation.
@@ -571,16 +612,7 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
         base_name = os.path.splitext(os.path.basename(uploaded_image_path))[0]
         suffix = f"_batch_{batch_index}" if batch_index is not None else ""
 
-        # Upload original ornament to Cloudinary (only once for batch index 0, or unique per index)
-        uploaded_result = cloudinary.uploader.upload(
-            uploaded_image_path,
-            folder="ornaments_originals",
-            public_id=f"ornament_original_{base_name}{suffix}",
-            overwrite=True
-        )
-        uploaded_url = uploaded_result["secure_url"]
-
-        # Save generated image locally
+        # Save generated image locally and use local URLs for viewing
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
         local_generated_path = os.path.join(
@@ -589,14 +621,8 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
-        # Upload final generated image
-        upload_result = cloudinary.uploader.upload(
-            local_generated_path,
-            folder="ornaments_bg_change",
-            public_id=f"ornament_bg_{base_name}{suffix}",
-            overwrite=True
-        )
-        generated_url = upload_result['secure_url']
+        uploaded_url = _path_to_media_url(uploaded_image_path)
+        generated_url = _path_to_media_url(local_generated_path)
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
@@ -612,6 +638,7 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
         )
         ornament_doc.save()
 
+        _finish_credit_reservation(credit_reservation_id, True, self)
         return {
             "success": True,
             "message": "Background changed successfully",
@@ -625,6 +652,7 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
+        _finish_credit_reservation(credit_reservation_id, False, self)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -634,7 +662,7 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None, reference_analysis=None):
+def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None, reference_analysis=None, credit_reservation_id=None):
     """
     Celery task to generate model with ornament. Use batch_index for multi-image generation.
     reference_analysis: optional text from analyzing the pose/reference image (model).
@@ -744,16 +772,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         base_name = os.path.splitext(os.path.basename(ornament_image_path))[0]
         suffix = f"_batch_{batch_index}" if batch_index is not None else ""
 
-        # Upload ornament to Cloudinary
-        uploaded_result = cloudinary.uploader.upload(
-            ornament_image_path,
-            folder="ornaments_originals",
-            public_id=f"ornament_original_{base_name}{suffix}",
-            overwrite=True
-        )
-        uploaded_url = uploaded_result["secure_url"]
-
-        # Save generated image locally
+        # Save generated image locally and use local URLs for viewing
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
         local_generated_path = os.path.join(
@@ -762,14 +781,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
-        # Upload generated image to Cloudinary
-        upload_result = cloudinary.uploader.upload(
-            local_generated_path,
-            folder="model_ornament",
-            public_id=f"ornament_generated_{base_name}{suffix}",
-            overwrite=True
-        )
-        generated_url = upload_result['secure_url']
+        uploaded_url = _path_to_media_url(ornament_image_path)
+        generated_url = _path_to_media_url(local_generated_path)
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
@@ -785,6 +798,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         )
         ornament_doc.save()
 
+        _finish_credit_reservation(credit_reservation_id, True, self)
         return {
             "status": "success",
             "message": "Generated AI close-up model wearing ornament successfully.",
@@ -799,6 +813,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
+        _finish_credit_reservation(credit_reservation_id, False, self)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -809,7 +824,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None, reference_analysis=None):
+def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, batch_index=None, reference_analysis=None, credit_reservation_id=None):
     """
     Celery task to generate real model with ornament. Use batch_index for multi-image generation.
     reference_analysis: optional text from analyzing the pose/reference image (model).
@@ -922,24 +937,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         ornament_base = os.path.splitext(os.path.basename(ornament_image_path))[0]
         suffix = f"_batch_{batch_index}" if batch_index is not None else ""
 
-        # Upload images to Cloudinary
-        model_upload = cloudinary.uploader.upload(
-            model_image_path,
-            folder="models_originals",
-            public_id=f"model_original_{model_base}{suffix}",
-            overwrite=True
-        )
-        ornament_upload = cloudinary.uploader.upload(
-            ornament_image_path,
-            folder="ornaments_originals",
-            public_id=f"ornament_original_{ornament_base}{suffix}",
-            overwrite=True
-        )
-
-        model_url = model_upload["secure_url"]
-        ornament_url = ornament_upload["secure_url"]
-
-        # Save generated image locally
+        # Save generated image locally and use local URLs for viewing
         generated_dir = os.path.join(
             settings.MEDIA_ROOT, "generated_models")
         os.makedirs(generated_dir, exist_ok=True)
@@ -949,14 +947,9 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
-        # Upload generated image to Cloudinary
-        upload_result = cloudinary.uploader.upload(
-            local_generated_path,
-            folder="real_model_output",
-            public_id=f"model_generated_{model_base}{suffix}",
-            overwrite=True
-        )
-        generated_url = upload_result["secure_url"]
+        model_url = _path_to_media_url(model_image_path)
+        ornament_url = _path_to_media_url(ornament_image_path)
+        generated_url = _path_to_media_url(local_generated_path)
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
@@ -973,6 +966,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         )
         ornament_doc.save()
 
+        _finish_credit_reservation(credit_reservation_id, True, self)
         return {
             "status": "success",
             "message": "Generated AI image of the model wearing ornament successfully.",
@@ -988,6 +982,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
+        _finish_credit_reservation(credit_reservation_id, False, self)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -1012,14 +1007,15 @@ def generate_campaign_shot_advanced_task(
     ornament_measurements='[]',
     batch_index=None,
     theme_reference_analysis=None,
+    credit_reservation_id=None,
 ):
     """
     Celery task to generate campaign shot. Use batch_index for multi-image generation.
     theme_reference_analysis: optional text from analyzing theme reference image(s) (campaign).
     """
     try:
-        # Upload ornaments to Cloudinary & encode
-        ornament_urls = []
+        # Use local URLs for ornaments (no Cloudinary upload)
+        ornament_urls = [_path_to_media_url(p) for p in ornament_image_paths]
         ornament_b64_list = []
 
         # Parse optional per-ornament measurements (JSON array of dicts)
@@ -1033,11 +1029,6 @@ def generate_campaign_shot_advanced_task(
         for idx, ornament_path in enumerate(ornament_image_paths):
             with open(ornament_path, "rb") as f:
                 ornament_bytes = f.read()
-            
-            # Upload
-            result = cloudinary.uploader.upload(
-                ornament_path, folder="ornaments", overwrite=True)
-            ornament_urls.append(result['secure_url'])
 
             # Encode
             ornament_name = ornament_names[idx] if idx < len(
@@ -1062,15 +1053,13 @@ def generate_campaign_shot_advanced_task(
                 "data": base64.b64encode(ornament_bytes).decode('utf-8')
             })
 
-        # Model upload & encoding
+        # Model: use local URL and encoding
         model_url = None
         model_b64 = None
         if model_image_path and os.path.exists(model_image_path):
             with open(model_image_path, "rb") as f:
                 model_bytes = f.read()
-            model_upload = cloudinary.uploader.upload(
-                model_image_path, folder="models", overwrite=True)
-            model_url = model_upload['secure_url']
+            model_url = _path_to_media_url(model_image_path)
             model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
         # Theme images encoding
@@ -1189,15 +1178,14 @@ def generate_campaign_shot_advanced_task(
         if not generated_bytes:
             raise Exception("No image returned from Gemini")
 
-        # Upload generated image (unique public_id when batch_index set)
-        buf = BytesIO(generated_bytes)
-        buf.seek(0)
-        public_id = f"campaign_{len(ornament_image_paths)}"
-        if batch_index is not None:
-            public_id = f"campaign_{len(ornament_image_paths)}_batch_{batch_index}"
-        upload_result = cloudinary.uploader.upload(
-            buf, folder="campaign_shots", public_id=public_id, overwrite=True)
-        generated_url = upload_result['secure_url']
+        # Save generated image locally and use local URL for viewing
+        gen_dir = os.path.join(settings.MEDIA_ROOT, "generated")
+        os.makedirs(gen_dir, exist_ok=True)
+        campaign_filename = f"campaign_{len(ornament_image_paths)}{f'_batch_{batch_index}' if batch_index is not None else ''}.jpg"
+        local_campaign_path = os.path.join(gen_dir, campaign_filename)
+        with open(local_campaign_path, "wb") as f:
+            f.write(generated_bytes)
+        generated_url = _path_to_media_url(local_campaign_path)
 
         # Save record to MongoDB
         ornament_doc = OrnamentMongo(
@@ -1207,13 +1195,14 @@ def generate_campaign_shot_advanced_task(
             uploaded_ornament_urls=ornament_urls,
             generated_image_url=generated_url,
             uploaded_image_path="Multiple ornaments",
-            generated_image_path=f"media/generated/campaign_{len(ornament_image_paths)}{f'_batch_{batch_index}' if batch_index is not None else ''}.jpg",
+            generated_image_path=local_campaign_path,
             user_id=user_id,
             original_prompt=prompt,
             reference_analysis=theme_reference_analysis or "",
         )
         ornament_doc.save()
 
+        _finish_credit_reservation(credit_reservation_id, True, self)
         return {
             "status": "success",
             "message": "Campaign shot generated successfully.",
@@ -1230,6 +1219,7 @@ def generate_campaign_shot_advanced_task(
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
+        _finish_credit_reservation(credit_reservation_id, False, self)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
@@ -1239,17 +1229,17 @@ def generate_campaign_shot_advanced_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def regenerate_image_task(self, image_id, user_id, new_prompt):
+def regenerate_image_task(self, image_id, user_id, new_prompt, credit_reservation_id=None):
     """
     Celery task to regenerate an image.
     """
     try:
-        from urllib.request import urlopen
         import re
 
         # Validate MongoDB ObjectId format
         object_id_pattern = re.compile(r'^[0-9a-fA-F]{24}$')
         if not object_id_pattern.match(image_id):
+            _finish_credit_reservation(credit_reservation_id, False, self)
             return {
                 "success": False,
                 "error": f"Invalid image_id: '{image_id}' is not a valid MongoDB ObjectId.",
@@ -1260,6 +1250,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         try:
             prev_doc = OrnamentMongo.objects.get(id=ObjectId(image_id))
         except OrnamentMongo.DoesNotExist:
+            _finish_credit_reservation(credit_reservation_id, False, self)
             return {
                 "success": False,
                 "error": "Image record not found",
@@ -1268,13 +1259,14 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
 
         # Verify that the image belongs to the user
         if prev_doc.user_id != user_id:
+            _finish_credit_reservation(credit_reservation_id, False, self)
             return {
                 "success": False,
                 "error": "You don't have permission to regenerate this image",
                 "user_friendly_message": get_user_friendly_message("permission to regenerate"),
             }
 
-        # Get the previous generated image URL from Cloudinary
+        # Get the previous generated image (local URL or Cloudinary URL)
         prev_generated_url = prev_doc.generated_image_url
 
         # Combine the original prompt with the new prompt; include stored reference analysis if any
@@ -1284,10 +1276,16 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         combined_prompt = f"{ref_prefix}{original_prompt}. {new_prompt}"
         measurements = getattr(prev_doc, "measurements", None)
         measurements_text = f"measurements: {measurements}. " if measurements else ""
-        
-        # Download the previous generated image from Cloudinary
-        with urlopen(prev_generated_url) as resp:
-            img_bytes = resp.read()
+
+        # Load previous image bytes from local path or remote URL
+        img_bytes = _url_or_path_to_bytes(prev_generated_url)
+        if not img_bytes:
+            _finish_credit_reservation(credit_reservation_id, False, self)
+            return {
+                "success": False,
+                "error": "Could not load previous image for regeneration",
+                "user_friendly_message": get_user_friendly_message("Could not load previous image"),
+            }
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
         # Generate new image using Gemini
@@ -1369,16 +1367,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         with open(local_regen_path, "wb") as f:
             f.write(generated_bytes)
 
-        # Upload regenerated image to Cloudinary
-        buf = BytesIO(generated_bytes)
-        buf.seek(0)
-        upload_result = cloudinary.uploader.upload(
-            buf,
-            folder="ornaments_regenerated",
-            public_id=f"regen_{image_id}_{int(time.time())}",
-            overwrite=True
-        )
-        regenerated_url = upload_result['secure_url']
+        regenerated_url = _path_to_media_url(local_regen_path)
 
         # Create new MongoDB document for the regenerated image
         new_doc = OrnamentMongo(
@@ -1418,6 +1407,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         except Exception as history_error:
             print(f"Error tracking regeneration history: {history_error}")
 
+        _finish_credit_reservation(credit_reservation_id, True, self)
         return {
             "success": True,
             "message": "Image regenerated successfully",
@@ -1434,6 +1424,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
+        _finish_credit_reservation(credit_reservation_id, False, self)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
