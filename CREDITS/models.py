@@ -49,6 +49,45 @@ class CreditReminderSent(Document):
     }
 
 
+class CreditReservation(Document):
+    """
+    Holds a temporary reservation (lock) on credits until image generation completes.
+    Available balance = credit_balance - sum(amount for pending reservations).
+    On success: complete_reservation() deducts from balance and creates ledger entry.
+    On failure: release_reservation() marks released so credits become available again.
+    """
+    user = ReferenceField("User", required=True)
+    organization = ReferenceField("Organization", required=False)  # None for individual user
+    project = ReferenceField("Project", required=False)
+    amount = IntField(required=True)
+    reason = StringField()
+    reference_id = StringField()  # e.g. Celery task_id or job_id
+    status = StringField(
+        choices=["pending", "completed", "released"],
+        default="pending",
+        required=True,
+    )
+    metadata = DictField()
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "credit_reservations",
+        "strict": False,
+        "indexes": [
+            "user",
+            "organization",
+            "status",
+            "reference_id",
+            {"fields": ["user", "status"]},
+            {"fields": ["organization", "status"]},
+        ],
+    }
+
+    def __str__(self):
+        return f"Reservation {self.id} {self.status} {self.amount}"
+
+
 class CreditLedger(Document):
     user = ReferenceField("User", required=True)
     organization = ReferenceField("Organization", required=False)  # Optional for single users

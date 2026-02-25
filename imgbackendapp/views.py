@@ -101,68 +101,62 @@ def upload_ornament(request):
     user = request.user
     user_id = str(user.id)
 
-    # === Credit Check and Deduction (1 image only for white-bg) ===
+    # === Credit: reserve (lock) then task will complete or release ===
     from CREDITS.utils import (
-        deduct_credits,
+        reserve_credits,
         get_user_organization,
         get_credit_settings,
-        deduct_user_credits,
+        release_reservation,
     )
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
     organization = get_user_organization(user)
-    if organization:
-        credit_result = deduct_credits(
-            organization=organization,
-            user=user,
-            amount=CREDITS_PER_IMAGE,
-            reason="White background image generation",
-            metadata={"type": "upload_ornament"},
-        )
-    else:
-        credit_result = deduct_user_credits(
-            user=user,
-            amount=CREDITS_PER_IMAGE,
-            reason="White background image generation",
-            metadata={"type": "upload_ornament"},
-        )
+    form = OrnamentForm(request.POST, request.FILES)
+    if not form.is_valid():
+        print("Form errors:", form.errors)
+        return JsonResponse({"success": False, "error": "Invalid form submission"})
+
+    credit_result = reserve_credits(
+        organization=organization,
+        user=user,
+        amount=CREDITS_PER_IMAGE,
+        reason="White background image generation",
+        reference_id=None,  # set after we have task_id
+        metadata={"type": "upload_ornament"},
+    )
     if not credit_result["success"]:
         return JsonResponse(
             {"success": False, "error": credit_result["message"]},
             status=400,
         )
+    reservation_id = credit_result["reservation_id"]
 
-    form = OrnamentForm(request.POST, request.FILES)
-    if form.is_valid():
+    try:
         ornament = form.save()
-        try:
-            bg_color = request.POST.get("background_color", "white").strip()
-            extra_prompt = request.POST.get("prompt", "").strip()
-            dimension = request.POST.get("dimension", "1:1").strip()
+        bg_color = request.POST.get("background_color", "white").strip()
+        extra_prompt = request.POST.get("prompt", "").strip()
+        dimension = request.POST.get("dimension", "1:1").strip()
 
-            task = generate_white_background_task.delay(
-                ornament_id=ornament.id,
-                user_id=user_id,
-                bg_color=bg_color,
-                extra_prompt=extra_prompt,
-                dimension=dimension,
-            )
+        task = generate_white_background_task.delay(
+            ornament_id=ornament.id,
+            user_id=user_id,
+            bg_color=bg_color,
+            extra_prompt=extra_prompt,
+            dimension=dimension,
+            credit_reservation_id=reservation_id,
+        )
 
-            return JsonResponse({
-                "success": True,
-                "message": "Image generation task started",
-                "task_id": task.id,
-                "ornament_id": ornament.id,
-                "status": "processing",
-            })
-
-        except Exception as e:
-            traceback.print_exc()
-            return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
-
-    else:
-        print("Form errors:", form.errors)
-        return JsonResponse({"success": False, "error": "Invalid form submission"})
+        return JsonResponse({
+            "success": True,
+            "message": "Image generation task started",
+            "task_id": task.id,
+            "ornament_id": ornament.id,
+            "status": "processing",
+        })
+    except Exception as e:
+        traceback.print_exc()
+        release_reservation(reservation_id)
+        return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
 
 
 @api_view(['POST'])
@@ -174,39 +168,35 @@ def change_background(request):
     user_id = str(user.id)
     num_images = _parse_num_images(request)
 
-    # === Credit Check and Deduction ===
+    # === Credit: reserve (lock) per image, tasks will complete or release ===
     from CREDITS.utils import (
-        deduct_credits,
+        reserve_credits,
         get_user_organization,
         get_credit_settings,
-        deduct_user_credits,
+        release_reservation,
     )
 
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
-    total_credits = num_images * CREDITS_PER_IMAGE
     organization = get_user_organization(user)
-    if organization:
-        credit_result = deduct_credits(
+    # Reserve one reservation per image so each task can complete/release its own
+    reservation_ids = []
+    for _ in range(num_images):
+        credit_result = reserve_credits(
             organization=organization,
             user=user,
-            amount=total_credits,
+            amount=CREDITS_PER_IMAGE,
             reason="Background change image generation",
             metadata={"type": "change_background", "num_images": num_images},
         )
-    else:
-        credit_result = deduct_user_credits(
-            user=user,
-            amount=total_credits,
-            reason="Background change image generation",
-            metadata={"type": "change_background", "num_images": num_images},
-        )
-
-    if not credit_result["success"]:
-        return JsonResponse(
-            {"success": False, "error": credit_result["message"]},
-            status=400,
-        )
+        if not credit_result["success"]:
+            for rid in reservation_ids:
+                release_reservation(rid)
+            return JsonResponse(
+                {"success": False, "error": credit_result["message"]},
+                status=400,
+            )
+        reservation_ids.append(credit_result["reservation_id"])
 
     print("POST keys:", request.POST.keys())
     print("FILES keys:", request.FILES.keys())
@@ -256,6 +246,7 @@ def change_background(request):
                     prompt=prompt,
                     dimension=dimension,
                     reference_analysis=reference_analysis or None,
+                    credit_reservation_id=reservation_ids[0],
                 )
                 return JsonResponse({
                     "success": True,
@@ -274,6 +265,7 @@ def change_background(request):
                     dimension=dimension,
                     batch_index=i,
                     reference_analysis=reference_analysis or None,
+                    credit_reservation_id=reservation_ids[i],
                 )
                 task_ids.append(t.id)
             return JsonResponse({
@@ -286,9 +278,13 @@ def change_background(request):
 
         except Exception as e:
             traceback.print_exc()
+            for rid in reservation_ids:
+                release_reservation(rid)
             return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
 
     else:
+        for rid in reservation_ids:
+            release_reservation(rid)
         return JsonResponse({"success": False, "error": "Invalid form data"})
 
 
@@ -300,40 +296,35 @@ def generate_model_with_ornament(request):
     user = request.user
     user_id = str(user.id)
 
-    # === Credit Check and Deduction ===
+    # === Credit: reserve (lock) per image ===
     from CREDITS.utils import (
-        deduct_credits,
+        reserve_credits,
         get_user_organization,
         get_credit_settings,
-        deduct_user_credits,
+        release_reservation,
     )
 
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
     num_images = _parse_num_images(request)
-    total_credits = num_images * CREDITS_PER_IMAGE
     organization = get_user_organization(user)
-    if organization:
-        credit_result = deduct_credits(
+    reservation_ids = []
+    for _ in range(num_images):
+        credit_result = reserve_credits(
             organization=organization,
             user=user,
-            amount=total_credits,
+            amount=CREDITS_PER_IMAGE,
             reason="Model with ornament image generation",
             metadata={"type": "generate_model_with_ornament", "num_images": num_images},
         )
-    else:
-        credit_result = deduct_user_credits(
-            user=user,
-            amount=total_credits,
-            reason="Model with ornament image generation",
-            metadata={"type": "generate_model_with_ornament", "num_images": num_images},
-        )
-
-    if not credit_result["success"]:
-        return JsonResponse(
-            {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
-            status=400,
-        )
+        if not credit_result["success"]:
+            for rid in reservation_ids:
+                release_reservation(rid)
+            return JsonResponse(
+                {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
+                status=400,
+            )
+        reservation_ids.append(credit_result["reservation_id"])
 
     try:
         ornament_img = request.FILES.get('ornament_image')
@@ -381,6 +372,7 @@ def generate_model_with_ornament(request):
                 ornament_measurements=ornament_measurements,
                 dimension=dimension,
                 reference_analysis=reference_analysis,
+                credit_reservation_id=reservation_ids[0],
             )
             return JsonResponse({
                 "status": "success",
@@ -401,6 +393,7 @@ def generate_model_with_ornament(request):
                 dimension=dimension,
                 batch_index=i,
                 reference_analysis=reference_analysis,
+                credit_reservation_id=reservation_ids[i],
             )
             task_ids.append(t.id)
         return JsonResponse({
@@ -411,10 +404,10 @@ def generate_model_with_ornament(request):
             "num_images": num_images,
         }, status=200)
 
-        
-
     except Exception as e:
         traceback.print_exc()
+        for rid in reservation_ids:
+            release_reservation(rid)
         return JsonResponse({"status": "error", "message": get_user_friendly_message(e)}, status=500)
 
 
@@ -435,40 +428,35 @@ def generate_real_model_with_ornament(request):
     user = request.user
     user_id = str(user.id)
 
-    # === Credit Check and Deduction ===
+    # === Credit: reserve (lock) per image ===
     from CREDITS.utils import (
-        deduct_credits,
+        reserve_credits,
         get_user_organization,
         get_credit_settings,
-        deduct_user_credits,
+        release_reservation,
     )
 
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
     num_images = _parse_num_images(request)
-    total_credits = num_images * CREDITS_PER_IMAGE
     organization = get_user_organization(user)
-    if organization:
-        credit_result = deduct_credits(
+    reservation_ids = []
+    for _ in range(num_images):
+        credit_result = reserve_credits(
             organization=organization,
             user=user,
-            amount=total_credits,
+            amount=CREDITS_PER_IMAGE,
             reason="Real model with ornament image generation",
             metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
         )
-    else:
-        credit_result = deduct_user_credits(
-            user=user,
-            amount=total_credits,
-            reason="Real model with ornament image generation",
-            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
-        )
-
-    if not credit_result["success"]:
-        return JsonResponse(
-            {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
-            status=400,
-        )
+        if not credit_result["success"]:
+            for rid in reservation_ids:
+                release_reservation(rid)
+            return JsonResponse(
+                {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
+                status=400,
+            )
+        reservation_ids.append(credit_result["reservation_id"])
 
     try:
         model_img = request.FILES.get('model_image')
@@ -528,6 +516,7 @@ def generate_real_model_with_ornament(request):
                 ornament_measurements=ornament_measurements,
                 dimension=dimension,
                 reference_analysis=reference_analysis,
+                credit_reservation_id=reservation_ids[0],
             )
             return JsonResponse({
                 "status": "success",
@@ -549,6 +538,7 @@ def generate_real_model_with_ornament(request):
                 dimension=dimension,
                 batch_index=i,
                 reference_analysis=reference_analysis,
+                credit_reservation_id=reservation_ids[i],
             )
             task_ids.append(t.id)
         return JsonResponse({
@@ -561,6 +551,8 @@ def generate_real_model_with_ornament(request):
 
     except Exception as e:
         traceback.print_exc()
+        for rid in reservation_ids:
+            release_reservation(rid)
         return JsonResponse({"status": "error", "message": get_user_friendly_message(e)}, status=500)
 
 
@@ -572,50 +564,41 @@ def generate_campaign_shot_advanced(request):
     user = request.user
     user_id = str(user.id)
 
-    try:
-        # === Credit Check and Deduction ===
-        from CREDITS.utils import (
-            deduct_credits,
-            get_user_organization,
-            get_credit_settings,
-            deduct_user_credits,
+    # === Credit: reserve (lock) per image ===
+    from CREDITS.utils import (
+        reserve_credits,
+        get_user_organization,
+        get_credit_settings,
+        release_reservation,
+    )
+
+    credit_settings = get_credit_settings()
+    CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+    num_images = _parse_num_images(request)
+    organization = get_user_organization(user)
+    reservation_ids = []
+    for _ in range(num_images):
+        credit_result = reserve_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_IMAGE,
+            reason="Campaign shot image generation",
+            metadata={
+                "type": "campaign_shot_advanced",
+                "model_type": request.POST.get("model_type", "ai"),
+                "num_images": num_images,
+            },
         )
-
-        credit_settings = get_credit_settings()
-        CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
-        num_images = _parse_num_images(request)
-        total_credits = num_images * CREDITS_PER_IMAGE
-        organization = get_user_organization(user)
-        if organization:
-            credit_result = deduct_credits(
-                organization=organization,
-                user=user,
-                amount=total_credits,
-                reason="Campaign shot image generation",
-                metadata={
-                    "type": "campaign_shot_advanced",
-                    "model_type": request.POST.get("model_type", "ai"),
-                    "num_images": num_images,
-                },
-            )
-        else:
-            credit_result = deduct_user_credits(
-                user=user,
-                amount=total_credits,
-                reason="Campaign shot image generation",
-                metadata={
-                    "type": "campaign_shot_advanced",
-                    "model_type": request.POST.get("model_type", "ai"),
-                    "num_images": num_images,
-                },
-            )
-
         if not credit_result["success"]:
+            for rid in reservation_ids:
+                release_reservation(rid)
             return JsonResponse(
                 {"success": False, "error": credit_result.get("message", "insufficient credits pls recharge")},
                 status=400,
             )
+        reservation_ids.append(credit_result["reservation_id"])
 
+    try:
         model_type = request.POST.get('model_type')
         model_img = request.FILES.get(
             'model_image') if model_type == 'real_model' else None
@@ -687,6 +670,7 @@ def generate_campaign_shot_advanced(request):
                 prompt=prompt,
                 dimension=dimension,
                 theme_reference_analysis=theme_reference_analysis,
+                credit_reservation_id=reservation_ids[0],
             )
             return JsonResponse({
                 "status": "success",
@@ -709,6 +693,7 @@ def generate_campaign_shot_advanced(request):
                 dimension=dimension,
                 batch_index=i,
                 theme_reference_analysis=theme_reference_analysis,
+                credit_reservation_id=reservation_ids[i],
             )
             task_ids.append(t.id)
         return JsonResponse({
@@ -721,6 +706,8 @@ def generate_campaign_shot_advanced(request):
 
     except Exception as e:
         traceback.print_exc()
+        for rid in reservation_ids:
+            release_reservation(rid)
         return JsonResponse({"status": "error", "message": get_user_friendly_message(e)}, status=500)
 
 # @csrf_exempt
@@ -960,39 +947,30 @@ def regenerate_image(request):
     user = request.user
     user_id = str(user.id)
 
-    # === Credit Check and Deduction ===
+    # === Credit: reserve (lock), task will complete or release ===
     from CREDITS.utils import (
-        deduct_credits,
+        reserve_credits,
         get_user_organization,
         get_credit_settings,
-        deduct_user_credits,
+        release_reservation,
     )
 
     credit_settings = get_credit_settings()
     CREDITS_PER_REGENERATION = credit_settings["credits_per_regeneration"]
-
     organization = get_user_organization(user)
-    if organization:
-        credit_result = deduct_credits(
-            organization=organization,
-            user=user,
-            amount=CREDITS_PER_REGENERATION,
-            reason="Image regeneration",
-            metadata={"type": "regenerate_image"},
-        )
-    else:
-        credit_result = deduct_user_credits(
-            user=user,
-            amount=CREDITS_PER_REGENERATION,
-            reason="Image regeneration",
-            metadata={"type": "regenerate_image"},
-        )
-
+    credit_result = reserve_credits(
+        organization=organization,
+        user=user,
+        amount=CREDITS_PER_REGENERATION,
+        reason="Image regeneration",
+        metadata={"type": "regenerate_image"},
+    )
     if not credit_result["success"]:
         return Response(
-            {"error": "insufficient credits pls recharge"},
+            {"error": credit_result.get("message", "insufficient credits pls recharge")},
             status=400,
         )
+    reservation_id = credit_result["reservation_id"]
 
     try:
         # Get parameters
@@ -1002,15 +980,18 @@ def regenerate_image(request):
         print(new_prompt)
 
         if not image_id:
+            release_reservation(reservation_id)
             return Response({"error": "image_id is required"}, status=400)
 
         if not new_prompt:
+            release_reservation(reservation_id)
             return Response({"error": "New prompt is required"}, status=400)
 
         # Validate MongoDB ObjectId format before attempting to use it
         # ObjectId must be exactly 24 hex characters
         object_id_pattern = re.compile(r'^[0-9a-fA-F]{24}$')
         if not object_id_pattern.match(image_id):
+            release_reservation(reservation_id)
             return JsonResponse({
                 "error": get_user_friendly_message("Invalid image_id"),
             }, status=400)
@@ -1019,20 +1000,23 @@ def regenerate_image(request):
         try:
             prev_doc = OrnamentMongo.objects.get(id=ObjectId(image_id))
         except OrnamentMongo.DoesNotExist:
+            release_reservation(reservation_id)
             return JsonResponse({"error": "Image record not found"}, status=404)
         except Exception as e:
-            # This should rarely happen now due to format validation above
+            release_reservation(reservation_id)
             return Response({"error": get_user_friendly_message(e)}, status=400)
 
         # Verify that the image belongs to the user (security check)
         if prev_doc.user_id != user_id:
+            release_reservation(reservation_id)
             return JsonResponse({"error": "You don't have permission to regenerate this image"}, status=403)
 
         # Call Celery task asynchronously
         task = regenerate_image_task.delay(
             image_id=image_id,
             user_id=user_id,
-            new_prompt=new_prompt
+            new_prompt=new_prompt,
+            credit_reservation_id=reservation_id,
         )
 
         return JsonResponse({
@@ -1045,6 +1029,7 @@ def regenerate_image(request):
 
     except Exception as e:
         traceback.print_exc()
+        release_reservation(reservation_id)
         return JsonResponse({"success": False, "error": get_user_friendly_message(e)}, status=500)
 
 
@@ -1067,10 +1052,33 @@ def get_task_status(request):
             "status": result.status,
         }
         
+        def _absolute_url(url):
+            if not url or not isinstance(url, str):
+                return url
+            if url.startswith("/") and not url.startswith("//"):
+                return request.build_absolute_uri(url)
+            return url
+
+        def _absolute_urls_in_dict(d):
+            if not isinstance(d, dict):
+                return d
+            out = {}
+            for k, v in d.items():
+                if isinstance(v, str) and v.startswith("/") and not v.startswith("//"):
+                    out[k] = request.build_absolute_uri(v)
+                elif isinstance(v, list) and v and isinstance(v[0], str):
+                    out[k] = [_absolute_url(u) for u in v]
+                elif isinstance(v, dict):
+                    out[k] = _absolute_urls_in_dict(v)
+                else:
+                    out[k] = v
+            return out
+
         # If task is complete, include the result
         if result.ready():
             if result.successful():
-                response_data["result"] = result.result
+                raw_result = result.result
+                response_data["result"] = _absolute_urls_in_dict(raw_result) if isinstance(raw_result, dict) else raw_result
                 response_data["success"] = True
             else:
                 # Prefer user-friendly message from task result
@@ -1128,6 +1136,14 @@ def get_user_images(request):
             **query).order_by('-created_at').skip(skip).limit(limit)
         total_count = OrnamentMongo.objects(**query).count()
 
+        def _absolute_url(url):
+            """Convert relative /media/ URLs to absolute for frontend viewing."""
+            if not url or not isinstance(url, str):
+                return url
+            if url.startswith("/") and not url.startswith("//"):
+                return request.build_absolute_uri(url)
+            return url
+
         # Convert to list of dictionaries
         images_list = []
         for img in images:
@@ -1135,8 +1151,8 @@ def get_user_images(request):
                 "id": str(img.id),
                 "prompt": img.prompt,
                 "type": img.type,
-                "uploaded_image_url": img.uploaded_image_url,
-                "generated_image_url": img.generated_image_url,
+                "uploaded_image_url": _absolute_url(img.uploaded_image_url),
+                "generated_image_url": _absolute_url(img.generated_image_url),
                 "created_at": img.created_at.isoformat() if img.created_at else None,
                 "parent_image_id": str(img.parent_image_id) if img.parent_image_id else None,
                 "original_prompt": img.original_prompt,
@@ -1144,9 +1160,9 @@ def get_user_images(request):
 
             # Add optional fields if they exist
             if hasattr(img, 'model_image_url') and img.model_image_url:
-                img_dict["model_image_url"] = img.model_image_url
+                img_dict["model_image_url"] = _absolute_url(img.model_image_url)
             if hasattr(img, 'uploaded_ornament_urls') and img.uploaded_ornament_urls:
-                img_dict["uploaded_ornament_urls"] = img.uploaded_ornament_urls
+                img_dict["uploaded_ornament_urls"] = [_absolute_url(u) for u in img.uploaded_ornament_urls]
 
             images_list.append(img_dict)
 

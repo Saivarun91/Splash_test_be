@@ -1,7 +1,8 @@
 """
 Utility functions for credit management and global AI model settings.
+SaaS-grade flow: check preset -> reserve (lock) -> generate -> complete or release.
 """
-from .models import CreditLedger, CreditSettings, CreditReminderSent
+from .models import CreditLedger, CreditSettings, CreditReminderSent, CreditReservation
 from organization.models import Organization
 from users.models import User
 from datetime import datetime, timedelta
@@ -144,6 +145,166 @@ def get_image_model_name(default_model: str = "gemini-3-pro-image-preview") -> s
         return model_name
     except Exception:
         return default_model
+
+# ---------- SaaS-grade: reserve -> complete/release ----------
+
+
+def get_available_balance(organization=None, user=None):
+    """
+    Available credits = balance - sum of amounts in pending reservations.
+    Pass organization for org wallet, or user (with organization=None) for individual.
+    """
+    try:
+        if organization:
+            balance = organization.credit_balance if hasattr(organization, "credit_balance") else 0
+            reserved = sum(
+                r.amount for r in CreditReservation.objects(
+                    organization=organization, status="pending"
+                ).only("amount")
+            )
+        else:
+            balance = (user.credit_balance or 0) if user else 0
+            reserved = (
+                sum(
+                    r.amount for r in CreditReservation.objects(
+                        user=user, organization=None, status="pending"
+                    ).only("amount")
+                )
+                if user else 0
+            )
+        return max(0, balance - reserved)
+    except Exception:
+        return 0
+
+
+def reserve_credits(
+    organization=None,
+    user=None,
+    amount=0,
+    reason="Image generation",
+    reference_id=None,
+    project=None,
+    metadata=None,
+):
+    """
+    Lock credits for a generation. Does not deduct yet.
+    Check: available_balance >= amount; then create a pending reservation.
+    Returns: { success, reservation_id, message, balance_after (available) }
+    """
+    try:
+        if not user:
+            return {
+                "success": False,
+                "message": "User is required",
+                "reservation_id": None,
+                "balance_after": 0,
+            }
+        available = get_available_balance(organization=organization, user=user)
+        if available < amount:
+            return {
+                "success": False,
+                "message": f"Insufficient credits. Available: {available}, Required: {amount}",
+                "reservation_id": None,
+                "balance_after": available,
+            }
+        reservation = CreditReservation(
+            user=user,
+            organization=organization,
+            project=project,
+            amount=amount,
+            reason=reason or "Image generation",
+            reference_id=reference_id,
+            status="pending",
+            metadata=metadata or {},
+        )
+        reservation.save()
+        return {
+            "success": True,
+            "message": "Credits reserved",
+            "reservation_id": str(reservation.id),
+            "balance_after": available - amount,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error reserving credits: {str(e)}",
+            "reservation_id": None,
+            "balance_after": get_available_balance(organization=organization, user=user),
+        }
+
+
+def complete_reservation(reservation_id, created_by=None):
+    """
+    Called after image generation succeeds: deduct from balance, create ledger entry,
+    mark reservation as completed. Idempotent: if already completed/released, no-op.
+    Returns: { success, message, balance_after }
+    """
+    try:
+        from bson import ObjectId
+        reservation = CreditReservation.objects(id=ObjectId(reservation_id)).first()
+        if not reservation:
+            return {"success": False, "message": "Reservation not found", "balance_after": None}
+        if reservation.status != "pending":
+            return {
+                "success": True,
+                "message": f"Reservation already {reservation.status}",
+                "balance_after": None,
+            }
+        user = reservation.user
+        org = reservation.organization
+        amount = reservation.amount
+        by = created_by or user
+        if org:
+            result = deduct_credits(
+                org, by, amount,
+                reason=reservation.reason or "Image generation",
+                project=reservation.project,
+                metadata={**(reservation.metadata or {}), "reservation_id": str(reservation.id)},
+            )
+        else:
+            result = deduct_user_credits(
+                user, amount,
+                reason=reservation.reason or "Image generation",
+                project=reservation.project,
+                metadata={**(reservation.metadata or {}), "reservation_id": str(reservation.id)},
+            )
+        if not result.get("success"):
+            return result
+        reservation.status = "completed"
+        reservation.updated_at = datetime.utcnow()
+        reservation.save()
+        return {
+            "success": True,
+            "message": "Reservation completed and credits deducted",
+            "balance_after": result.get("balance_after"),
+        }
+    except Exception as e:
+        return {"success": False, "message": str(e), "balance_after": None}
+
+
+def release_reservation(reservation_id):
+    """
+    Called when image generation fails: release the lock so credits are available again.
+    No deduction, no ledger entry. Idempotent.
+    Returns: { success, message }
+    """
+    try:
+        from bson import ObjectId
+        reservation = CreditReservation.objects(id=ObjectId(reservation_id)).first()
+        if not reservation:
+            return {"success": True, "message": "Reservation not found"}
+        if reservation.status != "pending":
+            return {"success": True, "message": f"Reservation already {reservation.status}"}
+        reservation.status = "released"
+        reservation.updated_at = datetime.utcnow()
+        reservation.save()
+        return {"success": True, "message": "Reservation released"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+# ---------- Legacy direct deduction (still used by complete_reservation and admin) ----------
+
 
 def deduct_credits(organization, user, amount, reason="Image generation", project=None, metadata=None):
     try:
