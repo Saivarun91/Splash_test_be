@@ -33,7 +33,7 @@
 #     meta = {"collection": "jewellery"}
 
 
-from mongoengine import Document, StringField, URLField, DateTimeField, ListField, ReferenceField, ObjectIdField
+from mongoengine import Document, StringField, DateTimeField, ListField, ReferenceField, ObjectIdField
 import datetime
 
 
@@ -51,16 +51,20 @@ class OrnamentMongo(Document):
     original_prompt = StringField()  # Store the original prompt for context
 
     # Single model image (only for campaign)
-    model_image_url = URLField()
+    # Can be either an absolute URL (http/https) or a local /media/... path
+    model_image_url = StringField()
 
     # Single uploaded image (for 4 basic types)
-    uploaded_image_url = URLField()
+    # Can be either an absolute URL (http/https) or a local /media/... path
+    uploaded_image_url = StringField()
 
     # Multiple uploaded ornaments (for campaign)
-    uploaded_ornament_urls = ListField(URLField())
+    # Can be either absolute URLs or local /media/... paths
+    uploaded_ornament_urls = ListField(StringField())
 
     # Generated image
-    generated_image_url = URLField(required=True)
+    # Can be either an absolute URL (http/https) or a local /media/... path
+    generated_image_url = StringField(required=True)
 
     # Local paths
     uploaded_image_path = StringField()
