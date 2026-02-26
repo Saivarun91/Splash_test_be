@@ -1293,9 +1293,10 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, credit_reservatio
             combined_prompt = f"Reference context: {reference_analysis}. {original_prompt}. {new_prompt}. {measurements_placeholder}"
         measurements_text = measurements_placeholder
 
-        # Download the previous generated image from Cloudinary
-        with urlopen(prev_generated_url) as resp:
-            img_bytes = resp.read()
+        # Load the previous generated image (supports /media/ URLs, local paths, and http/https URLs)
+        img_bytes = _url_or_path_to_bytes(prev_generated_url)
+        if not img_bytes:
+            raise Exception(f"Could not load previous generated image: {prev_generated_url}")
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
         
         # Generate new image using Gemini
