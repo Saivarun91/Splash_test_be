@@ -640,10 +640,12 @@ def generate_ai_images_background(collection_id, user_id):
         buf.seek(0)
 
         try:
+            # Use a unique Cloudinary public_id per generated image to avoid overlapping images
+            unique_suffix = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
             upload_result = cloudinary.uploader.upload(
                 buf,
                 folder="collection_ai_models",
-                public_id=f"collection_{collection.id}_{i+1}",
+                public_id=f"collection_{collection.id}_{i+1}_{unique_suffix}",
                 overwrite=True,
                 timeout=CLOUDINARY_UPLOAD_TIMEOUT,
                 resource_type="image",

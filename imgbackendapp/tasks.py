@@ -7,6 +7,7 @@ import base64
 import traceback
 import time
 from io import BytesIO
+from datetime import datetime
 from django.conf import settings
 from django.core.files.base import ContentFile
 from celery import shared_task
@@ -14,6 +15,7 @@ from CREDITS.utils import get_image_model_name
 from PIL import Image
 import numpy as np
 import cv2
+import cloudinary.uploader
 from .mongo_models import OrnamentMongo
 from .models import Ornament
 from bson import ObjectId
@@ -61,6 +63,28 @@ def _url_or_path_to_bytes(url_or_path):
         with urlopen(url_or_path) as resp:
             return resp.read()
     except Exception:
+        return None
+
+
+def _upload_bytes_to_cloudinary(image_bytes, folder, public_id_prefix):
+    """Upload raw image bytes to Cloudinary and return secure URL, or None on failure."""
+    if not image_bytes:
+        return None
+    try:
+        buf = BytesIO(image_bytes)
+        buf.seek(0)
+        unique_suffix = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+        upload_result = cloudinary.uploader.upload(
+            buf,
+            folder=folder,
+            public_id=f"{public_id_prefix}_{unique_suffix}",
+            overwrite=False,
+            resource_type="image",
+        )
+        return upload_result.get("secure_url")
+    except Exception as e:
+        # Don't break the task if Cloudinary is temporarily unavailable; fall back to local URLs.
+        report_handled_exception(e, request=None, context={"cloudinary_upload_folder": folder})
         return None
 
 
@@ -252,7 +276,7 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
                 raise Exception(
                     "Could not extract ornament using fallback method.")
 
-        # Save generated image locally and use local URLs for viewing
+        # Save generated image locally
         filename = f"{ornament.id}_generated.jpg"
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
@@ -260,8 +284,20 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
-        uploaded_image_url = _path_to_media_url(ornament.image.path)
-        generated_image_url = _path_to_media_url(local_generated_path)
+        # Upload original and generated images to Cloudinary for viewing
+        uploaded_cloud_url = _upload_bytes_to_cloudinary(
+            img_bytes,
+            folder="imgbackend/uploaded_ornaments",
+            public_id_prefix=f"ornament_{ornament.id}",
+        )
+        generated_cloud_url = _upload_bytes_to_cloudinary(
+            generated_bytes,
+            folder="imgbackend/generated_ornaments",
+            public_id_prefix=f"white_background_{ornament.id}",
+        )
+
+        uploaded_image_url = uploaded_cloud_url or _path_to_media_url(ornament.image.path)
+        generated_image_url = generated_cloud_url or _path_to_media_url(local_generated_path)
 
         # Save in MongoDB
         ornament_doc = OrnamentMongo(
@@ -350,7 +386,13 @@ def generate_white_background_batch_task(
             text_prompt = f"{text_prompt} Generate the image in {dimension} aspect ratio (width:height)."
 
         results = []
-        uploaded_image_url = _path_to_media_url(ornament.image.path)
+        # Cloudinary URL (or local fallback) for the uploaded ornament image
+        uploaded_cloud_url = _upload_bytes_to_cloudinary(
+            img_bytes,
+            folder="imgbackend/uploaded_ornaments",
+            public_id_prefix=f"ornament_{ornament.id}_batch",
+        )
+        uploaded_image_url = uploaded_cloud_url or _path_to_media_url(ornament.image.path)
 
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
@@ -421,7 +463,12 @@ def generate_white_background_batch_task(
             local_generated_path = os.path.join(gen_dir, filename)
             with open(local_generated_path, "wb") as f:
                 f.write(generated_bytes)
-            generated_image_url = _path_to_media_url(local_generated_path)
+            generated_cloud_url = _upload_bytes_to_cloudinary(
+                generated_bytes,
+                folder="imgbackend/generated_ornaments",
+                public_id_prefix=f"white_background_batch_{ornament.id}_{index}",
+            )
+            generated_image_url = generated_cloud_url or _path_to_media_url(local_generated_path)
 
             ornament_doc = OrnamentMongo(
                 prompt=text_prompt,
@@ -612,7 +659,7 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
         base_name = os.path.splitext(os.path.basename(uploaded_image_path))[0]
         suffix = f"_batch_{batch_index}" if batch_index is not None else ""
 
-        # Save generated image locally and use local URLs for viewing
+        # Save generated image locally
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
         local_generated_path = os.path.join(
@@ -621,8 +668,20 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
-        uploaded_url = _path_to_media_url(uploaded_image_path)
-        generated_url = _path_to_media_url(local_generated_path)
+        # Upload original and generated images to Cloudinary for viewing
+        uploaded_cloud_url = _upload_bytes_to_cloudinary(
+            ornament_bytes,
+            folder="imgbackend/uploaded_ornaments",
+            public_id_prefix=f"background_change_{base_name}",
+        )
+        generated_cloud_url = _upload_bytes_to_cloudinary(
+            generated_bytes,
+            folder="imgbackend/generated_backgrounds",
+            public_id_prefix=f"background_change_{base_name}{suffix}",
+        )
+
+        uploaded_url = uploaded_cloud_url or _path_to_media_url(uploaded_image_path)
+        generated_url = generated_cloud_url or _path_to_media_url(local_generated_path)
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
@@ -772,7 +831,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         base_name = os.path.splitext(os.path.basename(ornament_image_path))[0]
         suffix = f"_batch_{batch_index}" if batch_index is not None else ""
 
-        # Save generated image locally and use local URLs for viewing
+        # Save generated image locally
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
         local_generated_path = os.path.join(
@@ -781,8 +840,20 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
-        uploaded_url = _path_to_media_url(ornament_image_path)
-        generated_url = _path_to_media_url(local_generated_path)
+        # Upload original and generated images to Cloudinary for viewing
+        uploaded_cloud_url = _upload_bytes_to_cloudinary(
+            ornament_bytes,
+            folder="imgbackend/uploaded_ornaments",
+            public_id_prefix=f"model_with_ornament_{base_name}",
+        )
+        generated_cloud_url = _upload_bytes_to_cloudinary(
+            generated_bytes,
+            folder="imgbackend/generated_models",
+            public_id_prefix=f"model_with_ornament_{base_name}{suffix}",
+        )
+
+        uploaded_url = uploaded_cloud_url or _path_to_media_url(ornament_image_path)
+        generated_url = generated_cloud_url or _path_to_media_url(local_generated_path)
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
@@ -937,7 +1008,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         ornament_base = os.path.splitext(os.path.basename(ornament_image_path))[0]
         suffix = f"_batch_{batch_index}" if batch_index is not None else ""
 
-        # Save generated image locally and use local URLs for viewing
+        # Save generated image locally
         generated_dir = os.path.join(
             settings.MEDIA_ROOT, "generated_models")
         os.makedirs(generated_dir, exist_ok=True)
@@ -947,9 +1018,26 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
-        model_url = _path_to_media_url(model_image_path)
-        ornament_url = _path_to_media_url(ornament_image_path)
-        generated_url = _path_to_media_url(local_generated_path)
+        # Upload original and generated images to Cloudinary for viewing
+        model_cloud_url = _upload_bytes_to_cloudinary(
+            model_bytes,
+            folder="imgbackend/uploaded_models",
+            public_id_prefix=f"real_model_{model_base}",
+        )
+        ornament_cloud_url = _upload_bytes_to_cloudinary(
+            ornament_bytes,
+            folder="imgbackend/uploaded_ornaments",
+            public_id_prefix=f"real_model_ornament_{ornament_base}",
+        )
+        generated_cloud_url = _upload_bytes_to_cloudinary(
+            generated_bytes,
+            folder="imgbackend/generated_models",
+            public_id_prefix=f"real_model_with_ornament_{model_base}{suffix}",
+        )
+
+        model_url = model_cloud_url or _path_to_media_url(model_image_path)
+        ornament_url = ornament_cloud_url or _path_to_media_url(ornament_image_path)
+        generated_url = generated_cloud_url or _path_to_media_url(local_generated_path)
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
@@ -1014,8 +1102,8 @@ def generate_campaign_shot_advanced_task(
     theme_reference_analysis: optional text from analyzing theme reference image(s) (campaign).
     """
     try:
-        # Use local URLs for ornaments (no Cloudinary upload)
-        ornament_urls = [_path_to_media_url(p) for p in ornament_image_paths]
+        # Cloudinary URLs (or local fallbacks) for ornaments
+        ornament_urls = []
         ornament_b64_list = []
 
         # Parse optional per-ornament measurements (JSON array of dicts)
@@ -1046,6 +1134,13 @@ def generate_campaign_shot_advanced_task(
             ):
                 per_ornament_measurements = ornament_measurements_list[idx]
 
+            ornament_cloud_url = _upload_bytes_to_cloudinary(
+                ornament_bytes,
+                folder="imgbackend/uploaded_ornaments",
+                public_id_prefix=f"campaign_ornament_{os.path.splitext(os.path.basename(ornament_path))[0]}_{idx}",
+            )
+            ornament_urls.append(ornament_cloud_url or _path_to_media_url(ornament_path))
+
             ornament_b64_list.append({
                 "name": ornament_name,
                 "type": ornament_type,
@@ -1053,13 +1148,18 @@ def generate_campaign_shot_advanced_task(
                 "data": base64.b64encode(ornament_bytes).decode('utf-8')
             })
 
-        # Model: use local URL and encoding
+        # Model: use Cloudinary URL (or local fallback) and encoding
         model_url = None
         model_b64 = None
         if model_image_path and os.path.exists(model_image_path):
             with open(model_image_path, "rb") as f:
                 model_bytes = f.read()
-            model_url = _path_to_media_url(model_image_path)
+            model_cloud_url = _upload_bytes_to_cloudinary(
+                model_bytes,
+                folder="imgbackend/uploaded_models",
+                public_id_prefix=f"campaign_model_{os.path.splitext(os.path.basename(model_image_path))[0]}",
+            )
+            model_url = model_cloud_url or _path_to_media_url(model_image_path)
             model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
         # Theme images encoding
@@ -1178,14 +1278,19 @@ def generate_campaign_shot_advanced_task(
         if not generated_bytes:
             raise Exception("No image returned from Gemini")
 
-        # Save generated image locally and use local URL for viewing
+        # Save generated image locally and upload to Cloudinary for viewing
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated")
         os.makedirs(gen_dir, exist_ok=True)
         campaign_filename = f"campaign_{len(ornament_image_paths)}{f'_batch_{batch_index}' if batch_index is not None else ''}.jpg"
         local_campaign_path = os.path.join(gen_dir, campaign_filename)
         with open(local_campaign_path, "wb") as f:
             f.write(generated_bytes)
-        generated_url = _path_to_media_url(local_campaign_path)
+        campaign_cloud_url = _upload_bytes_to_cloudinary(
+            generated_bytes,
+            folder="imgbackend/generated_campaigns",
+            public_id_prefix=f"campaign_shot_{len(ornament_image_paths)}{f'_batch_{batch_index}' if batch_index is not None else ''}",
+        )
+        generated_url = campaign_cloud_url or _path_to_media_url(local_campaign_path)
 
         # Save record to MongoDB
         ornament_doc = OrnamentMongo(
@@ -1379,7 +1484,13 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, credit_reservatio
         with open(local_regen_path, "wb") as f:
             f.write(generated_bytes)
 
-        regenerated_url = _path_to_media_url(local_regen_path)
+        # Upload regenerated image to Cloudinary for viewing
+        regen_cloud_url = _upload_bytes_to_cloudinary(
+            generated_bytes,
+            folder="imgbackend/generated_regenerated",
+            public_id_prefix=f"regen_{image_id}",
+        )
+        regenerated_url = regen_cloud_url or _path_to_media_url(local_regen_path)
 
         # Create new MongoDB document for the regenerated image
         new_doc = OrnamentMongo(
