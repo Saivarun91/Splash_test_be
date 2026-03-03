@@ -30,6 +30,7 @@ import re
 from .tasks import (
     generate_white_background_task,
     change_background_task,
+    change_background_combined_task,
     generate_model_with_ornament_task,
     generate_real_model_with_ornament_task,
     generate_campaign_shot_advanced_task,
@@ -168,7 +169,6 @@ def change_background(request):
     user_id = str(user.id)
     num_images = _parse_num_images(request)
 
-    # === Credit: reserve (lock) per image, tasks will complete or release ===
     from CREDITS.utils import (
         reserve_credits,
         get_user_organization,
@@ -179,7 +179,72 @@ def change_background(request):
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
     organization = get_user_organization(user)
-    # Reserve one reservation per image so each task can complete/release its own
+
+    # --- Multiple product images: one combined background-change image ---
+    ornaments = request.FILES.getlist("ornament_images")
+    if len(ornaments) >= 2:
+        credit_result = reserve_credits(
+            organization=organization,
+            user=user,
+            amount=CREDITS_PER_IMAGE,
+            reason="Background change combined (multiple images)",
+            metadata={"type": "change_background_combined", "num_uploads": len(ornaments)},
+        )
+        if not credit_result["success"]:
+            return JsonResponse(
+                {"success": False, "error": credit_result["message"]},
+                status=400,
+            )
+        try:
+            upload_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
+            os.makedirs(upload_dir, exist_ok=True)
+            ornament_paths = []
+            for idx, ornament in enumerate(ornaments):
+                base, ext = os.path.splitext(ornament.name or "image")
+                name = f"{base}_{idx}{ext}"
+                path = os.path.join(upload_dir, name)
+                with open(path, "wb+") as dest:
+                    for chunk in ornament.chunks():
+                        dest.write(chunk)
+                ornament_paths.append(path)
+
+            background_image_path = None
+            background = request.FILES.get("background_image")
+            if background:
+                bg_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_backgrounds")
+                os.makedirs(bg_dir, exist_ok=True)
+                background_image_path = os.path.join(bg_dir, background.name)
+                with open(background_image_path, "wb+") as dest:
+                    for chunk in background.chunks():
+                        dest.write(chunk)
+
+            bg_color = (request.POST.get("background_color") or "").strip()
+            prompt = (request.POST.get("prompt") or "").strip()
+            dimension = (request.POST.get("dimension") or "1:1").strip()
+            reference_analysis = (request.POST.get("reference_analysis") or "").strip() or None
+
+            task = change_background_combined_task.delay(
+                uploaded_image_paths=ornament_paths,
+                user_id=user_id,
+                bg_color=bg_color or None,
+                background_image_path=background_image_path,
+                prompt=prompt,
+                dimension=dimension,
+                reference_analysis=reference_analysis,
+                credit_reservation_id=credit_result["reservation_id"],
+            )
+            return JsonResponse({
+                "success": True,
+                "message": "Background change (combined) task started",
+                "task_id": task.id,
+                "status": "processing",
+            })
+        except Exception as e:
+            traceback.print_exc()
+            release_reservation(credit_result["reservation_id"])
+            return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
+
+    # --- Single image: reserve per variation (num_images) ---
     reservation_ids = []
     for _ in range(num_images):
         credit_result = reserve_credits(
@@ -198,35 +263,98 @@ def change_background(request):
             )
         reservation_ids.append(credit_result["reservation_id"])
 
-    print("POST keys:", request.POST.keys())
-    print("FILES keys:", request.FILES.keys())
+    # Single file: from ornament_images (1 file) or from form ornament_image
+    single_ornament = request.FILES.get("ornament_image")
+    if not single_ornament and len(ornaments) == 1:
+        single_ornament = ornaments[0]
 
+    if single_ornament:
+        # One image without using form
+        try:
+            upload_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
+            os.makedirs(upload_dir, exist_ok=True)
+            local_uploaded_path = os.path.join(upload_dir, single_ornament.name)
+            with open(local_uploaded_path, "wb+") as dest:
+                for chunk in single_ornament.chunks():
+                    dest.write(chunk)
+
+            background_image_path = None
+            background = request.FILES.get("background_image")
+            if background:
+                bg_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_backgrounds")
+                os.makedirs(bg_dir, exist_ok=True)
+                background_image_path = os.path.join(bg_dir, background.name)
+                with open(background_image_path, "wb+") as dest:
+                    for chunk in background.chunks():
+                        dest.write(chunk)
+
+            bg_color = (request.POST.get("background_color") or "").strip()
+            prompt = (request.POST.get("prompt") or "").strip()
+            dimension = (request.POST.get("dimension") or "1:1").strip()
+            reference_analysis = (request.POST.get("reference_analysis") or "").strip() or None
+
+            if num_images <= 1:
+                task = change_background_task.delay(
+                    uploaded_image_path=local_uploaded_path,
+                    user_id=user_id,
+                    bg_color=bg_color or None,
+                    background_image_path=background_image_path,
+                    prompt=prompt,
+                    dimension=dimension,
+                    reference_analysis=reference_analysis,
+                    credit_reservation_id=reservation_ids[0],
+                )
+                return JsonResponse({
+                    "success": True,
+                    "message": "Background change task started",
+                    "task_id": task.id,
+                    "status": "processing",
+                })
+            task_ids = []
+            for i in range(num_images):
+                t = change_background_task.delay(
+                    uploaded_image_path=local_uploaded_path,
+                    user_id=user_id,
+                    bg_color=bg_color or None,
+                    background_image_path=background_image_path,
+                    prompt=prompt,
+                    dimension=dimension,
+                    batch_index=i,
+                    reference_analysis=reference_analysis,
+                    credit_reservation_id=reservation_ids[i],
+                )
+                task_ids.append(t.id)
+            return JsonResponse({
+                "success": True,
+                "message": "Background change tasks started",
+                "task_ids": task_ids,
+                "status": "processing",
+                "num_images": num_images,
+            })
+        except Exception as e:
+            traceback.print_exc()
+            for rid in reservation_ids:
+                release_reservation(rid)
+            return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
+
+    # Form-based (backward compatibility: single ornament_image)
     form = BackgroundChangeForm(request.POST, request.FILES)
-
     if form.is_valid():
-        ornament = form.cleaned_data['ornament_image']
-        background = form.cleaned_data.get('background_image')
-        bg_color = form.cleaned_data.get('background_color')
-        prompt = form.cleaned_data.get('prompt', '')
-        dimension = request.POST.get('dimension', '1:1').strip()
-        reference_analysis = (request.POST.get('reference_analysis') or '').strip()
+        ornament = form.cleaned_data["ornament_image"]
+        background = form.cleaned_data.get("background_image")
+        bg_color = form.cleaned_data.get("background_color")
+        prompt = form.cleaned_data.get("prompt", "")
+        dimension = request.POST.get("dimension", "1:1").strip()
+        reference_analysis = (request.POST.get("reference_analysis") or "").strip()
 
         try:
-            # -----------------------------
-            # SAVE ORNAMENT LOCALLY
-            # -----------------------------
-            upload_dir = os.path.join(
-                settings.MEDIA_ROOT, "uploaded_ornaments")
+            upload_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
             os.makedirs(upload_dir, exist_ok=True)
             local_uploaded_path = os.path.join(upload_dir, ornament.name)
-
             with open(local_uploaded_path, "wb+") as dest:
                 for chunk in ornament.chunks():
                     dest.write(chunk)
 
-            # -----------------------------
-            # SAVE BACKGROUND IMAGE LOCALLY (if provided)
-            # -----------------------------
             background_image_path = None
             if background:
                 bg_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_backgrounds")
@@ -236,7 +364,6 @@ def change_background(request):
                     for chunk in background.chunks():
                         dest.write(chunk)
 
-            # Call Celery task(s): one per image when num_images > 1
             if num_images <= 1:
                 task = change_background_task.delay(
                     uploaded_image_path=local_uploaded_path,
@@ -275,17 +402,15 @@ def change_background(request):
                 "status": "processing",
                 "num_images": num_images,
             })
-
         except Exception as e:
             traceback.print_exc()
             for rid in reservation_ids:
                 release_reservation(rid)
             return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
 
-    else:
-        for rid in reservation_ids:
-            release_reservation(rid)
-        return JsonResponse({"success": False, "error": "Invalid form data"})
+    for rid in reservation_ids:
+        release_reservation(rid)
+    return JsonResponse({"success": False, "error": "Invalid form data"})
 
 
 @api_view(['POST'])
