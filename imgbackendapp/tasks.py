@@ -1368,14 +1368,21 @@ def generate_campaign_shot_advanced_task(
             model_url = model_cloud_url or _path_to_media_url(model_image_path)
             model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
-        # Theme images encoding
-        theme_b64_list = []
-        for theme_path in theme_image_paths:
-            if os.path.exists(theme_path):
-                with open(theme_path, "rb") as f:
-                    theme_bytes = f.read()
-                theme_b64_list.append(base64.b64encode(
-                    theme_bytes).decode('utf-8'))
+        # Theme/Style images:
+        # We intentionally do NOT send theme images to Gemini as inline images.
+        # Instead, we analyze them into text (theme_reference_analysis) on the backend and pass only that text.
+        if (not theme_reference_analysis) and theme_image_paths:
+            try:
+                theme_texts = []
+                for theme_path in theme_image_paths:
+                    if theme_path and os.path.exists(theme_path):
+                        theme_texts.append(
+                            analyze_reference_image_with_genai(theme_path, "campaign") or ""
+                        )
+                combined = " | ".join([t for t in theme_texts if t.strip()])
+                theme_reference_analysis = combined.strip() or None
+            except Exception:
+                theme_reference_analysis = theme_reference_analysis or None
 
         # Check Gemini configuration
         if not settings.GOOGLE_API_KEY or settings.GOOGLE_API_KEY == 'your_api_key_here':
@@ -1389,17 +1396,15 @@ def generate_campaign_shot_advanced_task(
 
         parts = []
 
-        # Model reference
-        # If reference_analysis is provided, prefer using ONLY the analyzed text (do not send the image itself).
-        # This avoids Gemini directly conditioning on the model photo while still preserving pose/style intent.
+        # Model reference (real-model campaign)
+        # Use BOTH the model image (to preserve identity) and the analyzed description (to capture pose/style intent) when available.
         if model_type == 'real_model':
-            if reference_analysis:
-                parts.append({"text": "Use this model reference description (pose/attire/style) instead of the image itself."})
-                parts.append({"text": f"Model reference description: {reference_analysis}"})
-            elif model_b64:
+            if model_b64:
                 parts.append(
                     {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}})
                 parts.append({"text": "Reference for the real model."})
+            if reference_analysis:
+                parts.append({"text": f"Model reference description (pose/attire/style): {reference_analysis}"})
         else:
             # For AI-model campaign shots, we can still optionally include a model reference image if provided.
             if model_b64:
@@ -1430,14 +1435,8 @@ def generate_campaign_shot_advanced_task(
                 }
             )
 
-        # Themes (optional)
-        for theme_b64 in theme_b64_list:
-            parts.append(
-                {"inline_data": {"mime_type": "image/jpeg", "data": theme_b64}})
-            parts.append(
-                {"text": "Reference for background or theme styling."})
-        # If we didn't already add the model reference description above, include it here.
-        if reference_analysis and not (model_type == 'real_model'):
+        # For AI-model campaign, include reference_analysis if provided.
+        if reference_analysis and model_type != 'real_model':
             parts.append({"text": f"Model/pose/style reference description: {reference_analysis}"})
         if theme_reference_analysis:
             parts.append({"text": f"Theme/style reference description: {theme_reference_analysis}"})
@@ -1458,6 +1457,8 @@ def generate_campaign_shot_advanced_task(
                 default_prompt,
                 user_prompt=prompt
             )
+            if prompt and prompt not in (user_prompt or ""):
+                user_prompt = f"{user_prompt} {prompt}"
         else:
             model_ref_text = f" Preserve pose/attire/style: {reference_analysis}." if reference_analysis else ""
             theme_ref_text = f" Match theme/style/mood: {theme_reference_analysis}." if theme_reference_analysis else ""
