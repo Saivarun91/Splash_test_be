@@ -611,6 +611,7 @@ def generate_campaign_shot_advanced(request):
         prompt = request.POST.get('prompt')
         dimension = request.POST.get('dimension', '1:1').strip()
         theme_reference_analysis = (request.POST.get('theme_reference_analysis') or '').strip() or None
+        reference_analysis = (request.POST.get('reference_analysis') or '').strip() or None
 
         # === Validation ===
         if not ornaments:
@@ -669,6 +670,7 @@ def generate_campaign_shot_advanced(request):
                 theme_image_paths=theme_image_paths,
                 prompt=prompt,
                 dimension=dimension,
+                reference_analysis=reference_analysis,
                 theme_reference_analysis=theme_reference_analysis,
                 credit_reservation_id=reservation_ids[0],
             )
@@ -692,6 +694,7 @@ def generate_campaign_shot_advanced(request):
                 prompt=prompt,
                 dimension=dimension,
                 batch_index=i,
+                reference_analysis=reference_analysis,
                 theme_reference_analysis=theme_reference_analysis,
                 credit_reservation_id=reservation_ids[i],
             )

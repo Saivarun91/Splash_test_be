@@ -1006,11 +1006,14 @@ def generate_campaign_shot_advanced_task(
     dimension,
     ornament_measurements='[]',
     batch_index=None,
+    reference_analysis=None,
     theme_reference_analysis=None,
     credit_reservation_id=None,
+    **_extra_kwargs,
 ):
     """
     Celery task to generate campaign shot. Use batch_index for multi-image generation.
+    reference_analysis: optional text from analyzing the model/reference image (pose/style/attire).
     theme_reference_analysis: optional text from analyzing theme reference image(s) (campaign).
     """
     try:
@@ -1083,11 +1086,23 @@ def generate_campaign_shot_advanced_task(
 
         parts = []
 
-        # Model (optional)
-        if model_b64:
-            parts.append(
-                {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}})
-            parts.append({"text": "Reference for the real model."})
+        # Model reference
+        # If reference_analysis is provided, prefer using ONLY the analyzed text (do not send the image itself).
+        # This avoids Gemini directly conditioning on the model photo while still preserving pose/style intent.
+        if model_type == 'real_model':
+            if reference_analysis:
+                parts.append({"text": "Use this model reference description (pose/attire/style) instead of the image itself."})
+                parts.append({"text": f"Model reference description: {reference_analysis}"})
+            elif model_b64:
+                parts.append(
+                    {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}})
+                parts.append({"text": "Reference for the real model."})
+        else:
+            # For AI-model campaign shots, we can still optionally include a model reference image if provided.
+            if model_b64:
+                parts.append(
+                    {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}})
+                parts.append({"text": "Optional model reference."})
 
         # Ornaments
         for ornament in ornament_b64_list:
@@ -1118,6 +1133,9 @@ def generate_campaign_shot_advanced_task(
                 {"inline_data": {"mime_type": "image/jpeg", "data": theme_b64}})
             parts.append(
                 {"text": "Reference for background or theme styling."})
+        # If we didn't already add the model reference description above, include it here.
+        if reference_analysis and not (model_type == 'real_model'):
+            parts.append({"text": f"Model/pose/style reference description: {reference_analysis}"})
         if theme_reference_analysis:
             parts.append({"text": f"Theme/style reference description: {theme_reference_analysis}"})
 
@@ -1125,11 +1143,12 @@ def generate_campaign_shot_advanced_task(
         from probackendapp.prompt_initializer import get_prompt_from_db
 
         if model_type == 'real_model':
+            model_ref_text = f" Preserve pose/attire/style: {reference_analysis}." if reference_analysis else ""
             theme_ref_text = f" Match theme/style/mood: {theme_reference_analysis}." if theme_reference_analysis else ""
             default_prompt = (
                 "Generate a realistic image of the uploaded real model wearing all the uploaded ornaments. "
                 "Preserve the model's facial features and natural pose while making a small smile. "
-                f"{theme_ref_text} Campaign instructions: {prompt}"
+                f"{model_ref_text}{theme_ref_text} Campaign instructions: {prompt}"
             )
             user_prompt = get_prompt_from_db(
                 'images_campaign_shot_real',
@@ -1137,11 +1156,12 @@ def generate_campaign_shot_advanced_task(
                 user_prompt=prompt
             )
         else:
+            model_ref_text = f" Preserve pose/attire/style: {reference_analysis}." if reference_analysis else ""
             theme_ref_text = f" Match theme/style/mood: {theme_reference_analysis}." if theme_reference_analysis else ""
             default_prompt = (
                 "Generate a high-quality campaign image of a model wearing all the uploaded ornaments. "
                 "Use realistic lighting, texture, and cohesive fashion aesthetics. "
-                f"{theme_ref_text} Campaign instructions: {prompt}"
+                f"{model_ref_text}{theme_ref_text} Campaign instructions: {prompt}"
             )
             user_prompt = get_prompt_from_db(
                 'images_campaign_shot_ai',
@@ -1187,6 +1207,11 @@ def generate_campaign_shot_advanced_task(
             f.write(generated_bytes)
         generated_url = _path_to_media_url(local_campaign_path)
 
+        # Store both analyses (used by regeneration prompt template as reference_context)
+        combined_reference_analysis = " | ".join(
+            [t for t in [reference_analysis, theme_reference_analysis] if t]
+        )
+
         # Save record to MongoDB
         ornament_doc = OrnamentMongo(
             prompt=prompt,
@@ -1198,7 +1223,7 @@ def generate_campaign_shot_advanced_task(
             generated_image_path=local_campaign_path,
             user_id=user_id,
             original_prompt=prompt,
-            reference_analysis=theme_reference_analysis or "",
+            reference_analysis=combined_reference_analysis or "",
         )
         ornament_doc.save()
 
