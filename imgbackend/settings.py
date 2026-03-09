@@ -281,8 +281,8 @@ ADMIN_EMAIL = [email.strip() for email in ADMIN_EMAIL.split(",") if email]
 
 
 # Frontend URL for password reset links
-FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
-
+# FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
+FRONTEND_URL = "https://gosplash.ai"
 # AI Model Configuration - Dynamically loaded from database
 try:
     from CREDITS.utils import get_image_model_name
