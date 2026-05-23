@@ -1,0 +1,49 @@
+"""
+URL configuration for organization app
+"""
+from django.urls import path
+from . import views, admin_views
+
+urlpatterns = [
+    # Admin-only: Create organization
+    
+    path('create/', views.create_organization, name='create_organization'),
+    # Admin-only: Add user to organization
+    path('add-user/', views.add_user_to_organization, name='add_user_to_organization'),
+    
+    # List organizations (admin sees all, users see their own)
+    path('list/', views.list_organizations, name='list_organizations'),
+    
+    # Get organization details
+    path('<str:organization_id>/', views.get_organization, name='get_organization'),
+    
+    # Update organization (owner/admin only)
+    path('<str:organization_id>/update/', views.update_organization, name='update_organization'),
+    
+    # Delete organization (admin only)
+    path('<str:organization_id>/delete/', views.delete_organization, name='delete_organization'),
+    
+    # Admin-only: Add credits to organization
+    path('<str:organization_id>/add-credits/', views.add_organization_credits, name='add_organization_credits'),
+    
+    # Admin-only: Remove credits from organization
+    path('<str:organization_id>/remove-credits/', views.remove_organization_credits, name='remove_organization_credits'),
+    
+    # Admin-only: Remove user from organization
+    path('<str:organization_id>/users/<str:user_id>/remove/', views.remove_user_from_organization, name='remove_user_from_organization'),
+    
+    # Organization owner endpoints
+    path('<str:organization_id>/images/', views.get_organization_images, name='get_organization_images'),
+    path('<str:organization_id>/stats/', views.get_organization_stats, name='get_organization_stats'),
+    path('<str:organization_id>/members/', views.get_organization_members, name='get_organization_members'),
+    path('<str:organization_id>/add-user/', views.add_organization_user, name='add_organization_user'),
+    path('<str:organization_id>/users/<str:user_id>/remove/', views.remove_organization_user, name='remove_organization_user'),
+    
+    # User detail endpoints (by slug)
+    path('<str:organization_id>/users/<str:user_slug>/', views.get_user_by_slug, name='get_user_by_slug'),
+    path('<str:organization_id>/users/<str:user_slug>/images/', views.get_user_images, name='get_user_images'),
+    path('<str:organization_id>/users/<str:user_slug>/projects/', views.get_user_projects, name='get_user_projects'),
+    path('<str:organization_id>/users/<str:user_slug>/credit-history/', views.get_user_credit_history, name='get_user_credit_history'),
+]
+
+

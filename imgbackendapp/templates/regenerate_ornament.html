@@ -1,0 +1,202 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Regenerate Ornament</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      color: #58a6ff;
+    }
+    .container {
+      display: flex;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      width: 260px;
+      padding: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+      transition: all 0.3s ease;
+    }
+    .card:hover {
+      border-color: #58a6ff;
+      transform: scale(1.03);
+    }
+    .card img {
+      width: 100%;
+      border-radius: 8px;
+    }
+    .card button {
+      background: #238636;
+      border: none;
+      padding: 8px 12px;
+      margin-top: 8px;
+      border-radius: 5px;
+      color: #fff;
+      cursor: pointer;
+    }
+    .card button:hover {
+      background: #2ea043;
+    }
+    .modal {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-content {
+      background: #161b22;
+      border: 1px solid #30363d;
+      padding: 20px;
+      border-radius: 10px;
+      width: 400px;
+    }
+    .modal-content input, .modal-content textarea {
+      width: 100%;
+      background: #0d1117;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      border-radius: 5px;
+      padding: 8px;
+      margin-bottom: 10px;
+    }
+    .modal-content button {
+      width: 100%;
+      background: #1f6feb;
+      border: none;
+      color: #fff;
+      padding: 10px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .modal-content button:hover {
+      background: #388bfd;
+    }
+    #loading {
+      display: none;
+      margin-top: 10px;
+      font-weight: bold;
+      color: #f0ad4e;
+    }
+    #generated-result {
+      margin-top: 30px;
+    }
+    #generated-result img {
+      width: 400px;
+      border-radius: 10px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎨 Regenerate Ornament Image</h1>
+
+  <div class="container">
+    {% for ornament in ornaments %}
+    <div class="card">
+      <img src="{{ ornament.generated_image_url }}" alt="Generated Ornament">
+      <p><strong>Prompt:</strong> {{ ornament.prompt }}</p>
+      <button onclick="openModal('{{ ornament.id }}', '{{ ornament.generated_image_url }}')">
+        Regenerate
+      </button>
+    </div>
+    {% empty %}
+      <p>No ornaments found.</p>
+    {% endfor %}
+  </div>
+
+  <div id="regenModal" class="modal">
+    <div class="modal-content">
+      <h3>Enter New Prompt</h3>
+      <form id="regenForm">
+        <input type="hidden" name="id" id="regen-id">
+        <input type="hidden" id="regen-image-url" name="image_url">
+        <textarea name="prompt" id="regen-prompt" rows="3" placeholder="Describe how you'd like to modify this image..." required></textarea>
+        <button type="submit">Generate</button>
+        <div id="loading">Generating image... Please wait ⏳</div>
+      </form>
+    </div>
+  </div>
+
+  <div id="generated-result"></div>
+
+  <script>
+   
+    function getCSRFToken() {
+      const name = 'csrftoken';
+      const cookies = document.cookie.split(';');
+      for (let cookie of cookies) {
+        cookie = cookie.trim();
+        if (cookie.startsWith(name + '=')) {
+          return decodeURIComponent(cookie.substring(name.length + 1));
+        }
+      }
+      return null;
+    }
+
+    const modal = document.getElementById('regenModal');
+    const regenForm = document.getElementById('regenForm');
+    const regenIdInput = document.getElementById('regen-id');
+    const regenImageInput = document.getElementById('regen-image-url');
+    console.log(regenIdInput,regenImageInput)
+    const loadingText = document.getElementById('loading');
+
+    function openModal(id, image_url) {
+      regenIdInput.value = id;
+      regenImageInput.value = image_url; // use previous generated image
+      modal.style.display = 'flex';
+    }
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.style.display = 'none';
+    });
+
+    regenForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      loadingText.style.display = 'block';
+      const formData = new FormData(regenForm);
+      const csrfToken = getCSRFToken();
+
+      try {
+        const response = await fetch('/regenerate/', {
+          method: 'POST',
+          headers: {
+            'X-CSRFToken': csrfToken
+          },
+          body: formData
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          document.getElementById('generated-result').innerHTML = `
+            <h2>✨ New Generated Image</h2>
+            <p>Prompt: ${formData.get("prompt")}</p>
+            <img src="${result.generated_image_url}" alt="Newly Generated Image">
+          `;
+        } else {
+          alert('Error: ' + (result.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      } finally {
+        loadingText.style.display = 'none';
+        modal.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

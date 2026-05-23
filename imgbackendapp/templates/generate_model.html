@@ -1,0 +1,120 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Generate Model Wearing Ornament</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 700px;
+            margin: auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h2 {
+            text-align: center;
+            color: #333;
+        }
+        form {
+            margin-top: 20px;
+        }
+        label {
+            display: block;
+            margin-top: 15px;
+            font-weight: bold;
+            color: #333;
+        }
+        input, textarea, select, button {
+            width: 100%;
+            margin-top: 8px;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .message {
+            text-align: center;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .result {
+            margin-top: 30px;
+            text-align: center;
+        }
+        .result img {
+            max-width: 90%;
+            border-radius: 12px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Generate AI Model Wearing Ornament</h2>
+
+        {% if messages %}
+            {% for message in messages %}
+                <p class="message" style="color:{% if 'error' in message.tags %}red{% else %}green{% endif %};">
+                    {{ message }}
+                </p>
+            {% endfor %}
+        {% endif %}
+
+        <form method="POST" enctype="multipart/form-data">
+            {% csrf_token %}
+
+            <label>Upload Ornament Image:</label>
+            <input type="file" name="ornament_image" accept="image/*" required>
+
+            <label>Upload or Select Pose Style:</label>
+            <input type="file" name="pose_style" accept="image/*">
+            
+            <small style="color:#777;">(Or select from common poses)</small>
+            <select name="pose_select">
+                <option value="">-- Select Pose --</option>
+                <option value="front view pose">Front View</option>
+                <option value="side view pose">Side View</option>
+                <option value="back view pose">Back View</option>
+                <option value="standing elegant pose">Standing Elegant</option>
+                <option value="sitting traditional pose">Sitting Traditional</option>
+            </select>
+
+            <label>Optional Measurements:</label>
+            <input type="text" name="measurements" placeholder="e.g., Neck: 14in, Wrist: 6in">
+
+            <label>Prompt (Describe your desired look):</label>
+            <textarea name="prompt" rows="3" placeholder="e.g., Female model wearing necklace with Indian saree, soft lighting, smiling."></textarea>
+
+            <button type="submit">Generate Model</button>
+        </form>
+
+        {% if generated_image_url %}
+        <div class="result">
+            <h3>Generated Model Result</h3>
+            <img src="{{ generated_image_url }}" alt="AI Generated Model Image">
+            <p><strong>Prompt:</strong> {{ prompt }}</p>
+            {% if measurements %}
+                <p><strong>Measurements:</strong> {{ measurements }}</p>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Upload Product Images & Generate AI Model Images</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+.container { max-width: 900px; margin: 30px auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+h2 { margin-bottom: 20px; }
+input[type=file] { margin-top: 10px; }
+img { max-width: 150px; border-radius: 8px; margin: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+button { background: #007bff; color: #fff; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; margin-top: 15px; }
+button:hover { background: #0056b3; }
+.preview { display: flex; flex-wrap: wrap; }
+#loading { margin-top: 15px; color: #007bff; display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h2>Upload Product Images for This Collection</h2>
+    <p>Upload one or more product images to associate with this collection.</p>
+
+    <form id="upload-form" enctype="multipart/form-data">
+        <input type="file" id="product-images" name="images" multiple accept="image/*">
+        <button type="submit">Upload Images & Generate AI Images</button>
+    </form>
+
+    <div id="preview" class="preview"></div>
+    <div id="loading">Processing images and generating AI model images. Please wait...</div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const form = document.getElementById("upload-form");
+    const preview = document.getElementById("preview");
+    const loading = document.getElementById("loading");
+    const csrftoken = "{{ csrf_token }}";
+    const collectionId = "{{ collection.id }}";
+
+    // Preview selected images
+    document.getElementById("product-images").addEventListener("change", function(e) {
+        preview.innerHTML = "";
+        for (const file of e.target.files) {
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                const img = document.createElement("img");
+                img.src = ev.target.result;
+                preview.appendChild(img);
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+
+    // Upload images and trigger AI generation
+    form.addEventListener("submit", async function(e) {
+        e.preventDefault();
+        const files = document.getElementById("product-images").files;
+        if (!files.length) {
+            alert("Please select at least one image.");
+            return;
+        }
+
+        const formData = new FormData();
+        for (const file of files) {
+            formData.append("images", file);
+        }
+
+        loading.style.display = "block";
+
+        try {
+            // 1️⃣ Upload images first
+            const uploadRes = await fetch(`/probackendapp/upload-products-api/${collectionId}/`, {
+                method: "POST",
+                headers: { "X-CSRFToken": csrftoken },
+                body: formData
+            });
+            const uploadData = await uploadRes.json();
+            if (!uploadData.success) {
+                loading.style.display = "none";
+                alert(uploadData.error || "Upload failed.");
+                return;
+            }
+
+            // 2️⃣ Trigger AI generation for all uploaded product images
+            const modelLocalPath = "{{ model_local_path }}"  // adjust this dynamically if needed
+            const generateRes = await fetch(`/probackendapp/generate-all-product-model-images/${collectionId}/`, {
+                method: "POST",
+                headers: { "X-CSRFToken": csrftoken },
+                body: JSON.stringify({ model_local_path: modelLocalPath }),
+            });
+            const generateData = await generateRes.json();
+            loading.style.display = "none";
+
+            if (generateData.success) {
+                alert("All product AI images generated successfully!");
+                window.location.reload();
+            } else {
+                alert(generateData.error || "AI generation failed.");
+            }
+
+        } catch (err) {
+            console.error(err);
+            loading.style.display = "none";
+            alert("Error processing images.");
+        }
+    });
+});
+</script>
+</body>
+</html>

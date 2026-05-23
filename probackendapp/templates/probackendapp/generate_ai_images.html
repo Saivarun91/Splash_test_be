@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Generate AI Model Images</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+.container { max-width: 900px; margin: 30px auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+h2 { margin-bottom: 20px; }
+img { max-width: 250px; margin: 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+button { background: #007bff; color: #fff; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; margin-top: 5px; }
+button:hover { background: #0056b3; }
+#loading { font-size: 16px; color: #007bff; margin-bottom: 15px; display: none; }
+.image-card { display: inline-block; text-align: center; margin: 10px; }
+</style>
+</head>
+<body>
+<div class="container">
+<h2>AI Generated Model Images</h2>
+<p>Select the images you want to save for this collection.</p>
+<div id="loading">Generating AI images, please wait...</div>
+
+<form id="save-selected-form">
+    <div id="images-container"></div>
+    <input type="hidden" name="collection_id" value="{{ collection.id }}">
+    <button type="submit">Save Selected Images</button>
+    
+</form>
+<button id="upload-btn" type="button">Upload Product Images</button>
+<button id="back-btn" type="button">back</button>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const container = document.getElementById("images-container");
+    const loadingText = document.getElementById("loading");
+    const form = document.getElementById("save-selected-form");
+    const collectionId = "{{ collection.id }}";
+    const csrftoken = '{{ csrf_token }}';
+    const uploadBtn = document.getElementById("upload-btn");
+    const backBtn = document.getElementById("back-btn");
+
+    uploadBtn.addEventListener("click", function() {
+        window.location.href = `/probackendapp/upload-products/${collectionId}/`;
+    });
+    backBtn.addEventListener("click", function() {
+        window.location.href = `/probackendapp/upload-products/${collectionId}/`;
+    });
+
+    function fetchImages() {
+        loadingText.style.display = "block";
+        container.innerHTML = "";
+
+        fetch(`/probackendapp/generate-images-api/${collectionId}/`, {
+            method: "POST",
+            headers: {
+                "X-CSRFToken": csrftoken,
+                "Accept": "application/json"
+            }
+        })
+        .then(r => r.json())
+        .then(data => {
+            loadingText.style.display = "none";
+            if (data.error) { alert(data.error); return; }
+
+            const saved = new Set(data.saved_images || []);
+
+            // Combine new + already saved images for display
+            const allImages = [...(data.images || []), ...saved];
+
+            allImages.forEach((url) => {
+                const div = document.createElement("div");
+                div.classList.add("image-card");
+
+                const img = document.createElement("img");
+                img.src = url;
+
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.name = "selected_images";
+                checkbox.value = url;
+
+                // ✅ Preselect if it’s already saved
+                if (saved.has(url)) {
+                    checkbox.checked = true;
+                }
+
+                div.appendChild(img);
+                div.appendChild(document.createElement("br"));
+                div.appendChild(checkbox);
+                div.appendChild(document.createTextNode(" Select"));
+
+                container.appendChild(div);
+            });
+        })
+        .catch(err => {
+            loadingText.style.display = "none";
+            alert("Failed to generate images.");
+            console.error(err);
+        });
+    }
+
+    fetchImages();
+
+    // ✅ Save selected images (including deselect)
+    form.addEventListener("submit", function(e) {
+        e.preventDefault();
+        const selected = Array.from(document.querySelectorAll('input[name="selected_images"]:checked'))
+                              .map(cb => cb.value);
+
+        fetch(`/probackendapp/save-generated-images/${collectionId}/`, {
+            method: "POST",
+            headers: {
+                "X-CSRFToken": csrftoken,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ images: selected })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                alert("Selected images updated successfully!");
+            } else {
+                alert(data.error || "Failed to save images.");
+            }
+        })
+        .catch(err => { console.error(err); alert("Error saving images."); });
+    });
+});
+</script>
+
+</body>
+</html>

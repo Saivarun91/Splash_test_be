@@ -1,0 +1,131 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate AI Real Model with Ornament</title>
+    <style>
+        body {
+            font-family: "Inter", sans-serif;
+            background-color: #f8f9fa;
+            padding: 40px;
+            text-align: center;
+        }
+
+        form {
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            max-width: 600px;
+            margin: 0 auto 40px;
+        }
+
+        h2 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        h3 {
+            text-align: left;
+            color: #444;
+        }
+
+        input[type="file"],
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            margin-top: 5px;
+            margin-bottom: 20px;
+            font-size: 15px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .result {
+            background: #fff;
+            padding: 25px;
+            border-radius: 16px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .result img {
+            max-width: 100%;
+            border-radius: 12px;
+            margin-top: 10px;
+        }
+
+        .error {
+            color: red;
+            font-weight: 500;
+        }
+
+        .success {
+            color: green;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Generate AI Image of Real Model Wearing Ornament</h2>
+
+    <form method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        <h3>Upload Real Model Image:</h3>
+        <input type="file" name="model_image" required>
+
+        <h3>Upload Ornament Image:</h3>
+        <input type="file" name="ornament_image" required>
+
+        <h3>Upload Pose Image (Optional):</h3>
+        <input type="file" name="pose_style">
+
+        <h3>Measurements (Optional):</h3>
+        <input type="text" name="measurements" placeholder="e.g. neck 12cm, ear 3cm">
+
+        <h3>Prompt (Optional):</h3>
+        <textarea name="prompt" rows="3" placeholder="Describe how you want the model to appear..."></textarea>
+
+        <button type="submit">Generate AI Image</button>
+    </form>
+
+    {% if messages %}
+        {% for message in messages %}
+            <p class="{% if message.tags %}{{ message.tags }}{% endif %}">{{ message }}</p>
+        {% endfor %}
+    {% endif %}
+
+    {% if generated_image_url %}
+        <div class="result">
+            <h3>Generated AI Image:</h3>
+            <img src="{{ generated_image_url }}" alt="Generated AI Image">
+        </div>
+    {% endif %}
+
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+
+</body>
+</html>

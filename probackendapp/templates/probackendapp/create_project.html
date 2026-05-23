@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Create Project</title>
+</head>
+<body>
+<h1>Create New Project</h1>
+<form method="post">
+    {% csrf_token %}
+    <label>Project Name:</label><br>
+    <input type="text" name="name" required><br><br>
+    <label>About:</label><br>
+    <textarea name="about" rows="3"></textarea><br><br>
+    <button type="submit">Create Project</button>
+</form>
+<br>
+<a href="{% url 'probackendapp:dashboard' %}">Back to Dashboard</a>
+</body>
+</html>
