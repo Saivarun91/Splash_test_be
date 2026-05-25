@@ -584,7 +584,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             generated_image_path=local_generated_path,
             type="model_with_ornament",
             user_id=user_id,
-            original_prompt=prompt
+            original_prompt=prompt,
+            measurements=measurements
         )
         ornament_doc.save()
 
@@ -764,7 +765,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             generated_image_path=local_generated_path,
             type="real_model_with_ornament",
             user_id=user_id,
-            original_prompt=prompt
+            original_prompt=prompt,
+            measurements=measurements
         )
         ornament_doc.save()
 
@@ -1064,7 +1066,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
         # Combine the original prompt with the new prompt
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
         combined_prompt = f"{original_prompt}. {new_prompt}"
-        measurements = prev_doc.measurements
+        measurements = getattr(prev_doc, 'measurements', None) or ''
         measurements_text = f"measurements: {measurements}. " if measurements else ""
         
         # Download the previous generated image from Cloudinary
@@ -1169,6 +1171,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
             user_id=user_id,
             parent_image_id=ObjectId(image_id),
             original_prompt=original_prompt,
+            measurements=measurements,
             uploaded_image_url=prev_doc.uploaded_image_url,
             generated_image_url=regenerated_url,
             uploaded_image_path=prev_doc.uploaded_image_path,

@@ -49,6 +49,7 @@ class OrnamentMongo(Document):
     # Regeneration tracking - reference to parent image if this is a regeneration
     parent_image_id = ObjectIdField()
     original_prompt = StringField()  # Store the original prompt for context
+    measurements = StringField()
 
     # Single model image (only for campaign)
     model_image_url = URLField()
