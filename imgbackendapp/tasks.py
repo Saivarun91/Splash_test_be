@@ -225,31 +225,48 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
 
 
 @shared_task(bind=True, max_retries=3)
-def change_background_task(self, uploaded_image_path, user_id, bg_color, background_image_path, prompt, dimension):
+def change_background_task(
+    self,
+    uploaded_image_paths,
+    user_id,
+    bg_color,
+    background_image_path,
+    prompt,
+    dimension,
+    reference_analysis="",
+):
     """
-    Celery task to change background of an image.
-    
+    Celery task to change background of one or more product images.
+
     Args:
-        uploaded_image_path: Path to uploaded ornament image
+        uploaded_image_paths: List of local paths to uploaded product images
         user_id: User ID string
         bg_color: Background color (if no background image)
         background_image_path: Path to background image (optional)
         prompt: User prompt
         dimension: Aspect ratio dimension
+        reference_analysis: Optional pre-analyzed reference background text
     """
     local_generated_path = None
     try:
-        if not uploaded_image_path or not os.path.exists(uploaded_image_path):
-            raise FileNotFoundError(f"Uploaded image path is invalid: {uploaded_image_path}")
+        if isinstance(uploaded_image_paths, str):
+            uploaded_image_paths = [uploaded_image_paths]
 
-        with open(uploaded_image_path, "rb") as f:
-            ornament_bytes = f.read()
+        uploaded_image_paths = [
+            p for p in (uploaded_image_paths or []) if p and os.path.exists(p)
+        ]
+        if not uploaded_image_paths:
+            raise FileNotFoundError("No valid uploaded product image paths provided.")
 
-        ornament_img = Image.open(BytesIO(ornament_bytes)).convert("RGB")
-        buf_ornament = BytesIO()
-        ornament_img.save(buf_ornament, format="JPEG")
-        img_b64 = base64.b64encode(buf_ornament.getvalue()).decode("utf-8")
-        buf_ornament.close()
+        product_b64_list = []
+        for idx, image_path in enumerate(uploaded_image_paths):
+            with open(image_path, "rb") as f:
+                ornament_bytes = f.read()
+            ornament_img = Image.open(BytesIO(ornament_bytes)).convert("RGB")
+            buf_ornament = BytesIO()
+            ornament_img.save(buf_ornament, format="JPEG")
+            product_b64_list.append(base64.b64encode(buf_ornament.getvalue()).decode("utf-8"))
+            buf_ornament.close()
 
         bg_b64 = None
         if background_image_path and os.path.exists(background_image_path):
@@ -263,6 +280,8 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
 
         from probackendapp.prompt_initializer import get_prompt_from_db
         user_prompt = prompt.strip() if prompt else ""
+        if reference_analysis and reference_analysis.strip():
+            user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
 
         if bg_b64:
             bg_prompt = get_prompt_from_db(
@@ -315,15 +334,33 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
                 else configured_model
             )
 
-            contents = [
-                {
-                    "inline_data": {
-                        "mime_type": "image/jpeg",
-                        "data": img_b64,
+            contents = []
+            multiple_products = len(product_b64_list) > 1
+            for idx, product_b64 in enumerate(product_b64_list):
+                contents.append(
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": product_b64,
+                        }
                     }
-                },
-                "This is the ornament whose background must be changed.",
-            ]
+                )
+                if multiple_products:
+                    contents.append(
+                        f"This is product reference image {idx + 1} of {len(product_b64_list)}. "
+                        "Preserve this product accurately in the final image."
+                    )
+                else:
+                    contents.append(
+                        "This is the product whose background must be changed. "
+                        "Preserve the product exactly; change only the background."
+                    )
+
+            if multiple_products:
+                contents.append(
+                    "Generate ONE cohesive themed image that includes ALL uploaded products together "
+                    "in a single composition with the new background. Do not omit any product."
+                )
 
             if bg_b64:
                 contents.extend(
@@ -378,51 +415,66 @@ def change_background_task(self, uploaded_image_path, user_id, bg_color, backgro
         else:
             raise RuntimeError("Gemini SDK not installed.")
 
-        uploaded_result = cloudinary.uploader.upload(
-            uploaded_image_path,
-            folder="ornaments_originals",
-            public_id=f"ornament_original_{os.path.splitext(os.path.basename(uploaded_image_path))[0]}",
-            overwrite=True,
-        )
-        uploaded_url = uploaded_result["secure_url"]
+        uploaded_urls = []
+        for image_path in uploaded_image_paths:
+            uploaded_result = cloudinary.uploader.upload(
+                image_path,
+                folder="ornaments_originals",
+                public_id=f"ornament_original_{os.path.splitext(os.path.basename(image_path))[0]}",
+                overwrite=True,
+            )
+            uploaded_urls.append(uploaded_result["secure_url"])
 
+        primary_uploaded_path = uploaded_image_paths[0]
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
-        local_generated_path = os.path.join(
-            gen_dir, f"generated_{os.path.basename(uploaded_image_path)}"
+        suffix = (
+            f"multi_{len(uploaded_image_paths)}"
+            if len(uploaded_image_paths) > 1
+            else os.path.splitext(os.path.basename(primary_uploaded_path))[0]
         )
+        local_generated_path = os.path.join(gen_dir, f"generated_{suffix}.jpg")
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
 
         upload_result = cloudinary.uploader.upload(
             local_generated_path,
             folder="ornaments_bg_change",
-            public_id=f"ornament_bg_{os.path.splitext(os.path.basename(uploaded_image_path))[0]}",
+            public_id=f"ornament_bg_{suffix}",
             overwrite=True,
         )
         generated_url = upload_result["secure_url"]
 
-        ornament_doc = OrnamentMongo(
-            prompt=final_prompt,
-            uploaded_image_url=uploaded_url,
-            generated_image_url=generated_url,
-            uploaded_image_path=uploaded_image_path,
-            generated_image_path=local_generated_path,
-            type="background_change",
-            user_id=user_id,
-            original_prompt=prompt,
-        )
+        ornament_doc_kwargs = {
+            "prompt": final_prompt,
+            "generated_image_url": generated_url,
+            "generated_image_path": local_generated_path,
+            "type": "background_change",
+            "user_id": user_id,
+            "original_prompt": prompt,
+        }
+        if len(uploaded_urls) > 1:
+            ornament_doc_kwargs["uploaded_ornament_urls"] = uploaded_urls
+            ornament_doc_kwargs["uploaded_image_path"] = "Multiple products"
+            ornament_doc_kwargs["uploaded_image_url"] = uploaded_urls[0]
+        else:
+            ornament_doc_kwargs["uploaded_image_url"] = uploaded_urls[0]
+            ornament_doc_kwargs["uploaded_image_path"] = primary_uploaded_path
+
+        ornament_doc = OrnamentMongo(**ornament_doc_kwargs)
         ornament_doc.save()
 
         logger.info(
-            "change_background_task: success user=%s generated_url=%s",
+            "change_background_task: success user=%s generated_url=%s products=%s",
             user_id,
             generated_url,
+            len(uploaded_image_paths),
         )
         return {
             "success": True,
             "message": "Background changed successfully",
-            "uploaded_image_url": uploaded_url,
+            "uploaded_image_url": uploaded_urls[0],
+            "uploaded_ornament_urls": uploaded_urls if len(uploaded_urls) > 1 else None,
             "generated_image_url": generated_url,
             "prompt": prompt,
             "mongo_id": str(ornament_doc.id),

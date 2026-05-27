@@ -12,7 +12,7 @@ class OrnamentForm(forms.ModelForm):
 
 
 class BackgroundChangeForm(forms.Form):
-    ornament_image = forms.ImageField(label="Ornament Image")
+    ornament_image = forms.ImageField(label="Ornament Image", required=False)
     background_image = forms.ImageField(
         label="Reference Background Image", required=False)
     background_color = forms.CharField(

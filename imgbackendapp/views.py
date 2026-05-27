@@ -10,7 +10,7 @@ from django.core.files.base import ContentFile
 from django.contrib import messages
 from django.http import JsonResponse
 import cloudinary.uploader
-from .forms import OrnamentForm, BackgroundChangeForm
+from .forms import OrnamentForm
 from .models import Ornament
 from .mongo_models import OrnamentMongo
 from PIL import Image
@@ -95,7 +95,6 @@ def change_background(request):
     user = request.user
     user_id = str(user.id)
 
-    # === Credit Check and Deduction ===
     from CREDITS.utils import (
         deduct_credits,
         get_user_organization,
@@ -103,95 +102,121 @@ def change_background(request):
         deduct_user_credits,
     )
 
-    # Use admin-configured credits per image
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
 
-    # Check if user has organization; if not, fall back to individual credits
+    ornaments = request.FILES.getlist('ornament_images')
+    if not ornaments and request.FILES.get('ornament_image'):
+        ornaments = [request.FILES.get('ornament_image')]
+
+    if not ornaments:
+        return JsonResponse(
+            {"success": False, "error": "Please upload at least one product image."},
+            status=400,
+        )
+
+    try:
+        num_images = int(request.POST.get('num_images', '1') or 1)
+    except (TypeError, ValueError):
+        num_images = 1
+    num_images = max(1, min(3, num_images))
+
+    # Multiple products -> one combined output; single product may request variations
+    charge_count = 1 if len(ornaments) > 1 else num_images
+    credit_amount = CREDITS_PER_IMAGE * charge_count
+
     organization = get_user_organization(user)
     if organization:
         credit_result = deduct_credits(
             organization=organization,
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=credit_amount,
             reason="Background change image generation",
-            metadata={"type": "change_background"},
+            metadata={
+                "type": "change_background",
+                "product_count": len(ornaments),
+                "num_images": charge_count,
+            },
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=credit_amount,
             reason="Background change image generation",
-            metadata={"type": "change_background"},
+            metadata={
+                "type": "change_background",
+                "product_count": len(ornaments),
+                "num_images": charge_count,
+            },
         )
 
     if not credit_result["success"]:
         return Response(
-            print("insufficient credits pls recharge",credit_result["message"]),
-            {"error": credit_result["message"]},
+            {"error": credit_result.get("message", "insufficient credits pls recharge")},
             status=400,
         )
 
-    print("POST keys:", request.POST.keys())
-    print("FILES keys:", request.FILES.keys())
+    background = request.FILES.get('background_image')
+    bg_color = request.POST.get('background_color', '')
+    prompt = request.POST.get('prompt', '')
+    dimension = request.POST.get('dimension', '1:1').strip()
+    reference_analysis = request.POST.get('reference_analysis', '').strip()
 
-    form = BackgroundChangeForm(request.POST, request.FILES)
-
-    if form.is_valid():
-        ornament = form.cleaned_data['ornament_image']
-        background = form.cleaned_data.get('background_image')
-        bg_color = form.cleaned_data.get('background_color')
-        prompt = form.cleaned_data.get('prompt', '')
-        dimension = request.POST.get('dimension', '1:1').strip()
-
-        try:
-            # -----------------------------
-            # SAVE ORNAMENT LOCALLY
-            # -----------------------------
-            upload_dir = os.path.join(
-                settings.MEDIA_ROOT, "uploaded_ornaments")
-            os.makedirs(upload_dir, exist_ok=True)
-            local_uploaded_path = os.path.join(upload_dir, ornament.name)
-
+    try:
+        upload_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
+        os.makedirs(upload_dir, exist_ok=True)
+        ornament_image_paths = []
+        for idx, ornament in enumerate(ornaments):
+            base_name, ext = os.path.splitext(ornament.name)
+            safe_name = f"{base_name}_{idx}{ext}" if len(ornaments) > 1 else ornament.name
+            local_uploaded_path = os.path.join(upload_dir, safe_name)
             with open(local_uploaded_path, "wb+") as dest:
                 for chunk in ornament.chunks():
                     dest.write(chunk)
+            ornament_image_paths.append(local_uploaded_path)
 
-            # -----------------------------
-            # SAVE BACKGROUND IMAGE LOCALLY (if provided)
-            # -----------------------------
-            background_image_path = None
-            if background:
-                bg_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_backgrounds")
-                os.makedirs(bg_dir, exist_ok=True)
-                background_image_path = os.path.join(bg_dir, background.name)
-                with open(background_image_path, "wb+") as dest:
-                    for chunk in background.chunks():
-                        dest.write(chunk)
+        background_image_path = None
+        if background:
+            bg_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_backgrounds")
+            os.makedirs(bg_dir, exist_ok=True)
+            background_image_path = os.path.join(bg_dir, background.name)
+            with open(background_image_path, "wb+") as dest:
+                for chunk in background.chunks():
+                    dest.write(chunk)
 
-            # Call Celery task asynchronously
-            task = change_background_task.delay(
-                uploaded_image_path=local_uploaded_path,
-                user_id=user_id,
-                bg_color=bg_color,
-                background_image_path=background_image_path,
-                prompt=prompt,
-                dimension=dimension
-            )
+        task_kwargs = {
+            "uploaded_image_paths": ornament_image_paths,
+            "user_id": user_id,
+            "bg_color": bg_color,
+            "background_image_path": background_image_path,
+            "prompt": prompt,
+            "dimension": dimension,
+            "reference_analysis": reference_analysis,
+        }
 
+        if len(ornament_image_paths) == 1 and num_images > 1:
+            task_ids = []
+            for _ in range(num_images):
+                task = change_background_task.delay(**task_kwargs)
+                task_ids.append(task.id)
             return JsonResponse({
                 "success": True,
-                "message": "Background change task started",
-                "task_id": task.id,
-                "status": "processing"
+                "message": "Background change tasks started",
+                "task_ids": task_ids,
+                "status": "processing",
             })
 
-        except Exception as e:
-            traceback.print_exc()
-            return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
+        task = change_background_task.delay(**task_kwargs)
+        return JsonResponse({
+            "success": True,
+            "message": "Background change task started",
+            "task_id": task.id,
+            "status": "processing",
+        })
 
-    else:
-        return JsonResponse({"success": False, "error": "Invalid form data"})
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
 
 
 @api_view(['POST'])
