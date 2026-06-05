@@ -280,7 +280,7 @@ ADMIN_EMAIL = [email.strip() for email in ADMIN_EMAIL.split(",") if email]
 
 
 # Frontend URL for password reset links
-FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
+FRONTEND_URL = os.getenv('FRONTEND_URL') or config('FRONTEND_URL', default='http://localhost:3000')
 
 # AI Model Configuration - Dynamically loaded from database
 DEFAULT_GEMINI_IMAGE_MODEL = config(

@@ -4,11 +4,15 @@ Uses MailTemplate from DB when available; falls back to built-in defaults.
 Includes a shared HTML base template with portal colors and logo.
 """
 import re
-from django.core.mail import send_mail
-from django.conf import settings
+import random
 import secrets
 import string
 from datetime import datetime
+from email.mime.image import MIMEImage
+from pathlib import Path
+
+from django.conf import settings
+from django.core.mail import EmailMultiAlternatives, send_mail
 
 # Portal color palette and branding for emails (matches Splash AI Studios portal)
 EMAIL_PRIMARY = "#c9a84c"
@@ -19,17 +23,51 @@ EMAIL_TEXT = "#f2edd8"
 EMAIL_TEXT_MUTED = "rgba(242, 237, 216, 0.58)"
 EMAIL_BORDER = "rgba(201, 168, 76, 0.28)"
 PORTAL_NAME = "Splash AI Studios"
+LOGO_CID = "splash_logo"
+_logo_bytes_cache = None
 
-import random
 
 def generate_otp():
     return str(random.randint(100000, 999999))
 
 
+def _get_logo_path():
+    backend_dir = Path(__file__).resolve().parent.parent
+    candidates = [
+        backend_dir / "static" / "email" / "SplashLogoPNG.png",
+        backend_dir / "static" / "email" / "logo-splash.png",
+        backend_dir.parent / "frontend" / "public" / "images" / "SplashLogoPNG.png",
+        backend_dir.parent / "frontend" / "public" / "images" / "logo-splash.png",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _get_logo_bytes():
+    global _logo_bytes_cache
+    if _logo_bytes_cache is not None:
+        return _logo_bytes_cache
+
+    logo_path = _get_logo_path()
+    if logo_path:
+        _logo_bytes_cache = logo_path.read_bytes()
+        return _logo_bytes_cache
+    return None
+
+
 def get_logo_url():
-    """Base URL for logo image in emails (must be absolute)."""
+    """Public URL fallback for logo image in emails (must be absolute)."""
     base = getattr(settings, "FRONTEND_URL", "") or "http://localhost:3000"
     return base.rstrip("/") + "/images/SplashLogoPNG.png"
+
+
+def get_logo_src_for_email():
+    """Use embedded CID when possible so logos render in email clients."""
+    if _get_logo_bytes():
+        return f"cid:{LOGO_CID}"
+    return get_logo_url()
 
 
 def get_email_signoff_html():
@@ -80,8 +118,8 @@ def get_base_email_html(content_body, title=""):
     content_body: HTML string for the main body.
     title: Optional heading above the body (e.g. "Payment Successful").
     """
-    logo_url = get_logo_url()
-    frontend_url = getattr(settings, "FRONTEND_URL", "") or ""
+    logo_src = get_logo_src_for_email()
+    frontend_url = getattr(settings, "FRONTEND_URL", "") or "http://localhost:3000"
     title_block = (
         f'<h2 style="color: {EMAIL_TEXT}; font-size: 22px; font-weight: 700; margin: 0 0 18px 0; letter-spacing: -0.02em;">{title}</h2>'
         if title
@@ -103,7 +141,7 @@ def get_base_email_html(content_body, title=""):
           <tr>
             <td style="padding: 28px 28px 18px 28px; border-bottom: 1px solid {EMAIL_BORDER}; text-align: center;">
               <a href="{frontend_url}" style="text-decoration: none; display: inline-block;">
-                <img src="{logo_url}" alt="{PORTAL_NAME}" style="max-height: 52px; width: auto; display: block; margin: 0 auto;" />
+                <img src="{logo_src}" alt="{PORTAL_NAME}" width="180" style="max-height: 52px; width: 180px; height: auto; display: block; margin: 0 auto; border: 0; outline: none; text-decoration: none;" />
               </a>
             </td>
           </tr>
@@ -131,16 +169,33 @@ def get_base_email_html(content_body, title=""):
 
 
 def _send_html_email(subject, body_plain, body_html, recipient_list):
-    """Send email with both plain and HTML parts."""
+    """Send email with plain + HTML parts and inline embedded logo when available."""
     try:
-        send_mail(
-            subject,
-            body_plain,
-            settings.DEFAULT_FROM_EMAIL,
-            recipient_list,
-            fail_silently=False,
-            html_message=body_html,
-        )
+        logo_bytes = _get_logo_bytes()
+        uses_embedded_logo = logo_bytes and f"cid:{LOGO_CID}" in body_html
+
+        if uses_embedded_logo:
+            email = EmailMultiAlternatives(
+                subject=subject,
+                body=body_plain,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to=recipient_list,
+            )
+            email.attach_alternative(body_html, "text/html")
+            mime_logo = MIMEImage(logo_bytes, _subtype="png")
+            mime_logo.add_header("Content-ID", f"<{LOGO_CID}>")
+            mime_logo.add_header("Content-Disposition", "inline", filename="splash-logo.png")
+            email.attach(mime_logo)
+            email.send(fail_silently=False)
+        else:
+            send_mail(
+                subject,
+                body_plain,
+                settings.DEFAULT_FROM_EMAIL,
+                recipient_list,
+                fail_silently=False,
+                html_message=body_html,
+            )
         return True
     except Exception as e:
         print(f"Error sending HTML email: {e}")
