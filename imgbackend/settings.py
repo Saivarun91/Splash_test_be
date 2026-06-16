@@ -35,6 +35,8 @@ cloudinary.config(
 # Gemini API key settings (loaded from .env)
 GOOGLE_API_KEY = config("GOOGLE_API_KEY", default="")
 GEMINI_API_KEY = config("GEMINI_API_KEY", default=GOOGLE_API_KEY)
+OPENAI_API_KEY = config("OPENAI_API_KEY", default="")
+OPENAI_IMAGE_MODEL = config("OPENAI_IMAGE_MODEL", default="gpt-image-1")
 
 # Razorpay Configuration
 RAZORPAY_KEY_ID = config('RAZORPAY_KEY_ID', default='')

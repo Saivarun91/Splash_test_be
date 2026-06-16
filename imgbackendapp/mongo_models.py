@@ -50,6 +50,7 @@ class OrnamentMongo(Document):
     parent_image_id = ObjectIdField()
     original_prompt = StringField()  # Store the original prompt for context
     measurements = StringField()
+    model_tier = StringField()  # regular | premium
 
     # Single model image (only for campaign)
     model_image_url = URLField()

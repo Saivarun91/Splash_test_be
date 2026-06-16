@@ -22,6 +22,7 @@ from bson import ObjectId
 from common.error_reporter import report_handled_exception
 from common.user_friendly_errors import get_user_friendly_message
 from .generation_utils import build_variation_instruction
+from .image_provider import generate_image_bytes, normalize_model_tier
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,7 @@ def change_background_task(
     reference_analysis="",
     variation_index=0,
     total_variations=1,
+    model_tier="regular",
 ):
     """
     Celery task to change background of one or more product images.
@@ -325,101 +327,65 @@ def change_background_task(
                 f"{base_prompt} Generate the image in {dimension} aspect ratio (width:height)."
             )
 
-        generated_bytes = None
-        if has_genai:
-            api_key = getattr(settings, "GEMINI_API_KEY", None) or getattr(
-                settings, "GOOGLE_API_KEY", None
+        contents = []
+        multiple_products = len(product_b64_list) > 1
+        for idx, product_b64 in enumerate(product_b64_list):
+            contents.append(
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": product_b64,
+                    }
+                }
             )
-            client = genai.Client(api_key=api_key)
-            configured_model = get_image_model_name(
-                default_model="gemini-3.1-flash-image-preview"
-            )
-            model_name = (
-                "gemini-3.1-flash-image-preview"
-                if str(configured_model).strip().lower().startswith("imagen-")
-                else configured_model
+            if multiple_products:
+                contents.append(
+                    f"This is product reference image {idx + 1} of {len(product_b64_list)}. "
+                    "Preserve this product accurately in the final image."
+                )
+            else:
+                contents.append(
+                    "This is the product whose background must be changed. "
+                    "Preserve the product exactly; change only the background."
+                )
+
+        if multiple_products:
+            contents.append(
+                "Generate ONE cohesive themed image that includes ALL uploaded products together "
+                "in a single composition with the new background. Do not omit any product."
             )
 
-            contents = []
-            multiple_products = len(product_b64_list) > 1
-            for idx, product_b64 in enumerate(product_b64_list):
-                contents.append(
+        if bg_b64:
+            contents.extend(
+                [
                     {
                         "inline_data": {
                             "mime_type": "image/jpeg",
-                            "data": product_b64,
+                            "data": bg_b64,
                         }
-                    }
-                )
-                if multiple_products:
-                    contents.append(
-                        f"This is product reference image {idx + 1} of {len(product_b64_list)}. "
-                        "Preserve this product accurately in the final image."
-                    )
-                else:
-                    contents.append(
-                        "This is the product whose background must be changed. "
-                        "Preserve the product exactly; change only the background."
-                    )
-
-            if multiple_products:
-                contents.append(
-                    "Generate ONE cohesive themed image that includes ALL uploaded products together "
-                    "in a single composition with the new background. Do not omit any product."
-                )
-
-            if bg_b64:
-                contents.extend(
-                    [
-                        {
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": bg_b64,
-                            }
-                        },
-                        "Use this image strictly as the new background.",
-                    ]
-                )
-            contents.append(base_prompt)
-
-            logger.info(
-                "change_background_task: calling Gemini model=%s for user=%s",
-                model_name,
-                user_id,
+                    },
+                    "Use this image strictly as the new background.",
+                ]
             )
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"]
-                ),
-            )
+        contents.append(base_prompt)
 
-            candidates = getattr(response, "candidates", None) or []
-            if not candidates:
-                raise RuntimeError("Gemini returned no candidates.")
+        reference_paths = list(uploaded_image_paths)
+        if background_image_path and os.path.exists(background_image_path):
+            reference_paths.append(background_image_path)
 
-            candidate = candidates[0]
-            content = getattr(candidate, "content", None)
-            parts = getattr(content, "parts", None) or []
-            if not parts:
-                raise RuntimeError("Gemini candidate has no content parts.")
-
-            for part in parts:
-                inline_data = getattr(part, "inline_data", None)
-                if not inline_data:
-                    continue
-                data = getattr(inline_data, "data", None)
-                if not data:
-                    continue
-                generated_bytes = data if isinstance(data, bytes) else base64.b64decode(data)
-                if generated_bytes:
-                    break
-
-            if not generated_bytes:
-                raise RuntimeError("Gemini returned no inline image data.")
-        else:
-            raise RuntimeError("Gemini SDK not installed.")
+        logger.info(
+            "change_background_task: tier=%s user=%s products=%s",
+            normalize_model_tier(model_tier),
+            user_id,
+            len(uploaded_image_paths),
+        )
+        generated_bytes = generate_image_bytes(
+            model_tier,
+            prompt=base_prompt,
+            gemini_contents=contents,
+            reference_paths=reference_paths,
+            dimension=dimension,
+        )
 
         uploaded_urls = []
         for image_path in uploaded_image_paths:
@@ -460,6 +426,7 @@ def change_background_task(
             "type": "background_change",
             "user_id": user_id,
             "original_prompt": prompt,
+            "model_tier": normalize_model_tier(model_tier),
         }
         if len(uploaded_urls) > 1:
             ornament_doc_kwargs["uploaded_ornament_urls"] = uploaded_urls
@@ -504,7 +471,7 @@ def change_background_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1):
+def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="premium"):
     """
     Celery task to generate model with ornament.
     """
@@ -520,96 +487,84 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
                 pose_bytes = f.read()
             pose_b64 = base64.b64encode(pose_bytes).decode('utf-8')
 
-        if not (getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")):
+        if normalize_model_tier(model_tier) == "regular" and not (
+            getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
+        ):
             raise Exception("GEMINI/GOOGLE API key not configured")
 
-        generated_bytes = None
-
-        if has_genai:
-            client = genai.Client()
-            model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
-
-            contents = [
-                {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
-            ]
-            if pose_b64:
-                contents.append(
-                    {"inline_data": {"mime_type": "image/jpeg", "data": pose_b64}}
-                )
-
-            # Parse ornament measurements
-            import json
-            try:
-                ornament_measurements_dict = json.loads(
-                    ornament_measurements) if ornament_measurements else {}
-            except:
-                ornament_measurements_dict = {}
-
-            # Build ornament description
-            ornament_description = ""
-            if ornament_type:
-                ornament_description += f"This is a {ornament_type}. "
-            if ornament_measurements_dict:
-                measurements_text = ", ".join(
-                    [f"{key}: {value}" for key, value in ornament_measurements_dict.items() if value])
-                if measurements_text:
-                    ornament_description += f"Specific measurements: {measurements_text}. "
-
-            # Get prompt from database
-            from probackendapp.prompt_initializer import get_prompt_from_db
-            measurements_text = f"measurements: {measurements}. " if measurements else ""
-            prompt_text = f"\nmandatory consideration details: {prompt}" if prompt else ""
-            default_prompt = (
-                "Generate a close-up, high-fashion portrait of an elegant Indian woman "
-                "wearing this 100% real accurate uploaded ornament. Focus tightly on the neckline and jewelry area according to the ornament. "
-                "Ensure the jewelry fits naturally and realistically on the model. "
-                "Lighting should be soft and natural, highlighting the sparkle of the jewelry and the model's features. "
-                "Use a shallow depth of field with a softly blurred background that hints at an elegant setting. "
-                "Do not include any watermark, text, or unnatural effects. "
-                f"{ornament_description}"
-                f"{measurements_text}Make sure to follow the measurements strictly."
-                f"{prompt_text}"
-            )
-            user_prompt = get_prompt_from_db(
-                'images_model_with_ornament',
-                default_prompt,
-                ornament_description=ornament_description,
-                measurements_text=measurements_text,
-                user_prompt=prompt
-            )
-            dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
-            if dimension and dimension not in user_prompt:
-                user_prompt = f"{user_prompt}{dimension_text}"
-            user_prompt = (
-                f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
+        contents = [
+            {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
+        ]
+        if pose_b64:
+            contents.append(
+                {"inline_data": {"mime_type": "image/jpeg", "data": pose_b64}}
             )
 
-            contents.append({"text": user_prompt})
+        # Parse ornament measurements
+        import json
+        try:
+            ornament_measurements_dict = json.loads(
+                ornament_measurements) if ornament_measurements else {}
+        except:
+            ornament_measurements_dict = {}
 
-            config = types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"]
-            )
+        # Build ornament description
+        ornament_description = ""
+        if ornament_type:
+            ornament_description += f"This is a {ornament_type}. "
+        if ornament_measurements_dict:
+            measurements_text = ", ".join(
+                [f"{key}: {value}" for key, value in ornament_measurements_dict.items() if value])
+            if measurements_text:
+                ornament_description += f"Specific measurements: {measurements_text}. "
 
-            resp = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config
-            )
+        # Get prompt from database
+        from probackendapp.prompt_initializer import get_prompt_from_db
+        measurements_text = f"measurements: {measurements}. " if measurements else ""
+        prompt_text = f"\nmandatory consideration details: {prompt}" if prompt else ""
+        default_prompt = (
+            "Generate a close-up, high-fashion portrait of an elegant Indian woman "
+            "wearing this 100% real accurate uploaded ornament. Focus tightly on the neckline and jewelry area according to the ornament. "
+            "Ensure the jewelry fits naturally and realistically on the model. "
+            "Lighting should be soft and natural, highlighting the sparkle of the jewelry and the model's features. "
+            "Use a shallow depth of field with a softly blurred background that hints at an elegant setting. "
+            "Do not include any watermark, text, or unnatural effects. "
+            f"{ornament_description}"
+            f"{measurements_text}Make sure to follow the measurements strictly."
+            f"{prompt_text}"
+        )
+        user_prompt = get_prompt_from_db(
+            'images_model_with_ornament',
+            default_prompt,
+            ornament_description=ornament_description,
+            measurements_text=measurements_text,
+            user_prompt=prompt,
+            pose_ref_text=(
+                "Follow the pose from the uploaded pose reference image. "
+                if pose_b64
+                else ""
+            ),
+        )
+        dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
+        if dimension and dimension not in user_prompt:
+            user_prompt = f"{user_prompt}{dimension_text}"
+        user_prompt = (
+            f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
+        )
 
-            candidate = resp.candidates[0]
-            for part in candidate.content.parts:
-                if part.inline_data:
-                    data = part.inline_data.data
-                    generated_bytes = (
-                        data if isinstance(data, bytes)
-                        else base64.b64decode(data)
-                    )
-                    break
+        contents.append({"text": user_prompt})
 
-            if not generated_bytes:
-                raise Exception("No image returned from Gemini")
-        else:
-            raise Exception("Gemini SDK not available or misconfigured.")
+        reference_paths = [ornament_image_path]
+        if pose_image_path and os.path.exists(pose_image_path):
+            reference_paths.append(pose_image_path)
+
+        generated_bytes = generate_image_bytes(
+            model_tier,
+            prompt=user_prompt,
+            gemini_contents=contents,
+            reference_paths=reference_paths,
+            dimension=dimension,
+        )
 
         # Upload ornament to Cloudinary
         uploaded_result = cloudinary.uploader.upload(
@@ -650,7 +605,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             type="model_with_ornament",
             user_id=user_id,
             original_prompt=prompt,
-            measurements=measurements
+            measurements=measurements,
+            model_tier=normalize_model_tier(model_tier),
         )
         ornament_doc.save()
 
@@ -678,7 +634,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1):
+def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="premium"):
     """
     Celery task to generate real model with ornament.
     """
@@ -698,94 +654,88 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
                 pose_bytes = f.read()
             pose_b64 = base64.b64encode(pose_bytes).decode("utf-8")
 
-        if not (getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")):
+        if normalize_model_tier(model_tier) == "regular" and not (
+            getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
+        ):
             raise Exception("GEMINI/GOOGLE API key not configured")
 
-        generated_bytes = None
+        contents = [
+            {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
+            {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}},
+        ]
+        if pose_b64:
+            contents.append(
+                {"inline_data": {"mime_type": "image/jpeg", "data": pose_b64}})
 
-        if has_genai:
-            client = genai.Client()
-            model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
+        # Parse ornament measurements
+        import json
+        try:
+            ornament_measurements_dict = json.loads(
+                ornament_measurements) if ornament_measurements else {}
+        except:
+            ornament_measurements_dict = {}
 
-            contents = [
-                {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
-                {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}},
-            ]
-            if pose_b64:
-                contents.append(
-                    {"inline_data": {"mime_type": "image/jpeg", "data": pose_b64}})
+        # Build ornament description
+        ornament_description = ""
+        if ornament_type:
+            ornament_description += f"This is a {ornament_type}. "
+        if ornament_measurements_dict:
+            measurements_text = ", ".join(
+                [f"{key}: {value}" for key, value in ornament_measurements_dict.items() if value])
+            if measurements_text:
+                ornament_description += f"Specific measurements: {measurements_text}. "
 
-            # Parse ornament measurements
-            import json
-            try:
-                ornament_measurements_dict = json.loads(
-                    ornament_measurements) if ornament_measurements else {}
-            except:
-                ornament_measurements_dict = {}
+        # Get prompt from database
+        from probackendapp.prompt_initializer import get_prompt_from_db
+        measurements_text = f"Additional measurements: {measurements}. " if measurements else ""
+        prompt_text = f" Additional user instructions: {prompt}" if prompt else ""
+        default_prompt = (
+            "Generate a realistic, high-quality close-up image of the uploaded model wearing "
+            "the exact uploaded ornament. Keep the model's face fully intact and recognizable. "
+            "Ensure the ornament fits naturally and realistically on the model. "
+            "Generate a background suitable for both the model and the ornament. "
+            "Lighting should be soft, natural, and elegant. "
+            "Focus tightly on the jewelry area. "
+            "Follow the pose from the uploaded pose image if provided. "
+            f"{ornament_description}"
+            f"{measurements_text}"
+            f"{prompt_text}"
+        )
+        user_prompt = get_prompt_from_db(
+            'images_real_model_with_ornament',
+            default_prompt,
+            ornament_description=ornament_description,
+            measurements_text=measurements_text,
+            user_prompt=prompt,
+            pose_ref_text=(
+                "Follow the pose from the uploaded pose reference image. "
+                if pose_b64
+                else ""
+            ),
+        )
+        if prompt:
+            user_prompt = f"{user_prompt} {prompt}"
 
-            # Build ornament description
-            ornament_description = ""
-            if ornament_type:
-                ornament_description += f"This is a {ornament_type}. "
-            if ornament_measurements_dict:
-                measurements_text = ", ".join(
-                    [f"{key}: {value}" for key, value in ornament_measurements_dict.items() if value])
-                if measurements_text:
-                    ornament_description += f"Specific measurements: {measurements_text}. "
+        dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
+        if dimension and dimension not in user_prompt:
+            user_prompt = f"{user_prompt}{dimension_text}"
+        user_prompt = (
+            f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
+        )
 
-            # Get prompt from database
-            from probackendapp.prompt_initializer import get_prompt_from_db
-            measurements_text = f"Additional measurements: {measurements}. " if measurements else ""
-            prompt_text = f" Additional user instructions: {prompt}" if prompt else ""
-            default_prompt = (
-                "Generate a realistic, high-quality close-up image of the uploaded model wearing "
-                "the exact uploaded ornament. Keep the model's face fully intact and recognizable. "
-                "Ensure the ornament fits naturally and realistically on the model. "
-                "Generate a background suitable for both the model and the ornament. "
-                "Lighting should be soft, natural, and elegant. "
-                "Focus tightly on the jewelry area. "
-                "Follow the pose from the uploaded pose image if provided. "
-                f"{ornament_description}"
-                f"{measurements_text}"
-                f"{prompt_text}"
-            )
-            user_prompt = get_prompt_from_db(
-                'images_real_model_with_ornament',
-                default_prompt,
-                ornament_description=ornament_description,
-                measurements_text=measurements_text,
-                user_prompt=prompt
-            )
-            if prompt:
-                user_prompt = f"{user_prompt} {prompt}"
-            
-            dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
-            if dimension and dimension not in user_prompt:
-                user_prompt = f"{user_prompt}{dimension_text}"
-            user_prompt = (
-                f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
-            )
+        contents.append({"text": user_prompt})
 
-            contents.append({"text": user_prompt})
-            config = types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"])
+        reference_paths = [model_image_path, ornament_image_path]
+        if pose_image_path and os.path.exists(pose_image_path):
+            reference_paths.append(pose_image_path)
 
-            resp = client.models.generate_content(
-                model=model_name, contents=contents, config=config)
-            candidate = resp.candidates[0]
-
-            for part in candidate.content.parts:
-                if part.inline_data:
-                    data = part.inline_data.data
-                    generated_bytes = data if isinstance(
-                        data, bytes) else base64.b64decode(data)
-                    break
-
-            if not generated_bytes:
-                raise Exception("No image returned from Gemini")
-        else:
-            raise Exception(
-                "Gemini SDK not available. Please install or configure it.")
+        generated_bytes = generate_image_bytes(
+            model_tier,
+            prompt=user_prompt,
+            gemini_contents=contents,
+            reference_paths=reference_paths,
+            dimension=dimension,
+        )
 
         # Upload images to Cloudinary
         model_upload = cloudinary.uploader.upload(
@@ -836,7 +786,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             type="real_model_with_ornament",
             user_id=user_id,
             original_prompt=prompt,
-            measurements=measurements
+            measurements=measurements,
+            model_tier=normalize_model_tier(model_tier),
         )
         ornament_doc.save()
 
@@ -879,6 +830,7 @@ def generate_campaign_shot_advanced_task(
     ornament_measurements='[]',
     variation_index=0,
     total_variations=1,
+    model_tier="premium",
 ):
     """
     Celery task to generate campaign shot.
@@ -948,16 +900,6 @@ def generate_campaign_shot_advanced_task(
                 theme_b64_list.append(base64.b64encode(
                     theme_bytes).decode('utf-8'))
 
-        # Check Gemini configuration
-        if not (getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")):
-            raise Exception("GEMINI/GOOGLE API key not configured")
-        if not has_genai:
-            raise Exception("Gemini SDK not available. Please install or configure it.")
-
-        # Build Gemini request
-        client = genai.Client()
-        model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
-
         parts = []
 
         # Model (optional)
@@ -1023,7 +965,7 @@ def generate_campaign_shot_advanced_task(
             )
             if prompt:
                 user_prompt = f"{user_prompt} {prompt}"
-        
+
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
@@ -1034,25 +976,23 @@ def generate_campaign_shot_advanced_task(
         parts.append({"text": user_prompt})
         contents = [{"parts": parts}]
 
-        config = types.GenerateContentConfig(
-            response_modalities=["TEXT", "IMAGE"]
+        reference_paths = []
+        if model_image_path and os.path.exists(model_image_path):
+            reference_paths.append(model_image_path)
+        reference_paths.extend(
+            [path for path in ornament_image_paths if path and os.path.exists(path)]
+        )
+        reference_paths.extend(
+            [path for path in theme_image_paths if path and os.path.exists(path)]
         )
 
-        # Generate via Gemini
-        resp = client.models.generate_content(
-            model=model_name, contents=contents, config=config)
-        candidate = resp.candidates[0]
-
-        generated_bytes = None
-        for part in candidate.content.parts:
-            if getattr(part, "inline_data", None):
-                data = part.inline_data.data
-                generated_bytes = data if isinstance(
-                    data, bytes) else base64.b64decode(data)
-                break
-
-        if not generated_bytes:
-            raise Exception("No image returned from Gemini")
+        generated_bytes = generate_image_bytes(
+            model_tier,
+            prompt=user_prompt,
+            gemini_contents=contents,
+            reference_paths=reference_paths,
+            dimension=dimension,
+        )
 
         # Upload generated image
         buf = BytesIO(generated_bytes)
@@ -1079,7 +1019,8 @@ def generate_campaign_shot_advanced_task(
             uploaded_image_path="Multiple ornaments",
             generated_image_path=generated_path,
             user_id=user_id,
-            original_prompt=prompt
+            original_prompt=prompt,
+            model_tier=normalize_model_tier(model_tier),
         )
         ornament_doc.save()
 
@@ -1108,7 +1049,7 @@ def generate_campaign_shot_advanced_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def regenerate_image_task(self, image_id, user_id, new_prompt):
+def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regular"):
     """
     Celery task to regenerate an image.
     """
@@ -1157,80 +1098,25 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
             img_bytes = resp.read()
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
-        # Generate new image using Gemini
-        generated_bytes = None
-
-        if has_genai:
-            if not (getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")):
-                raise Exception("GEMINI/GOOGLE API key not configured")
-
-            client = genai.Client()
-            model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
-
-            contents = [
-                {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
-                {"text": combined_prompt},
-                {"text": measurements_text}
-            ]
-
-            config = types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"]
-            )
-
-            resp = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config
-            )
-
-            candidate = resp.candidates[0]
-            for part in candidate.content.parts:
-                if getattr(part, 'inline_data', None):
-                    data = part.inline_data.data
-                    generated_bytes = data if isinstance(
-                        data, bytes) else base64.b64decode(data)
-                    break
-
-            if not generated_bytes:
-                raise Exception("Gemini response had no image inline_data")
-        else:
-            # Fallback: Use OpenCV/PIL processing
-            original = Image.open(BytesIO(img_bytes)).convert("RGB")
-            img_array = np.array(original)
-            img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-            blur = cv2.GaussianBlur(gray, (5, 5), 0)
-            _, thresh = cv2.threshold(blur, 240, 255, cv2.THRESH_BINARY_INV)
-
-            kernel = np.ones((3, 3), np.uint8)
-            thresh = cv2.morphologyEx(
-                thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
-            thresh = cv2.morphologyEx(
-                thresh, cv2.MORPH_OPEN, kernel, iterations=1)
-
-            contours, _ = cv2.findContours(
-                thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest_contour = max(contours, key=cv2.contourArea)
-                mask = np.zeros_like(gray)
-                cv2.drawContours(mask, [largest_contour], -1, 255, -1)
-                mask = cv2.GaussianBlur(mask, (5, 5), 0)
-                rgba_array = np.dstack((img_array, mask))
-                transparent_img = Image.fromarray(rgba_array, 'RGBA')
-                white_bg = Image.new("RGB", original.size, (255, 255, 255))
-                white_bg.paste(transparent_img,
-                               mask=transparent_img.split()[3])
-                buf = BytesIO()
-                white_bg.save(buf, format="JPEG", quality=95)
-                generated_bytes = buf.getvalue()
-            else:
-                raise Exception(
-                    "Could not process image using fallback method.")
-
-        # Save regenerated image locally
-        regen_filename = f"regen_{image_id}_{int(time.time())}.jpg"
         regen_dir = os.path.join(settings.MEDIA_ROOT, "generated")
         os.makedirs(regen_dir, exist_ok=True)
+        temp_ref_path = os.path.join(regen_dir, f"regen_ref_{image_id}_{int(time.time())}.jpg")
+        with open(temp_ref_path, "wb") as ref_file:
+            ref_file.write(img_bytes)
+
+        contents = [
+            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+            {"text": combined_prompt},
+            {"text": measurements_text},
+        ]
+
+        generated_bytes = generate_image_bytes(
+            model_tier,
+            prompt=f"{combined_prompt} {measurements_text}".strip(),
+            gemini_contents=contents,
+            reference_paths=[temp_ref_path],
+        )
+        regen_filename = f"regen_{image_id}_{int(time.time())}.jpg"
         local_regen_path = os.path.join(regen_dir, regen_filename)
 
         with open(local_regen_path, "wb") as f:
@@ -1262,7 +1148,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt):
             model_image_url=prev_doc.model_image_url if hasattr(
                 prev_doc, 'model_image_url') else None,
             uploaded_ornament_urls=prev_doc.uploaded_ornament_urls if hasattr(
-                prev_doc, 'uploaded_ornament_urls') else None
+                prev_doc, 'uploaded_ornament_urls') else None,
+            model_tier=normalize_model_tier(model_tier),
         )
         new_doc.save()
 

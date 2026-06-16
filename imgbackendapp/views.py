@@ -36,6 +36,7 @@ from .tasks import (
     regenerate_image_task,
 )
 from .generation_utils import parse_num_images, dispatch_variation_tasks
+from .image_provider import parse_model_tier
 
 # Check for Gemini SDK
 try:
@@ -192,6 +193,7 @@ def change_background(request):
             "prompt": prompt,
             "dimension": dimension,
             "reference_analysis": reference_analysis,
+            "model_tier": parse_model_tier(request, default="regular"),
         }
 
         if len(ornament_image_paths) == 1 and num_images > 1:
@@ -317,6 +319,7 @@ def generate_model_with_ornament(request):
             "ornament_type": ornament_type,
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
+            "model_tier": parse_model_tier(request, default="premium"),
         }
         dispatch = dispatch_variation_tasks(
             generate_model_with_ornament_task,
@@ -450,6 +453,7 @@ def generate_real_model_with_ornament(request):
             "ornament_type": ornament_type,
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
+            "model_tier": parse_model_tier(request, default="premium"),
         }
         dispatch = dispatch_variation_tasks(
             generate_real_model_with_ornament_task,
@@ -593,6 +597,7 @@ def generate_campaign_shot_advanced(request):
             "theme_image_paths": theme_image_paths,
             "prompt": prompt,
             "dimension": dimension,
+            "model_tier": parse_model_tier(request, default="premium"),
         }
         dispatch = dispatch_variation_tasks(
             generate_campaign_shot_advanced_task,
@@ -891,6 +896,7 @@ def regenerate_image(request):
         # MongoDB ID of the image to regenerate
         image_id = request.POST.get('image_id')
         new_prompt = request.POST.get('prompt', '').strip()
+        model_tier = parse_model_tier(request, default="regular")
         print(new_prompt)
 
         if not image_id:
@@ -924,7 +930,8 @@ def regenerate_image(request):
         task = regenerate_image_task.delay(
             image_id=image_id,
             user_id=user_id,
-            new_prompt=new_prompt
+            new_prompt=new_prompt,
+            model_tier=model_tier,
         )
 
         return JsonResponse({

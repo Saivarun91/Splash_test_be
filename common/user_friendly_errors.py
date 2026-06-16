@@ -8,6 +8,7 @@ IMAGE_GENERATION_ERROR_MAP = [
     # API / configuration
     ("GOOGLE_API_KEY not configured", "Image generation service is not configured. Please contact support."),
     ("GEMINI/GOOGLE API key not configured", "Image generation service is not configured. Please contact support."),
+    ("OPENAI API key not configured", "Premium image generation is not configured. Please contact support or use Regular."),
     ("Gemini SDK not available", "Image generation service is temporarily unavailable. Please try again later."),
     ("api_key", "Image generation service configuration error. Please try again later."),
     # Rate limits / quota
