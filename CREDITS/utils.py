@@ -365,3 +365,77 @@ def deduct_user_credits(user, amount, reason="Image generation", project=None, m
             'message': f'Error deducting credits: {str(e)}',
             'balance_after': user.credit_balance if user else 0
         }
+
+
+def add_user_credits(user, admin_user, amount, reason="Credit top-up", metadata=None):
+    """Add credits to an individual user (no organization)."""
+    try:
+        user.reload()
+        user.credit_balance = (user.credit_balance or 0) + amount
+        user.updated_at = datetime.utcnow()
+        user.save()
+
+        CreditLedger(
+            user=user,
+            organization=None,
+            change_type="credit",
+            credits_changed=amount,
+            balance_after=user.credit_balance or 0,
+            reason=reason,
+            metadata=metadata or {},
+            created_by=admin_user,
+            updated_by=admin_user,
+        ).save()
+
+        return {
+            'success': True,
+            'message': 'Credits added successfully',
+            'balance_after': user.credit_balance or 0,
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f'Error adding credits: {str(e)}',
+            'balance_after': user.credit_balance if user else 0,
+        }
+
+
+def remove_user_credits(user, admin_user, amount, reason="Credit deduction", metadata=None):
+    """Remove credits from an individual user (no organization)."""
+    try:
+        user.reload()
+        current_balance = user.credit_balance or 0
+        if current_balance < amount:
+            return {
+                'success': False,
+                'message': f'Insufficient credits. Available: {current_balance}, Required: {amount}',
+                'balance_after': current_balance,
+            }
+
+        user.credit_balance = current_balance - amount
+        user.updated_at = datetime.utcnow()
+        user.save()
+
+        CreditLedger(
+            user=user,
+            organization=None,
+            change_type="debit",
+            credits_changed=amount,
+            balance_after=user.credit_balance or 0,
+            reason=reason,
+            metadata=metadata or {},
+            created_by=admin_user,
+            updated_by=admin_user,
+        ).save()
+
+        return {
+            'success': True,
+            'message': 'Credits removed successfully',
+            'balance_after': user.credit_balance or 0,
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f'Error removing credits: {str(e)}',
+            'balance_after': user.credit_balance if user else 0,
+        }

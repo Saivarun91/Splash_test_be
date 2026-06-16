@@ -462,7 +462,7 @@ def list_organizations(request):
                 'name': org.name,
                 'owner_email': org.owner.email,
                 'credit_balance': org.credit_balance,
-                'member_count': len(org.members) if org.members else 0,
+                'member_count': User.objects(organization=org).count(),
                 'created_at': org.created_at.isoformat() if org.created_at else None
             })
 
@@ -488,20 +488,30 @@ def get_organization(request, organization_id):
         if not has_organization_permission(request.user, organization):
             return JsonResponse({'error': 'You do not have permission to view this organization'}, status=403)
 
+        # Get all users belonging to this organization
+        all_members = list(User.objects(organization=organization))
+        if organization.owner and organization.owner not in all_members:
+            all_members.append(organization.owner)
+            
+        # Deduplicate members by ID
+        unique_members = []
+        seen_ids = set()
+        for member in all_members:
+            member_id_str = str(member.id)
+            if member_id_str not in seen_ids:
+                seen_ids.add(member_id_str)
+                unique_members.append(member)
+                
         members_list = []
-        if organization.members:
-            for member in organization.members:
-                try:
-                    if member:  # Check if member reference is valid
-                        members_list.append({
-                            'id': str(member.id),
-                            'email': member.email if hasattr(member, 'email') else '',
-                            'full_name': member.full_name if hasattr(member, 'full_name') else '',
-                            'organization_role': member.organization_role if hasattr(member, 'organization_role') else ''
-                        })
-                except (DoesNotExist, AttributeError, TypeError):
-                    # Skip invalid member references
-                    continue
+        for member in unique_members:
+            is_owner = organization.owner and str(member.id) == str(organization.owner.id)
+            role = 'owner' if is_owner else (member.organization_role or 'member')
+            members_list.append({
+                'id': str(member.id),
+                'email': member.email,
+                'full_name': member.full_name or '',
+                'organization_role': role
+            })
 
         # Get projects for this organization
         # Query projects directly by organization instead of using organization.projects
@@ -833,9 +843,9 @@ def get_organization_images(request, organization_id):
         if not organization:
             return JsonResponse({'error': 'Organization not found'}, status=404)
 
-        # Check permission - only owner or admin can view
-        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
-            return JsonResponse({'error': 'Only organization owner or admin can view images'}, status=403)
+        # Check permission - only members or admin can view
+        if not (is_admin(request.user) or is_organization_member(request.user, organization)):
+            return JsonResponse({'error': 'Only organization members or admin can view images'}, status=403)
 
         # Get query parameters
         image_type = request.GET.get('image_type')  # Optional filter
@@ -844,15 +854,11 @@ def get_organization_images(request, organization_id):
         limit = int(request.GET.get('limit', 100))
         offset = int(request.GET.get('offset', 0))
 
-        # Get all organization members
-        organization_members = organization.members if organization.members else []
-        member_ids = [str(member.id) for member in organization_members]
-        
-        # Also include the owner
-        if organization.owner:
-            owner_id = str(organization.owner.id)
-            if owner_id not in member_ids:
-                member_ids.append(owner_id)
+        # Get all users belonging to this organization
+        all_members = list(User.objects(organization=organization))
+        if organization.owner and organization.owner not in all_members:
+            all_members.append(organization.owner)
+        member_ids = [str(member.id) for member in all_members]
 
         # Get all projects for this organization
         organization_projects = Project.objects(organization=organization)
@@ -1010,19 +1016,15 @@ def get_organization_stats(request, organization_id):
         if not organization:
             return JsonResponse({'error': 'Organization not found'}, status=404)
 
-        # Check permission
-        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
-            return JsonResponse({'error': 'Only organization owner or admin can view stats'}, status=403)
+        # Check permission - only members or admin can view
+        if not (is_admin(request.user) or is_organization_member(request.user, organization)):
+            return JsonResponse({'error': 'Only organization members or admin can view stats'}, status=403)
 
-        # Get all organization members
-        organization_members = organization.members if organization.members else []
-        member_ids = [str(member.id) for member in organization_members]
-        
-        # Also include the owner
-        if organization.owner:
-            owner_id = str(organization.owner.id)
-            if owner_id not in member_ids:
-                member_ids.append(owner_id)
+        # Get all users belonging to this organization
+        all_members = list(User.objects(organization=organization))
+        if organization.owner and organization.owner not in all_members:
+            all_members.append(organization.owner)
+        member_ids = [str(member.id) for member in all_members]
 
         # Get projects
         projects = Project.objects(organization=organization)
@@ -1067,7 +1069,7 @@ def get_organization_stats(request, organization_id):
                 images_by_type[img_type] = count
 
         # Get member count
-        member_count = len(organization.members) if organization.members else 0
+        member_count = len(member_ids)
 
         # Get recent activity (last 30 days)
         from datetime import timedelta
@@ -1125,12 +1127,26 @@ def get_organization_members(request, organization_id):
         if not organization:
             return JsonResponse({'error': 'Organization not found'}, status=404)
 
-        # Check permission
-        if not (is_admin(request.user) or is_organization_owner(request.user, organization)):
-            return JsonResponse({'error': 'Only organization owner or admin can view members'}, status=403)
+        # Check permission - only members or admin can view
+        if not (is_admin(request.user) or is_organization_member(request.user, organization)):
+            return JsonResponse({'error': 'Only organization members or admin can view members'}, status=403)
 
+        # Get all users belonging to this organization
+        all_members = list(User.objects(organization=organization))
+        if organization.owner and organization.owner not in all_members:
+            all_members.append(organization.owner)
+            
+        # Deduplicate members by ID
+        unique_members = []
+        seen_ids = set()
+        for member in all_members:
+            member_id_str = str(member.id)
+            if member_id_str not in seen_ids:
+                seen_ids.add(member_id_str)
+                unique_members.append(member)
+                
         members_list = []
-        for member in organization.members:
+        for member in unique_members:
             # Get user's project count
             user_projects = Project.objects(organization=organization, created_by=member)
             projects_count = user_projects.count()
@@ -1148,48 +1164,20 @@ def get_organization_members(request, organization_id):
             
             total_images = project_images_count + individual_images_count
             
+            is_owner = organization.owner and str(member.id) == str(organization.owner.id)
+            role = 'owner' if is_owner else (member.organization_role or 'member')
+            
             members_list.append({
                 'id': str(member.id),
                 'email': member.email,
                 'full_name': member.full_name or '',
                 'username': member.username or '',
-                'organization_role': member.organization_role or 'member',
+                'organization_role': role,
                 'created_at': member.created_at.isoformat() if member.created_at else None,
                 'projects_count': projects_count,
                 'images_generated': total_images,
                 'slug': member.slug or '',
             })
-        
-        # Also include owner if not in members list
-        if organization.owner:
-            owner_in_members = any(str(m.id) == str(organization.owner.id) for m in organization.members)
-            if not owner_in_members:
-                owner = organization.owner
-                owner_projects = Project.objects(organization=organization, created_by=owner)
-                owner_projects_count = owner_projects.count()
-                
-                owner_project_images = ImageGenerationHistory.objects(
-                    project__in=owner_projects,
-                    user_id=str(owner.id)
-                ).count()
-                
-                owner_individual_images = OrnamentMongo.objects(
-                    Q(user_id=str(owner.id)) | Q(created_by=owner)
-                ).count()
-                
-                owner_total_images = owner_project_images + owner_individual_images
-                
-                members_list.append({
-                    'id': str(owner.id),
-                    'email': owner.email,
-                    'full_name': owner.full_name or '',
-                    'username': owner.username or '',
-                    'organization_role': 'owner',
-                    'created_at': owner.created_at.isoformat() if owner.created_at else None,
-                    'projects_count': owner_projects_count,
-                    'images_generated': owner_total_images,
-                    'slug': owner.slug or ''
-                })
 
         return JsonResponse({
             'organization_id': str(organization.id),
@@ -1215,19 +1203,27 @@ def get_user_by_slug_or_id(organization, user_slug_or_id):
         except (DoesNotExist, ValueError):
             pass
     
-    # Try slug lookup in organization members
-    for member in organization.members:
-        if hasattr(member, 'slug') and member.slug == user_slug_or_id:
-            return member
-    
+    # Try direct lookup in User collection for users belonging to this organization
+    # 1. By slug
+    try:
+        user = User.objects(slug=user_slug_or_id, organization=organization).first()
+        if user:
+            return user
+    except DoesNotExist:
+        pass
+        
     # Check owner
-    if organization.owner and hasattr(organization.owner, 'slug') and organization.owner.slug == user_slug_or_id:
+    if organization.owner and getattr(organization.owner, 'slug', '') == user_slug_or_id:
         return organization.owner
     
-    # Try ID lookup in members as fallback
-    for member in organization.members:
-        if str(member.id) == user_slug_or_id:
-            return member
+    # Try ID lookup in User collection
+    if len(user_slug_or_id) == 24 and all(c in '0123456789abcdefABCDEF' for c in user_slug_or_id):
+        try:
+            user = User.objects(id=user_slug_or_id, organization=organization).first()
+            if user:
+                return user
+        except (DoesNotExist, ValueError):
+            pass
     
     # Check owner by ID
     if organization.owner and str(organization.owner.id) == user_slug_or_id:

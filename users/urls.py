@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import views, admin_views
 
 urlpatterns = [
     path("token/", views.token_obtain_pair, name="token_obtain_pair"),
@@ -14,4 +14,10 @@ urlpatterns = [
     path("profile/complete/", views.complete_profile, name="complete_profile"),
     path("forgot-password/", views.forgot_password, name="forgot_password"),
     path("reset-password/", views.reset_password, name="reset_password"),
+    # Admin: individual users (no organization)
+    path("admin/individual/list/", admin_views.list_individual_users, name="list_individual_users"),
+    path("admin/individual/<str:user_id>/", admin_views.get_individual_user, name="get_individual_user"),
+    path("admin/individual/<str:user_id>/images/", admin_views.get_individual_user_images, name="get_individual_user_images"),
+    path("admin/individual/<str:user_id>/add-credits/", admin_views.add_individual_user_credits, name="add_individual_user_credits"),
+    path("admin/individual/<str:user_id>/remove-credits/", admin_views.remove_individual_user_credits, name="remove_individual_user_credits"),
 ]

@@ -18,16 +18,44 @@ def get_user_role_in_project(user, project):
     Get user's role in a project.
     Returns: role string ('owner', 'editor', 'viewer') or None if not a member
     """
-    if user.organization_role == "owner":
-        return "owner"
     if not project or not user:
         return None
 
-    for member in project.team_members:
-        if str(member.user.id) == str(user.id):
-            return member.role
+    # Check if they belong to the same organization
+    user_org_id = str(user.organization.id) if user.organization else None
+    project_org_id = str(project.organization.id) if project.organization else None
+    
+    is_same_org = user_org_id and project_org_id and user_org_id == project_org_id
 
-    return None
+    # Organization owners/admins get owner access to all projects in their org
+    org_role = None
+    if is_same_org:
+        if user.organization_role in ["owner", "admin"]:
+            org_role = "owner"
+        elif user.organization_role in ["chief_editor", "creative_head"]:
+            org_role = "editor"
+        else:
+            org_role = "viewer"
+
+    # Check explicit project membership
+    explicit_role = None
+    if hasattr(project, 'team_members') and project.team_members:
+        for member in project.team_members:
+            if member.user and str(member.user.id) == str(user.id):
+                explicit_role = member.role
+                break
+
+    role_hierarchy = {"owner": 3, "editor": 2, "viewer": 1}
+    roles = []
+    if org_role:
+        roles.append(org_role)
+    if explicit_role:
+        roles.append(explicit_role)
+
+    if not roles:
+        return None
+
+    return max(roles, key=lambda r: role_hierarchy.get(r, 0))
 
 
 def require_project_role(allowed_roles):

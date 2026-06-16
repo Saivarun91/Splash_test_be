@@ -21,6 +21,7 @@ from .models import Ornament
 from bson import ObjectId
 from common.error_reporter import report_handled_exception
 from common.user_friendly_errors import get_user_friendly_message
+from .generation_utils import build_variation_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +235,8 @@ def change_background_task(
     prompt,
     dimension,
     reference_analysis="",
+    variation_index=0,
+    total_variations=1,
 ):
     """
     Celery task to change background of one or more product images.
@@ -308,7 +311,10 @@ def change_background_task(
             if dimension
             else ""
         )
-        final_prompt_with_dimension = f"{final_prompt}{dimension_text}"
+        final_prompt_with_dimension = (
+            f"{final_prompt}{dimension_text}"
+            f"{build_variation_instruction(variation_index, total_variations)}"
+        )
         base_prompt = get_prompt_from_db(
             "images_background_change_base",
             "{final_prompt}",
@@ -433,6 +439,8 @@ def change_background_task(
             if len(uploaded_image_paths) > 1
             else os.path.splitext(os.path.basename(primary_uploaded_path))[0]
         )
+        if total_variations > 1:
+            suffix = f"{suffix}_v{variation_index + 1}"
         local_generated_path = os.path.join(gen_dir, f"generated_{suffix}.jpg")
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
@@ -496,7 +504,7 @@ def change_background_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension):
+def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1):
     """
     Celery task to generate model with ornament.
     """
@@ -572,6 +580,9 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
             if dimension and dimension not in user_prompt:
                 user_prompt = f"{user_prompt}{dimension_text}"
+            user_prompt = (
+                f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
+            )
 
             contents.append({"text": user_prompt})
 
@@ -612,8 +623,10 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         # Save generated image locally
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
         os.makedirs(gen_dir, exist_ok=True)
-        local_generated_path = os.path.join(
-            gen_dir, f"generated_{os.path.basename(ornament_image_path)}")
+        base_name = os.path.splitext(os.path.basename(ornament_image_path))[0]
+        if total_variations > 1:
+            base_name = f"{base_name}_v{variation_index + 1}"
+        local_generated_path = os.path.join(gen_dir, f"generated_{base_name}")
 
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
@@ -622,7 +635,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         upload_result = cloudinary.uploader.upload(
             local_generated_path,
             folder="model_ornament",
-            public_id=f"ornament_generated_{os.path.splitext(os.path.basename(ornament_image_path))[0]}",
+            public_id=f"ornament_generated_{base_name}",
             overwrite=True
         )
         generated_url = upload_result['secure_url']
@@ -665,7 +678,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension):
+def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1):
     """
     Celery task to generate real model with ornament.
     """
@@ -749,6 +762,9 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
             if dimension and dimension not in user_prompt:
                 user_prompt = f"{user_prompt}{dimension_text}"
+            user_prompt = (
+                f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
+            )
 
             contents.append({"text": user_prompt})
             config = types.GenerateContentConfig(
@@ -792,8 +808,10 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         generated_dir = os.path.join(
             settings.MEDIA_ROOT, "generated_models")
         os.makedirs(generated_dir, exist_ok=True)
-        local_generated_path = os.path.join(
-            generated_dir, f"generated_{os.path.basename(model_image_path)}")
+        base_name = os.path.splitext(os.path.basename(model_image_path))[0]
+        if total_variations > 1:
+            base_name = f"{base_name}_v{variation_index + 1}"
+        local_generated_path = os.path.join(generated_dir, f"generated_{base_name}")
 
         with open(local_generated_path, "wb") as f:
             f.write(generated_bytes)
@@ -802,7 +820,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         upload_result = cloudinary.uploader.upload(
             local_generated_path,
             folder="real_model_output",
-            public_id=f"model_generated_{os.path.splitext(os.path.basename(model_image_path))[0]}",
+            public_id=f"model_generated_{base_name}",
             overwrite=True
         )
         generated_url = upload_result["secure_url"]
@@ -859,6 +877,8 @@ def generate_campaign_shot_advanced_task(
     prompt,
     dimension,
     ornament_measurements='[]',
+    variation_index=0,
+    total_variations=1,
 ):
     """
     Celery task to generate campaign shot.
@@ -1007,6 +1027,9 @@ def generate_campaign_shot_advanced_task(
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
+        user_prompt = (
+            f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
+        )
 
         parts.append({"text": user_prompt})
         contents = [{"parts": parts}]
@@ -1034,11 +1057,19 @@ def generate_campaign_shot_advanced_task(
         # Upload generated image
         buf = BytesIO(generated_bytes)
         buf.seek(0)
+        public_id = f"campaign_{len(ornament_image_paths)}"
+        if total_variations > 1:
+            public_id = f"{public_id}_v{variation_index + 1}"
         upload_result = cloudinary.uploader.upload(
-            buf, folder="campaign_shots", overwrite=True)
+            buf, folder="campaign_shots", public_id=public_id, overwrite=True)
         generated_url = upload_result['secure_url']
 
         # Save record to MongoDB
+        generated_path = f"media/generated/campaign_{len(ornament_image_paths)}"
+        if total_variations > 1:
+            generated_path = f"{generated_path}_v{variation_index + 1}.jpg"
+        else:
+            generated_path = f"{generated_path}.jpg"
         ornament_doc = OrnamentMongo(
             prompt=prompt,
             type="campaign_shot_advanced",
@@ -1046,7 +1077,7 @@ def generate_campaign_shot_advanced_task(
             uploaded_ornament_urls=ornament_urls,
             generated_image_url=generated_url,
             uploaded_image_path="Multiple ornaments",
-            generated_image_path=f"media/generated/campaign_{len(ornament_image_paths)}.jpg",
+            generated_image_path=generated_path,
             user_id=user_id,
             original_prompt=prompt
         )

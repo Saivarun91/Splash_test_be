@@ -3159,11 +3159,11 @@ def api_collection_history(request, collection_id):
                 user_ids_to_query = [str(org.owner.id)]
                 
                 # Add all members
-                if org.members:
-                    for member in org.members:
-                        member_id = str(member.id)
-                        if member_id not in user_ids_to_query:
-                            user_ids_to_query.append(member_id)
+                all_members = User.objects(organization=org)
+                for member in all_members:
+                    member_id = str(member.id)
+                    if member_id not in user_ids_to_query:
+                        user_ids_to_query.append(member_id)
                 
                 print(f"Organization owner detected. Querying history for {len(user_ids_to_query)} users")
 

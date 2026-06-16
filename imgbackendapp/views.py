@@ -33,8 +33,9 @@ from .tasks import (
     generate_model_with_ornament_task,
     generate_real_model_with_ornament_task,
     generate_campaign_shot_advanced_task,
-    regenerate_image_task
+    regenerate_image_task,
 )
+from .generation_utils import parse_num_images, dispatch_variation_tasks
 
 # Check for Gemini SDK
 try:
@@ -116,10 +117,9 @@ def change_background(request):
         )
 
     try:
-        num_images = int(request.POST.get('num_images', '1') or 1)
+        num_images = parse_num_images(request)
     except (TypeError, ValueError):
         num_images = 1
-    num_images = max(1, min(3, num_images))
 
     # Multiple products -> one combined output; single product may request variations
     charge_count = 1 if len(ornaments) > 1 else num_images
@@ -195,18 +195,27 @@ def change_background(request):
         }
 
         if len(ornament_image_paths) == 1 and num_images > 1:
-            task_ids = []
-            for _ in range(num_images):
-                task = change_background_task.delay(**task_kwargs)
-                task_ids.append(task.id)
-            return JsonResponse({
+            dispatch = dispatch_variation_tasks(
+                change_background_task,
+                num_images,
+                task_kwargs,
+            )
+            response_payload = {
                 "success": True,
                 "message": "Background change tasks started",
-                "task_ids": task_ids,
                 "status": "processing",
-            })
+            }
+            if dispatch["task_ids"]:
+                response_payload["task_ids"] = dispatch["task_ids"]
+            else:
+                response_payload["task_id"] = dispatch["task_id"]
+            return JsonResponse(response_payload)
 
-        task = change_background_task.delay(**task_kwargs)
+        task = change_background_task.delay(
+            **task_kwargs,
+            variation_index=0,
+            total_variations=1,
+        )
         return JsonResponse({
             "success": True,
             "message": "Background change task started",
@@ -237,22 +246,24 @@ def generate_model_with_ornament(request):
 
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+    num_images = parse_num_images(request)
+    credit_amount = CREDITS_PER_IMAGE * num_images
 
     organization = get_user_organization(user)
     if organization:
         credit_result = deduct_credits(
             organization=organization,
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=credit_amount,
             reason="Model with ornament image generation",
-            metadata={"type": "generate_model_with_ornament"},
+            metadata={"type": "generate_model_with_ornament", "num_images": num_images},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=credit_amount,
             reason="Model with ornament image generation",
-            metadata={"type": "generate_model_with_ornament"},
+            metadata={"type": "generate_model_with_ornament", "num_images": num_images},
         )
 
     if not credit_result["success"]:
@@ -297,23 +308,32 @@ def generate_model_with_ornament(request):
                     dest.write(chunk)
 
         # Call Celery task asynchronously
-        task = generate_model_with_ornament_task.delay(
-            ornament_image_path=local_uploaded_path,
-            user_id=user_id,
-            pose_image_path=pose_image_path,
-            prompt=prompt,
-            measurements=measurements,
-            ornament_type=ornament_type,
-            ornament_measurements=ornament_measurements,
-            dimension=dimension
+        task_kwargs = {
+            "ornament_image_path": local_uploaded_path,
+            "user_id": user_id,
+            "pose_image_path": pose_image_path,
+            "prompt": prompt,
+            "measurements": measurements,
+            "ornament_type": ornament_type,
+            "ornament_measurements": ornament_measurements,
+            "dimension": dimension,
+        }
+        dispatch = dispatch_variation_tasks(
+            generate_model_with_ornament_task,
+            num_images,
+            task_kwargs,
         )
 
-        return JsonResponse({
+        response_payload = {
             "status": "success",
             "message": "Model with ornament generation task started",
-            "task_id": task.id,
-            "status": "processing"
-        }, status=200)
+            "status": "processing",
+        }
+        if dispatch["task_ids"]:
+            response_payload["task_ids"] = dispatch["task_ids"]
+        else:
+            response_payload["task_id"] = dispatch["task_id"]
+        return JsonResponse(response_payload, status=200)
 
         
 
@@ -349,22 +369,24 @@ def generate_real_model_with_ornament(request):
 
     credit_settings = get_credit_settings()
     CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+    num_images = parse_num_images(request)
+    credit_amount = CREDITS_PER_IMAGE * num_images
 
     organization = get_user_organization(user)
     if organization:
         credit_result = deduct_credits(
             organization=organization,
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=credit_amount,
             reason="Real model with ornament image generation",
-            metadata={"type": "generate_real_model_with_ornament"},
+            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
-            amount=CREDITS_PER_IMAGE,
+            amount=credit_amount,
             reason="Real model with ornament image generation",
-            metadata={"type": "generate_real_model_with_ornament"},
+            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
         )
 
     if not credit_result["success"]:
@@ -418,25 +440,33 @@ def generate_real_model_with_ornament(request):
                 for chunk in pose_img.chunks():
                     dest.write(chunk)
 
-        # Call Celery task asynchronously
-        task = generate_real_model_with_ornament_task.delay(
-            model_image_path=local_model_path,
-            ornament_image_path=local_ornament_path,
-            user_id=user_id,
-            pose_image_path=pose_image_path,
-            prompt=prompt,
-            measurements=measurements,
-            ornament_type=ornament_type,
-            ornament_measurements=ornament_measurements,
-            dimension=dimension
+        task_kwargs = {
+            "model_image_path": local_model_path,
+            "ornament_image_path": local_ornament_path,
+            "user_id": user_id,
+            "pose_image_path": pose_image_path,
+            "prompt": prompt,
+            "measurements": measurements,
+            "ornament_type": ornament_type,
+            "ornament_measurements": ornament_measurements,
+            "dimension": dimension,
+        }
+        dispatch = dispatch_variation_tasks(
+            generate_real_model_with_ornament_task,
+            num_images,
+            task_kwargs,
         )
 
-        return JsonResponse({
+        response_payload = {
             "status": "success",
             "message": "Real model with ornament generation task started",
-            "task_id": task.id,
-            "status": "processing"
-        }, status=200)
+            "status": "processing",
+        }
+        if dispatch["task_ids"]:
+            response_payload["task_ids"] = dispatch["task_ids"]
+        else:
+            response_payload["task_id"] = dispatch["task_id"]
+        return JsonResponse(response_payload, status=200)
 
     except Exception as e:
         traceback.print_exc()
@@ -462,27 +492,31 @@ def generate_campaign_shot_advanced(request):
 
         credit_settings = get_credit_settings()
         CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+        num_images = parse_num_images(request)
+        credit_amount = CREDITS_PER_IMAGE * num_images
 
         organization = get_user_organization(user)
         if organization:
             credit_result = deduct_credits(
                 organization=organization,
                 user=user,
-                amount=CREDITS_PER_IMAGE,
+                amount=credit_amount,
                 reason="Campaign shot image generation",
                 metadata={
                     "type": "campaign_shot_advanced",
                     "model_type": request.POST.get("model_type", "ai"),
+                    "num_images": num_images,
                 },
             )
         else:
             credit_result = deduct_user_credits(
                 user=user,
-                amount=CREDITS_PER_IMAGE,
+                amount=credit_amount,
                 reason="Campaign shot image generation",
                 metadata={
                     "type": "campaign_shot_advanced",
                     "model_type": request.POST.get("model_type", "ai"),
+                    "num_images": num_images,
                 },
             )
 
@@ -548,26 +582,34 @@ def generate_campaign_shot_advanced(request):
                     dest.write(chunk)
             theme_image_paths.append(theme_path)
 
-        # Call Celery task asynchronously
-        task = generate_campaign_shot_advanced_task.delay(
-            user_id=user_id,
-            model_type=model_type,
-            model_image_path=model_image_path,
-            ornament_image_paths=ornament_image_paths,
-            ornament_names=ornament_names,
-            ornament_types=ornament_types,
-            ornament_measurements=ornament_measurements,
-            theme_image_paths=theme_image_paths,
-            prompt=prompt,
-            dimension=dimension
+        task_kwargs = {
+            "user_id": user_id,
+            "model_type": model_type,
+            "model_image_path": model_image_path,
+            "ornament_image_paths": ornament_image_paths,
+            "ornament_names": ornament_names,
+            "ornament_types": ornament_types,
+            "ornament_measurements": ornament_measurements,
+            "theme_image_paths": theme_image_paths,
+            "prompt": prompt,
+            "dimension": dimension,
+        }
+        dispatch = dispatch_variation_tasks(
+            generate_campaign_shot_advanced_task,
+            num_images,
+            task_kwargs,
         )
 
-        return JsonResponse({
+        response_payload = {
             "status": "success",
             "message": "Campaign shot generation task started",
-            "task_id": task.id,
-            "status": "processing"
-        }, status=200)
+            "status": "processing",
+        }
+        if dispatch["task_ids"]:
+            response_payload["task_ids"] = dispatch["task_ids"]
+        else:
+            response_payload["task_id"] = dispatch["task_id"]
+        return JsonResponse(response_payload, status=200)
 
     except Exception as e:
         traceback.print_exc()

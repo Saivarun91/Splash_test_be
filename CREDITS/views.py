@@ -218,7 +218,7 @@ def all_organizations_credit_usage(request):
                     'name': organization.name,
                     'owner_email': organization.owner.email if organization.owner else None,
                     'current_balance': organization.credit_balance,
-                    'member_count': len(organization.members) if organization.members else 0
+                    'member_count': User.objects(organization=organization).count()
                 },
                 'summary': {
                     'total_debits': total_debits,

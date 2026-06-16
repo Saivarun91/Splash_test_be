@@ -18,6 +18,7 @@ import hmac
 import hashlib
 from datetime import datetime, timedelta
 from calendar import monthrange
+from mongoengine import Q
 
 
 def is_admin(user):
@@ -464,21 +465,30 @@ def get_all_payments(request):
     try:
         # Get query parameters
         organization_id = request.GET.get('organization_id')
+        user_id = request.GET.get('user_id')
         status_filter = request.GET.get('status')
         
         # Build query
-        query = {}
         if organization_id:
             organization = Organization.objects(id=organization_id).first()
             if not organization:
                 return JsonResponse({'error': 'Organization not found'}, status=404)
-            query['organization'] = organization
-        
-        if status_filter:
-            query['status'] = status_filter
-        
-        # Get payment transactions
-        transactions = PaymentTransaction.objects(**query).order_by('-created_at')
+            transactions = PaymentTransaction.objects(organization=organization).order_by('-created_at')
+        elif user_id:
+            user = User.objects(id=user_id).first()
+            if not user:
+                return JsonResponse({'error': 'User not found'}, status=404)
+            transactions = PaymentTransaction.objects(
+                Q(user=user) & (Q(organization=None) | Q(organization__exists=False))
+            ).order_by('-created_at')
+        else:
+            query = {}
+            if status_filter:
+                query['status'] = status_filter
+            transactions = PaymentTransaction.objects(**query).order_by('-created_at')
+
+        if status_filter and (organization_id or user_id):
+            transactions = transactions.filter(status=status_filter)
         
         transactions_list = []
         for txn in transactions:
