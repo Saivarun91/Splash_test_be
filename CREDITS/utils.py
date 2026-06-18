@@ -24,9 +24,19 @@ def get_credit_settings():
     """
     try:
         settings = CreditSettings.get_settings()
+        reg_gen = getattr(settings, 'credits_per_regular_generation', None)
+        prem_gen = getattr(settings, 'credits_per_premium_generation', None)
+        reg_regen = getattr(settings, 'credits_per_regular_regeneration', None)
+        prem_regen = getattr(settings, 'credits_per_premium_regeneration', None)
+        legacy_gen = settings.credits_per_image_generation
+        legacy_regen = settings.credits_per_regeneration
         return {
-            'credits_per_image_generation': settings.credits_per_image_generation,
-            'credits_per_regeneration': settings.credits_per_regeneration,
+            'credits_per_image_generation': legacy_gen,
+            'credits_per_regeneration': legacy_regen,
+            'credits_per_regular_generation': reg_gen if reg_gen is not None else legacy_gen,
+            'credits_per_premium_generation': prem_gen if prem_gen is not None else legacy_gen,
+            'credits_per_regular_regeneration': reg_regen if reg_regen is not None else legacy_regen,
+            'credits_per_premium_regeneration': prem_regen if prem_regen is not None else legacy_regen,
             'default_image_model_name': getattr(
                 settings,
                 'default_image_model_name',
@@ -40,10 +50,85 @@ def get_credit_settings():
         return {
             'credits_per_image_generation': 2,
             'credits_per_regeneration': 1,
+            'credits_per_regular_generation': 2,
+            'credits_per_premium_generation': 2,
+            'credits_per_regular_regeneration': 1,
+            'credits_per_premium_regeneration': 1,
             'default_image_model_name': 'gemini-3.1-flash-image-preview',
             'credit_reminder_threshold_1': 20,
             'credit_reminder_threshold_2': 10,
         }
+
+
+IMAGE_TYPE_TIER_DEFAULTS = {
+    'plainBg': 'regular',
+    'bgReplace': 'regular',
+    'model': 'premium',
+    'campaign': 'premium',
+    'white_background': 'regular',
+    'background_replace': 'regular',
+    'background_change': 'regular',
+    'model_image': 'premium',
+    'model_with_ornament': 'premium',
+    'real_model_with_ornament': 'premium',
+    'campaign_image': 'premium',
+    'campaign_shot_advanced': 'premium',
+}
+
+PROMPT_KEY_TO_FRONTEND_TYPE = {
+    'white_background': 'plainBg',
+    'background_replace': 'bgReplace',
+    'model_image': 'model',
+    'campaign_image': 'campaign',
+}
+
+
+def normalize_credit_tier(model_tier, default='regular'):
+    value = (model_tier or default or 'regular').strip().lower()
+    if value in {'premium', 'openai', 'gpt', 'gpt-image-1'}:
+        return 'premium'
+    return 'regular'
+
+
+def get_default_tier_for_image_type(image_type):
+    if not image_type:
+        return 'regular'
+    return IMAGE_TYPE_TIER_DEFAULTS.get(image_type, 'regular')
+
+
+def get_tier_credit_cost(model_tier, action='generation'):
+    """
+    action: 'generation' | 'regeneration'
+    """
+    settings = get_credit_settings()
+    tier = normalize_credit_tier(model_tier)
+    if action == 'regeneration':
+        if tier == 'premium':
+            return settings['credits_per_premium_regeneration']
+        return settings['credits_per_regular_regeneration']
+    if tier == 'premium':
+        return settings['credits_per_premium_generation']
+    return settings['credits_per_regular_generation']
+
+
+def resolve_regeneration_tier(stored_tier=None, image_type=None):
+    if stored_tier:
+        return normalize_credit_tier(stored_tier)
+    return get_default_tier_for_image_type(image_type)
+
+
+def resolve_product_generation_tier(selections, frontend_key):
+    tiers = (selections or {}).get('modelTiers') or {}
+    if frontend_key in tiers:
+        return normalize_credit_tier(tiers.get(frontend_key))
+    return get_default_tier_for_image_type(frontend_key)
+
+
+def resolve_product_generation_tier_for_prompt_key(selections, prompt_key):
+    frontend_key = PROMPT_KEY_TO_FRONTEND_TYPE.get(prompt_key)
+    if frontend_key:
+        return resolve_product_generation_tier(selections, frontend_key)
+    return get_default_tier_for_image_type(prompt_key)
 
 
 REMINDER_COOLDOWN_DAYS = 7  # Don't send same threshold reminder again within 7 days

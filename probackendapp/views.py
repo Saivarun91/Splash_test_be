@@ -1586,44 +1586,50 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
     from .job_models import ImageGenerationJob
 
     try:
-        # === Credit Check and Deduction ===
-        from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
-        from users.models import User, Role
+        from CREDITS.utils import (
+            deduct_credits,
+            get_user_organization,
+            get_tier_credit_cost,
+            resolve_product_generation_tier_for_prompt_key,
+        )
+        from users.models import User
 
-        # Get dynamic credit settings
-        credit_settings = get_credit_settings()
-        CREDITS_PER_IMAGE = credit_settings['credits_per_image_generation']
-
-        # Get user
         user = User.objects(id=user_id).first()
         if not user:
             return {"success": False, "error": "User not found"}
 
-        # Get collection first to access project
         collection = Collection.objects.get(id=collection_id)
-
-        # Check if user has organization - if not, allow generation without credit deduction
-        organization = get_user_organization(user)
-        if organization:
-            # Check and deduct credits before generation
-            credit_result = deduct_credits(
-                organization=organization,
-                user=user,
-                amount=CREDITS_PER_IMAGE,
-                reason=f"Product model image generation - {prompt_key}",
-                project=collection.project if hasattr(
-                    collection, 'project') else None,
-                metadata={"type": "product_model_image",
-                          "prompt_key": prompt_key, "product_index": product_index}
-            )
-
-            if not credit_result['success']:
-                return {"success": False, "error": credit_result['message']}
-        # If no organization, allow generation to proceed without credit deduction
         if not collection.items:
             return {"success": False, "error": "No items found in collection."}
 
         item = collection.items[0]
+        if product_index < 0 or product_index >= len(item.product_images):
+            return {"success": False, "error": "Invalid product index."}
+
+        product = item.product_images[product_index]
+        selections = getattr(product, "generation_selections", None) or {}
+        model_tier = resolve_product_generation_tier_for_prompt_key(selections, prompt_key)
+        credit_amount = get_tier_credit_cost(model_tier, "generation")
+
+        organization = get_user_organization(user)
+        if organization:
+            credit_result = deduct_credits(
+                organization=organization,
+                user=user,
+                amount=credit_amount,
+                reason=f"Product model image generation - {prompt_key}",
+                project=collection.project if hasattr(
+                    collection, 'project') else None,
+                metadata={
+                    "type": "product_model_image",
+                    "prompt_key": prompt_key,
+                    "product_index": product_index,
+                    "model_tier": model_tier,
+                }
+            )
+
+            if not credit_result['success']:
+                return {"success": False, "error": credit_result['message']}
 
         if not hasattr(item, "selected_model") or not item.selected_model:
             return {"success": False, "error": "No model selected. Please select a model first."}
@@ -1933,6 +1939,7 @@ Follow this specific style prompt: {prompt_text}"""
             "local_path": local_path,
             "cloud_url": cloud_upload["secure_url"],
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "model_tier": model_tier,
             "model_used": {
                 "type": selected_model.get("type"),
                 "local": selected_model.get("local"),
@@ -3296,30 +3303,13 @@ def regenerate_product_model_image(request, collection_id):
     user = request.user
 
     # === Credit Check and Deduction ===
-    from CREDITS.utils import deduct_credits, get_user_organization, get_credit_settings
+    from CREDITS.utils import (
+        deduct_credits,
+        get_user_organization,
+        get_tier_credit_cost,
+        resolve_regeneration_tier,
+    )
     from users.models import Role
-
-    # Get dynamic credit settings
-    credit_settings = get_credit_settings()
-    CREDITS_PER_REGENERATION = credit_settings['credits_per_regeneration']
-
-    # Check if user has organization - if not, allow generation without credit deduction
-    organization = get_user_organization(user)
-    if organization:
-        # Check and deduct credits before regeneration
-        credit_result = deduct_credits(
-            organization=organization,
-            user=user,
-            amount=CREDITS_PER_REGENERATION,
-            reason="Product model image regeneration",
-            project=None,
-            metadata={"type": "regenerate_product_model_image",
-                      "collection_id": collection_id}
-        )
-
-        if not credit_result['success']:
-            return Response({"success": False, "error": credit_result['message']}, status=400)
-    # If no organization, allow generation to proceed without credit deduction
 
     try:
         data = json.loads(request.body)
@@ -3327,20 +3317,17 @@ def regenerate_product_model_image(request, collection_id):
         generated_image_path = data.get("generated_image_path")
         new_prompt = data.get("prompt")
         use_different_model = data.get("use_different_model", False)
-        # {type: 'ai'/'real', local: path, cloud: url}
         new_model_data = data.get("new_model")
+        requested_model_tier = data.get("model_tier")
 
         if not (product_image_path and generated_image_path):
             print("Missing parameters", product_image_path,
                   generated_image_path, new_prompt)
             return Response({"success": False, "error": "Missing parameters"}, status=400)
 
-        # Load collection and item
         collection = Collection.objects.get(id=collection_id)
         item = collection.items[0]
 
-        # Find the generated image we're regenerating and the product
-        # This could be either an original generated image or a regenerated image
         target_generated = None
         target_product = None
         is_regenerated_image = False
@@ -3348,22 +3335,18 @@ def regenerate_product_model_image(request, collection_id):
 
         for p in item.product_images:
             for g in p.generated_images:
-                # Check if it's the original generated image
                 if g.get("local_path") == generated_image_path:
                     target_generated = g
                     target_product = p
                     original_prompt = g.get("prompt")
                     break
-
-                # Check if it's a regenerated image
                 if "regenerated_images" in g:
                     for regen in g.get("regenerated_images", []):
                         if regen.get("local_path") == generated_image_path:
-                            target_generated = g  # Store the parent generated image
+                            target_generated = g
                             target_product = p
                             is_regenerated_image = True
-                            original_prompt = regen.get(
-                                "prompt", g.get("prompt"))
+                            original_prompt = regen.get("prompt", g.get("prompt"))
                             break
                     if target_generated:
                         break
@@ -3372,6 +3355,41 @@ def regenerate_product_model_image(request, collection_id):
 
         if not target_generated:
             return Response({"success": False, "error": "Generated image not found"}, status=404)
+
+        original_type = target_generated.get("type", "model_image")
+        stored_tier = None
+        if is_regenerated_image:
+            for regen in target_generated.get("regenerated_images", []):
+                if regen.get("local_path") == generated_image_path:
+                    stored_tier = regen.get("model_tier")
+                    break
+        else:
+            stored_tier = target_generated.get("model_tier")
+
+        model_tier = resolve_regeneration_tier(
+            stored_tier=requested_model_tier or stored_tier,
+            image_type=original_type,
+        )
+        credits_per_regeneration = get_tier_credit_cost(model_tier, "regeneration")
+
+        organization = get_user_organization(user)
+        if organization:
+            credit_result = deduct_credits(
+                organization=organization,
+                user=user,
+                amount=credits_per_regeneration,
+                reason="Product model image regeneration",
+                project=None,
+                metadata={
+                    "type": "regenerate_product_model_image",
+                    "collection_id": collection_id,
+                    "model_tier": model_tier,
+                    "image_type": original_type,
+                }
+            )
+
+            if not credit_result['success']:
+                return Response({"success": False, "error": credit_result['message']}, status=400)
 
         # --- Google GenAI setup ---
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -3514,6 +3532,7 @@ def regenerate_product_model_image(request, collection_id):
             "cloud_url": cloud_url,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "product_image_path": product_image_path,
+            "model_tier": model_tier,
             "model_used": {
                 "type": model_to_use.get("type"),  # 'ai' or 'real'
                 "local": model_to_use.get("local"),

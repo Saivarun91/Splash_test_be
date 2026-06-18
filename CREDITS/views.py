@@ -499,6 +499,10 @@ def get_credit_settings_public(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
+                'credits_per_regular_generation': getattr(settings, 'credits_per_regular_generation', settings.credits_per_image_generation),
+                'credits_per_premium_generation': getattr(settings, 'credits_per_premium_generation', settings.credits_per_image_generation),
+                'credits_per_regular_regeneration': getattr(settings, 'credits_per_regular_regeneration', settings.credits_per_regeneration),
+                'credits_per_premium_regeneration': getattr(settings, 'credits_per_premium_regeneration', settings.credits_per_regeneration),
             }
         }, status=200)
     except Exception as e:
@@ -523,6 +527,10 @@ def get_credit_settings(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
+                'credits_per_regular_generation': getattr(settings, 'credits_per_regular_generation', settings.credits_per_image_generation),
+                'credits_per_premium_generation': getattr(settings, 'credits_per_premium_generation', settings.credits_per_image_generation),
+                'credits_per_regular_regeneration': getattr(settings, 'credits_per_regular_regeneration', settings.credits_per_regeneration),
+                'credits_per_premium_regeneration': getattr(settings, 'credits_per_premium_regeneration', settings.credits_per_regeneration),
                 'default_image_model_name': getattr(settings, 'default_image_model_name', 'gemini-3.1-flash-image-preview'),
                 'credit_reminder_threshold_1': getattr(settings, 'credit_reminder_threshold_1', 20),
                 'credit_reminder_threshold_2': getattr(settings, 'credit_reminder_threshold_2', 10),
@@ -550,9 +558,22 @@ def update_credit_settings(request):
         
         credits_per_image = data.get('credits_per_image_generation')
         credits_per_regeneration = data.get('credits_per_regeneration')
+        credits_per_regular_generation = data.get('credits_per_regular_generation', credits_per_image)
+        credits_per_premium_generation = data.get('credits_per_premium_generation', credits_per_image)
+        credits_per_regular_regeneration = data.get('credits_per_regular_regeneration', credits_per_regeneration)
+        credits_per_premium_regeneration = data.get('credits_per_premium_regeneration', credits_per_regeneration)
         
         if credits_per_image is None or credits_per_regeneration is None:
             return JsonResponse({'error': 'Both credits_per_image_generation and credits_per_regeneration are required'}, status=400)
+        
+        tier_values = [
+            credits_per_regular_generation,
+            credits_per_premium_generation,
+            credits_per_regular_regeneration,
+            credits_per_premium_regeneration,
+        ]
+        if any(value is None for value in tier_values) or any(int(value) < 0 for value in tier_values):
+            return JsonResponse({'error': 'Credit values must be non-negative'}, status=400)
         
         if credits_per_image < 0 or credits_per_regeneration < 0:
             return JsonResponse({'error': 'Credit values must be non-negative'}, status=400)
@@ -561,6 +582,10 @@ def update_credit_settings(request):
         settings = CreditSettings.get_settings()
         settings.credits_per_image_generation = int(credits_per_image)
         settings.credits_per_regeneration = int(credits_per_regeneration)
+        settings.credits_per_regular_generation = int(credits_per_regular_generation)
+        settings.credits_per_premium_generation = int(credits_per_premium_generation)
+        settings.credits_per_regular_regeneration = int(credits_per_regular_regeneration)
+        settings.credits_per_premium_regeneration = int(credits_per_premium_regeneration)
         if data.get('default_image_model_name') is not None:
             settings.default_image_model_name = data.get('default_image_model_name', settings.default_image_model_name)
         if data.get('credit_reminder_threshold_1') is not None:
@@ -577,6 +602,10 @@ def update_credit_settings(request):
             'settings': {
                 'credits_per_image_generation': settings.credits_per_image_generation,
                 'credits_per_regeneration': settings.credits_per_regeneration,
+                'credits_per_regular_generation': getattr(settings, 'credits_per_regular_generation', settings.credits_per_image_generation),
+                'credits_per_premium_generation': getattr(settings, 'credits_per_premium_generation', settings.credits_per_image_generation),
+                'credits_per_regular_regeneration': getattr(settings, 'credits_per_regular_regeneration', settings.credits_per_regeneration),
+                'credits_per_premium_regeneration': getattr(settings, 'credits_per_premium_regeneration', settings.credits_per_regeneration),
                 'default_image_model_name': getattr(settings, 'default_image_model_name', 'gemini-3.1-flash-image-preview'),
                 'credit_reminder_threshold_1': getattr(settings, 'credit_reminder_threshold_1', 20),
                 'credit_reminder_threshold_2': getattr(settings, 'credit_reminder_threshold_2', 10),

@@ -6,6 +6,10 @@ class CreditSettings(Document):
     """Global credit deduction settings - singleton pattern"""
     credits_per_image_generation = IntField(default=2, required=True)
     credits_per_regeneration = IntField(default=1, required=True)
+    credits_per_regular_generation = IntField(default=2)
+    credits_per_premium_generation = IntField(default=2)
+    credits_per_regular_regeneration = IntField(default=1)
+    credits_per_premium_regeneration = IntField(default=1)
     # Global AI image model name used for Gemini-based image generation
     default_image_model_name = StringField(default="gemini-3.1-flash-image-preview")
     # Credits recharge reminder thresholds (admin-controlled). Send reminder when balance <= threshold.

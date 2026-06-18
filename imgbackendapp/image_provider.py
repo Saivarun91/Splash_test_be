@@ -3,7 +3,8 @@
 import base64
 import logging
 import os
-from typing import Iterable, List, Optional, Sequence
+import re
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from django.conf import settings
 
@@ -32,11 +33,46 @@ def parse_model_tier(request, default="regular") -> str:
     return normalize_model_tier(request.POST.get("model_tier"), default=default)
 
 
+OPENAI_SIZE_ASPECTS = {
+    "1024x1024": 1.0,
+    "1536x1024": 1536 / 1024,
+    "1024x1536": 1024 / 1536,
+}
+
+
+def parse_aspect_ratio(dimension: str) -> Optional[Tuple[float, float]]:
+    normalized = (dimension or "").strip().replace(" ", "")
+    match = re.fullmatch(r"(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)", normalized)
+    if not match:
+        return None
+
+    width_ratio = float(match.group(1))
+    height_ratio = float(match.group(2))
+    if width_ratio <= 0 or height_ratio <= 0:
+        return None
+
+    return width_ratio, height_ratio
+
+
 def map_dimension_to_openai_size(dimension: str) -> str:
     if not dimension:
         return "1024x1024"
+
     normalized = dimension.strip().replace(" ", "")
-    return DIMENSION_TO_OPENAI_SIZE.get(normalized, "1024x1024")
+    if normalized in DIMENSION_TO_OPENAI_SIZE:
+        return DIMENSION_TO_OPENAI_SIZE[normalized]
+
+    parsed = parse_aspect_ratio(normalized)
+    if not parsed:
+        return "1024x1024"
+
+    width_ratio, height_ratio = parsed
+    target_aspect = width_ratio / height_ratio
+
+    return min(
+        OPENAI_SIZE_ASPECTS,
+        key=lambda size: abs(OPENAI_SIZE_ASPECTS[size] - target_aspect),
+    )
 
 
 def collect_existing_paths(paths: Optional[Iterable[str]]) -> List[str]:

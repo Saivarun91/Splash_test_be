@@ -162,6 +162,7 @@ def get_individual_user_images(request, user_id):
         image_type = request.GET.get('image_type')
         limit = int(request.GET.get('limit', 100))
         offset = int(request.GET.get('offset', 0))
+        standalone_only = request.GET.get('standalone_only', '').lower() in ('1', 'true', 'yes')
 
         user_projects = _get_user_projects(user)
         project_ids = [p['id'] for p in user_projects]
@@ -173,8 +174,11 @@ def get_individual_user_images(request, user_id):
         if image_type:
             project_query &= Q(image_type=image_type)
 
-        project_images = ImageGenerationHistory.objects(project_query).order_by('-created_at')
-        project_total = ImageGenerationHistory.objects(project_query).count()
+        project_images = []
+        project_total = 0
+        if not standalone_only:
+            project_images = ImageGenerationHistory.objects(project_query).order_by('-created_at')
+            project_total = ImageGenerationHistory.objects(project_query).count()
 
         individual_query = Q(user_id=str(user.id)) | Q(created_by=user)
         if image_type:
@@ -222,6 +226,7 @@ def get_individual_user_images(request, user_id):
                     'uploaded_image_url': img.uploaded_image_url,
                     'model_image_url': img.model_image_url,
                     'parent_image_id': str(img.parent_image_id) if img.parent_image_id else None,
+                    'model_tier': img.model_tier,
                 },
                 'source': 'individual',
             })

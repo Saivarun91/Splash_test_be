@@ -43,6 +43,16 @@ urlpatterns = [
     path('blog/', views.get_blog_posts, name='get_blog_posts'),
     path('blog/<str:slug>/', views.get_blog_post, name='get_blog_post'),
     
+    # Public gallery CMS
+    path('public-gallery/', views.get_public_gallery_images, name='get_public_gallery_images'),
+    path('public-gallery/showcase/', views.get_homepage_showcase_images, name='get_homepage_showcase_images'),
+    path('public-gallery/all/', views.get_all_public_gallery_images, name='get_all_public_gallery_images'),
+    path('public-gallery/admin/overview/', views.get_public_gallery_admin_overview, name='get_public_gallery_admin_overview'),
+    path('public-gallery/import/', views.import_public_gallery_images, name='import_public_gallery_images'),
+    path('public-gallery/upload/', views.upload_public_gallery_image, name='upload_public_gallery_image'),
+    path('public-gallery/<str:image_id>/update/', views.update_public_gallery_image, name='update_public_gallery_image'),
+    path('public-gallery/<str:image_id>/delete/', views.delete_public_gallery_image, name='delete_public_gallery_image'),
+
     # Admin: Upload content image (hero, showcase, etc.)
     path('upload-image/', views.upload_content_image, name='upload_content_image'),
 ]

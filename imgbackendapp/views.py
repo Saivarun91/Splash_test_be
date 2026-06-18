@@ -100,12 +100,12 @@ def change_background(request):
     from CREDITS.utils import (
         deduct_credits,
         get_user_organization,
-        get_credit_settings,
         deduct_user_credits,
+        get_tier_credit_cost,
     )
 
-    credit_settings = get_credit_settings()
-    CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+    model_tier = parse_model_tier(request, default="regular")
+    credits_per_image = get_tier_credit_cost(model_tier, "generation")
 
     ornaments = request.FILES.getlist('ornament_images')
     if not ornaments and request.FILES.get('ornament_image'):
@@ -124,7 +124,7 @@ def change_background(request):
 
     # Multiple products -> one combined output; single product may request variations
     charge_count = 1 if len(ornaments) > 1 else num_images
-    credit_amount = CREDITS_PER_IMAGE * charge_count
+    credit_amount = credits_per_image * charge_count
 
     organization = get_user_organization(user)
     if organization:
@@ -137,6 +137,7 @@ def change_background(request):
                 "type": "change_background",
                 "product_count": len(ornaments),
                 "num_images": charge_count,
+                "model_tier": model_tier,
             },
         )
     else:
@@ -148,6 +149,7 @@ def change_background(request):
                 "type": "change_background",
                 "product_count": len(ornaments),
                 "num_images": charge_count,
+                "model_tier": model_tier,
             },
         )
 
@@ -193,7 +195,7 @@ def change_background(request):
             "prompt": prompt,
             "dimension": dimension,
             "reference_analysis": reference_analysis,
-            "model_tier": parse_model_tier(request, default="regular"),
+            "model_tier": model_tier,
         }
 
         if len(ornament_image_paths) == 1 and num_images > 1:
@@ -242,14 +244,13 @@ def generate_model_with_ornament(request):
     from CREDITS.utils import (
         deduct_credits,
         get_user_organization,
-        get_credit_settings,
         deduct_user_credits,
+        get_tier_credit_cost,
     )
 
-    credit_settings = get_credit_settings()
-    CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+    model_tier = parse_model_tier(request, default="premium")
     num_images = parse_num_images(request)
-    credit_amount = CREDITS_PER_IMAGE * num_images
+    credit_amount = get_tier_credit_cost(model_tier, "generation") * num_images
 
     organization = get_user_organization(user)
     if organization:
@@ -258,14 +259,14 @@ def generate_model_with_ornament(request):
             user=user,
             amount=credit_amount,
             reason="Model with ornament image generation",
-            metadata={"type": "generate_model_with_ornament", "num_images": num_images},
+            metadata={"type": "generate_model_with_ornament", "num_images": num_images, "model_tier": model_tier},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
             amount=credit_amount,
             reason="Model with ornament image generation",
-            metadata={"type": "generate_model_with_ornament", "num_images": num_images},
+            metadata={"type": "generate_model_with_ornament", "num_images": num_images, "model_tier": model_tier},
         )
 
     if not credit_result["success"]:
@@ -319,7 +320,7 @@ def generate_model_with_ornament(request):
             "ornament_type": ornament_type,
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
-            "model_tier": parse_model_tier(request, default="premium"),
+            "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
             generate_model_with_ornament_task,
@@ -366,14 +367,13 @@ def generate_real_model_with_ornament(request):
     from CREDITS.utils import (
         deduct_credits,
         get_user_organization,
-        get_credit_settings,
         deduct_user_credits,
+        get_tier_credit_cost,
     )
 
-    credit_settings = get_credit_settings()
-    CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+    model_tier = parse_model_tier(request, default="premium")
     num_images = parse_num_images(request)
-    credit_amount = CREDITS_PER_IMAGE * num_images
+    credit_amount = get_tier_credit_cost(model_tier, "generation") * num_images
 
     organization = get_user_organization(user)
     if organization:
@@ -382,14 +382,14 @@ def generate_real_model_with_ornament(request):
             user=user,
             amount=credit_amount,
             reason="Real model with ornament image generation",
-            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
+            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images, "model_tier": model_tier},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
             amount=credit_amount,
             reason="Real model with ornament image generation",
-            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images},
+            metadata={"type": "generate_real_model_with_ornament", "num_images": num_images, "model_tier": model_tier},
         )
 
     if not credit_result["success"]:
@@ -453,7 +453,7 @@ def generate_real_model_with_ornament(request):
             "ornament_type": ornament_type,
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
-            "model_tier": parse_model_tier(request, default="premium"),
+            "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
             generate_real_model_with_ornament_task,
@@ -490,14 +490,13 @@ def generate_campaign_shot_advanced(request):
         from CREDITS.utils import (
             deduct_credits,
             get_user_organization,
-            get_credit_settings,
             deduct_user_credits,
+            get_tier_credit_cost,
         )
 
-        credit_settings = get_credit_settings()
-        CREDITS_PER_IMAGE = credit_settings["credits_per_image_generation"]
+        model_tier = parse_model_tier(request, default="premium")
         num_images = parse_num_images(request)
-        credit_amount = CREDITS_PER_IMAGE * num_images
+        credit_amount = get_tier_credit_cost(model_tier, "generation") * num_images
 
         organization = get_user_organization(user)
         if organization:
@@ -510,6 +509,7 @@ def generate_campaign_shot_advanced(request):
                     "type": "campaign_shot_advanced",
                     "model_type": request.POST.get("model_type", "ai"),
                     "num_images": num_images,
+                    "model_tier": model_tier,
                 },
             )
         else:
@@ -521,6 +521,7 @@ def generate_campaign_shot_advanced(request):
                     "type": "campaign_shot_advanced",
                     "model_type": request.POST.get("model_type", "ai"),
                     "num_images": num_images,
+                    "model_tier": model_tier,
                 },
             )
 
@@ -597,7 +598,7 @@ def generate_campaign_shot_advanced(request):
             "theme_image_paths": theme_image_paths,
             "prompt": prompt,
             "dimension": dimension,
-            "model_tier": parse_model_tier(request, default="premium"),
+            "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
             generate_campaign_shot_advanced_task,
@@ -857,32 +858,64 @@ def regenerate_image(request):
     user = request.user
     user_id = str(user.id)
 
-    # === Credit Check and Deduction ===
+    image_id = request.POST.get('image_id')
+    new_prompt = request.POST.get('prompt', '').strip()
+
+    if not image_id:
+        return Response({"error": "image_id is required"}, status=400)
+
+    if not new_prompt:
+        return Response({"error": "New prompt is required"}, status=400)
+
+    object_id_pattern = re.compile(r'^[0-9a-fA-F]{24}$')
+    if not object_id_pattern.match(image_id):
+        return JsonResponse({
+            "error": get_user_friendly_message("Invalid image_id"),
+        }, status=400)
+
+    try:
+        prev_doc = OrnamentMongo.objects.get(id=ObjectId(image_id))
+    except OrnamentMongo.DoesNotExist:
+        return JsonResponse({"error": "Image record not found"}, status=404)
+    except Exception as e:
+        return Response({"error": get_user_friendly_message(e)}, status=400)
+
+    if prev_doc.user_id != user_id:
+        return JsonResponse({"error": "You don't have permission to regenerate this image"}, status=403)
+
+    if request.POST.get("model_tier"):
+        model_tier = parse_model_tier(request, default="regular")
+    else:
+        from CREDITS.utils import resolve_regeneration_tier
+        model_tier = resolve_regeneration_tier(
+            getattr(prev_doc, "model_tier", None),
+            prev_doc.type,
+        )
+
     from CREDITS.utils import (
         deduct_credits,
         get_user_organization,
-        get_credit_settings,
         deduct_user_credits,
+        get_tier_credit_cost,
     )
 
-    credit_settings = get_credit_settings()
-    CREDITS_PER_REGENERATION = credit_settings["credits_per_regeneration"]
+    credit_amount = get_tier_credit_cost(model_tier, "regeneration")
 
     organization = get_user_organization(user)
     if organization:
         credit_result = deduct_credits(
             organization=organization,
             user=user,
-            amount=CREDITS_PER_REGENERATION,
+            amount=credit_amount,
             reason="Image regeneration",
-            metadata={"type": "regenerate_image"},
+            metadata={"type": "regenerate_image", "model_tier": model_tier},
         )
     else:
         credit_result = deduct_user_credits(
             user=user,
-            amount=CREDITS_PER_REGENERATION,
+            amount=credit_amount,
             reason="Image regeneration",
-            metadata={"type": "regenerate_image"},
+            metadata={"type": "regenerate_image", "model_tier": model_tier},
         )
 
     if not credit_result["success"]:
@@ -892,41 +925,6 @@ def regenerate_image(request):
         )
 
     try:
-        # Get parameters
-        # MongoDB ID of the image to regenerate
-        image_id = request.POST.get('image_id')
-        new_prompt = request.POST.get('prompt', '').strip()
-        model_tier = parse_model_tier(request, default="regular")
-        print(new_prompt)
-
-        if not image_id:
-            return Response({"error": "image_id is required"}, status=400)
-
-        if not new_prompt:
-            return Response({"error": "New prompt is required"}, status=400)
-
-        # Validate MongoDB ObjectId format before attempting to use it
-        # ObjectId must be exactly 24 hex characters
-        object_id_pattern = re.compile(r'^[0-9a-fA-F]{24}$')
-        if not object_id_pattern.match(image_id):
-            return JsonResponse({
-                "error": get_user_friendly_message("Invalid image_id"),
-            }, status=400)
-
-        # Fetch the previous image record from MongoDB
-        try:
-            prev_doc = OrnamentMongo.objects.get(id=ObjectId(image_id))
-        except OrnamentMongo.DoesNotExist:
-            return JsonResponse({"error": "Image record not found"}, status=404)
-        except Exception as e:
-            # This should rarely happen now due to format validation above
-            return Response({"error": get_user_friendly_message(e)}, status=400)
-
-        # Verify that the image belongs to the user (security check)
-        if prev_doc.user_id != user_id:
-            return JsonResponse({"error": "You don't have permission to regenerate this image"}, status=403)
-
-        # Call Celery task asynchronously
         task = regenerate_image_task.delay(
             image_id=image_id,
             user_id=user_id,

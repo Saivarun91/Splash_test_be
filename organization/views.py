@@ -853,6 +853,7 @@ def get_organization_images(request, organization_id):
         end_date = request.GET.get('end_date')
         limit = int(request.GET.get('limit', 100))
         offset = int(request.GET.get('offset', 0))
+        standalone_only = request.GET.get('standalone_only', '').lower() in ('1', 'true', 'yes')
 
         # Get all users belonging to this organization
         all_members = list(User.objects(organization=organization))
@@ -884,9 +885,11 @@ def get_organization_images(request, organization_id):
             except:
                 pass
 
-        # Get project-based images
-        project_images = ImageGenerationHistory.objects(project_query).order_by('-created_at')
-        project_total = ImageGenerationHistory.objects(project_query).count()
+        project_images = []
+        project_total = 0
+        if not standalone_only:
+            project_images = ImageGenerationHistory.objects(project_query).order_by('-created_at')
+            project_total = ImageGenerationHistory.objects(project_query).count()
 
         # Build query for individual images (OrnamentMongo)
         # Filter by organization members
@@ -978,7 +981,8 @@ def get_organization_images(request, organization_id):
                 'metadata': {
                     'uploaded_image_url': img.uploaded_image_url,
                     'model_image_url': img.model_image_url,
-                    'parent_image_id': str(img.parent_image_id) if img.parent_image_id else None
+                    'parent_image_id': str(img.parent_image_id) if img.parent_image_id else None,
+                    'model_tier': img.model_tier,
                 },
                 'source': 'individual'  # Indicate this is an individual image
             })

@@ -56,6 +56,36 @@ class BlogPost(Document):
         return self.title
 
 
+class PublicGalleryImage(Document):
+    """
+    Public marketing gallery images for /gallery and optional homepage showcase.
+    """
+    image_url = URLField(required=True)
+    image_type = StringField(required=True)  # lifestyle, campaign, product, model, multi_piece, background_change
+    label = StringField()
+    alt_text = StringField()
+    homepage_layout = StringField()  # product, campaign, lifestyle, model, multipiece
+    order = IntField(default=0)
+    is_active = StringField(default='true')
+    show_on_homepage = StringField(default='false')
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "public_gallery_images",
+        "indexes": ["order", "is_active", "show_on_homepage", "image_type"],
+        "ordering": ["order", "-created_at"],
+        "strict": False,
+    }
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.utcnow()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"PublicGalleryImage({self.image_type}, order={self.order})"
+
+
 class BeforeAfterImage(Document):
     """
     Model for storing before/after images for the home page

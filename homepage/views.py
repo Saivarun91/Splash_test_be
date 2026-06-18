@@ -7,8 +7,9 @@ from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
 import json
 import os
+from pathlib import Path
 from mongoengine.errors import DoesNotExist, ValidationError
-from .models import BeforeAfterImage, PageContent, BlogPost
+from .models import BeforeAfterImage, PageContent, BlogPost, PublicGalleryImage
 from users.models import User, Role
 from common.middleware import authenticate
 from datetime import datetime
@@ -868,6 +869,491 @@ def delete_blog_post(request, slug):
             return JsonResponse({'success': False, 'error': 'Post not found'}, status=404)
         post.delete()
         return JsonResponse({'success': True, 'message': 'Post deleted'}, status=200)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+PUBLIC_GALLERY_TYPE_LABELS = {
+    'lifestyle': 'Lifestyle',
+    'campaign': 'Campaign visual',
+    'product': 'Product shot',
+    'model': 'Model shot',
+    'multi_piece': 'Multi piece',
+    'background_change': 'Background change',
+}
+
+PUBLIC_GALLERY_DEFAULT_LAYOUT = {
+    'lifestyle': 'lifestyle',
+    'campaign': 'campaign',
+    'product': 'product',
+    'model': 'model',
+    'multi_piece': 'multipiece',
+    'background_change': 'product',
+}
+
+DEFAULT_SHOWCASE_STATIC = [
+    {
+        'source_key': 'default:lifestyle',
+        'path': '/images/lifestyle.webp',
+        'image_type': 'lifestyle',
+        'label': 'Lifestyle',
+        'alt_text': 'Gold and emerald necklace product shot',
+        'homepage_layout': 'lifestyle',
+    },
+    {
+        'source_key': 'default:campaign',
+        'path': '/images/campaign.webp',
+        'image_type': 'campaign',
+        'label': 'Campaign visual',
+        'alt_text': 'Campaign visual with model wearing gold necklace',
+        'homepage_layout': 'campaign',
+    },
+    {
+        'source_key': 'default:product',
+        'path': '/images/product.webp',
+        'image_type': 'product',
+        'label': 'Product shot',
+        'alt_text': 'Lifestyle setup at a festive jewelry event',
+        'homepage_layout': 'product',
+    },
+    {
+        'source_key': 'default:model',
+        'path': '/images/model.webp',
+        'image_type': 'model',
+        'label': 'Model shot',
+        'alt_text': 'Model shot with gold chain necklace',
+        'homepage_layout': 'model',
+    },
+    {
+        'source_key': 'default:multi_piece',
+        'path': '/images/multipice.png',
+        'image_type': 'multi_piece',
+        'label': 'Multi piece',
+        'alt_text': 'Multi-piece gold earrings collection',
+        'homepage_layout': 'multipiece',
+    },
+]
+
+GALLERY_FILE_EXTENSIONS = {'.webp', '.png', '.jpg', '.jpeg', '.gif'}
+
+
+def _frontend_public_url():
+    return os.getenv('FRONTEND_PUBLIC_URL', 'http://localhost:3000').rstrip('/')
+
+
+def _frontend_public_dir():
+    return Path(settings.BASE_DIR).parent / 'frontend' / 'public'
+
+
+def _to_public_src(relative_path):
+    path = relative_path if relative_path.startswith('/') else f'/{relative_path}'
+    return f"{_frontend_public_url()}{path}"
+
+
+def _infer_gallery_type_from_filename(filename):
+    lower = filename.lower()
+    if lower.startswith('background_change'):
+        return 'background_change'
+    if lower.startswith('campaign_shot'):
+        return 'campaign'
+    if lower.startswith('image-plain'):
+        return 'product'
+    return 'lifestyle'
+
+
+def _serialize_catalog_image(item, origin):
+    image_type = item.get('image_type') or 'product'
+    category = 'background' if image_type == 'background_change' else image_type
+    path = item.get('path') or ''
+    return {
+        'id': item.get('source_key') or path,
+        'source_key': item.get('source_key') or path,
+        'origin': origin,
+        'path': path,
+        'src': _to_public_src(path),
+        'image_url': _to_public_src(path),
+        'image_type': image_type,
+        'category': category,
+        'label': item.get('label') or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
+        'alt': item.get('alt_text') or item.get('label') or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
+        'homepage_layout': item.get('homepage_layout') or PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product'),
+        'local_file': item.get('local_file'),
+    }
+
+
+def _scan_filesystem_gallery_catalog():
+    gallery_dir = _frontend_public_dir() / 'galery'
+    if not gallery_dir.exists():
+        return []
+
+    items = []
+    for file_path in sorted(gallery_dir.iterdir(), key=lambda p: p.name, reverse=True):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in GALLERY_FILE_EXTENSIONS:
+            continue
+        image_type = _infer_gallery_type_from_filename(file_path.name)
+        relative_path = f"/galery/{file_path.name}"
+        items.append(_serialize_catalog_image({
+            'source_key': f'filesystem:{file_path.name}',
+            'path': relative_path,
+            'image_type': image_type,
+            'label': PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
+            'alt_text': PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
+            'homepage_layout': PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product'),
+            'local_file': str(file_path),
+        }, origin='filesystem'))
+    return items
+
+
+def _default_showcase_catalog():
+    return [_serialize_catalog_image(item, origin='default_showcase') for item in DEFAULT_SHOWCASE_STATIC]
+
+
+def _resolve_live_gallery_images():
+    cms_active = PublicGalleryImage.objects(is_active='true').order_by('order', '-created_at')
+    if cms_active.count() > 0:
+        return 'cms', [_serialize_public_gallery_image(img) for img in cms_active]
+    filesystem = _scan_filesystem_gallery_catalog()
+    if filesystem:
+        return 'filesystem', filesystem
+    return 'empty', []
+
+
+def _resolve_live_showcase_images():
+    cms_showcase = PublicGalleryImage.objects(
+        is_active='true',
+        show_on_homepage='true',
+    ).order_by('order', '-created_at')
+    if cms_showcase.count() > 0:
+        return 'cms', [_serialize_public_gallery_image(img) for img in cms_showcase]
+    defaults = _default_showcase_catalog()
+    if defaults:
+        return 'defaults', defaults
+    return 'empty', []
+
+
+def _catalog_item_to_local_path(catalog_item):
+    local_file = catalog_item.get('local_file')
+    if local_file and os.path.exists(local_file):
+        return local_file
+    path = catalog_item.get('path') or ''
+    if path.startswith('/'):
+        candidate = _frontend_public_dir() / path.lstrip('/')
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _import_catalog_item_to_cms(catalog_item, visibility='gallery_only'):
+    local_path = _catalog_item_to_local_path(catalog_item)
+    if not local_path:
+        raise FileNotFoundError(f"Local file not found for {catalog_item.get('source_key')}")
+
+    show_on_homepage = visibility == 'gallery_and_homepage'
+    is_active = visibility != 'hidden'
+
+    existing = PublicGalleryImage.objects()
+    max_order = max([img.order for img in existing] or [0]) if existing else 0
+
+    upload = cloudinary.uploader.upload(
+        local_path,
+        folder="homepage/public_gallery",
+        overwrite=True,
+    )
+
+    image_type = catalog_item.get('image_type') or 'product'
+    gallery_image = PublicGalleryImage(
+        image_url=upload.get('secure_url'),
+        image_type=image_type,
+        label=catalog_item.get('label') or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, ''),
+        alt_text=catalog_item.get('alt') or catalog_item.get('label') or '',
+        homepage_layout=catalog_item.get('homepage_layout') or PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product'),
+        order=max_order + 1,
+        is_active='true' if is_active else 'false',
+        show_on_homepage='true' if show_on_homepage else 'false',
+    )
+    gallery_image.save()
+    return gallery_image
+
+
+def _serialize_public_gallery_image(img, include_admin_fields=False):
+    image_type = img.image_type or 'product'
+    category = 'background' if image_type == 'background_change' else image_type
+    data = {
+        'id': str(img.id),
+        'src': img.image_url,
+        'image_url': img.image_url,
+        'image_type': image_type,
+        'category': category,
+        'label': img.label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
+        'alt': img.alt_text or img.label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
+        'homepage_layout': img.homepage_layout or PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product'),
+        'order': img.order,
+    }
+    if include_admin_fields:
+        data.update({
+            'is_active': img.is_active,
+            'show_on_homepage': img.show_on_homepage,
+            'created_at': img.created_at.isoformat() if img.created_at else None,
+            'updated_at': img.updated_at.isoformat() if img.updated_at else None,
+        })
+    return data
+
+
+# =====================
+# Public Gallery (Public)
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+def get_public_gallery_images(request):
+    """Public: all active public gallery images for /gallery."""
+    try:
+        images = PublicGalleryImage.objects(is_active='true').order_by('order', '-created_at')
+        return JsonResponse({
+            'success': True,
+            'images': [_serialize_public_gallery_image(img) for img in images],
+        }, status=200)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@csrf_exempt
+def get_homepage_showcase_images(request):
+    """Public: active gallery images flagged for homepage showcase."""
+    try:
+        images = PublicGalleryImage.objects(
+            is_active='true',
+            show_on_homepage='true',
+        ).order_by('order', '-created_at')
+        return JsonResponse({
+            'success': True,
+            'images': [_serialize_public_gallery_image(img) for img in images],
+        }, status=200)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_all_public_gallery_images(request):
+    """Admin: list all public gallery images."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can access this endpoint'}, status=403)
+    try:
+        images = PublicGalleryImage.objects().order_by('order', '-created_at')
+        return JsonResponse({
+            'success': True,
+            'images': [_serialize_public_gallery_image(img, include_admin_fields=True) for img in images],
+        }, status=200)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@csrf_exempt
+@authenticate
+def get_public_gallery_admin_overview(request):
+    """Admin: CMS library plus what is currently live on /gallery and homepage showcase."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can access this endpoint'}, status=403)
+    try:
+        cms_images = PublicGalleryImage.objects().order_by('order', '-created_at')
+        cms_list = [_serialize_public_gallery_image(img, include_admin_fields=True) for img in cms_images]
+
+        gallery_source, live_gallery = _resolve_live_gallery_images()
+        showcase_source, live_showcase = _resolve_live_showcase_images()
+        filesystem_catalog = _scan_filesystem_gallery_catalog()
+        default_showcase_catalog = _default_showcase_catalog()
+
+        return JsonResponse({
+            'success': True,
+            'frontend_public_url': _frontend_public_url(),
+            'cms_images': cms_list,
+            'live': {
+                'gallery_source': gallery_source,
+                'showcase_source': showcase_source,
+                'gallery_images': live_gallery,
+                'showcase_images': live_showcase,
+            },
+            'catalog': {
+                'filesystem_gallery': filesystem_catalog,
+                'default_showcase': default_showcase_catalog,
+            },
+        }, status=200)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def import_public_gallery_images(request):
+    """Admin: import filesystem/default images into CMS."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can import images'}, status=403)
+    try:
+        data = json.loads(request.body)
+        source_keys = data.get('source_keys') or []
+        visibility = data.get('visibility', 'gallery_only')
+        if visibility not in ('gallery_only', 'gallery_and_homepage', 'hidden'):
+            return JsonResponse({'success': False, 'error': 'Invalid visibility'}, status=400)
+
+        if not source_keys:
+            preset = data.get('preset')
+            if preset == 'filesystem_gallery':
+                source_keys = [item['source_key'] for item in _scan_filesystem_gallery_catalog()]
+                visibility = data.get('visibility', 'gallery_only')
+            elif preset == 'default_showcase':
+                source_keys = [item['source_key'] for item in DEFAULT_SHOWCASE_STATIC]
+                visibility = data.get('visibility', 'gallery_and_homepage')
+            else:
+                return JsonResponse({'success': False, 'error': 'source_keys or preset is required'}, status=400)
+
+        catalog = {}
+        for item in _scan_filesystem_gallery_catalog():
+            catalog[item['source_key']] = item
+        for item in _default_showcase_catalog():
+            catalog[item['source_key']] = item
+
+        imported = []
+        errors = []
+        for key in source_keys:
+            catalog_item = catalog.get(key)
+            if not catalog_item:
+                errors.append({'source_key': key, 'error': 'Unknown source'})
+                continue
+            try:
+                gallery_image = _import_catalog_item_to_cms(catalog_item, visibility=visibility)
+                imported.append(_serialize_public_gallery_image(gallery_image, include_admin_fields=True))
+            except Exception as exc:
+                errors.append({'source_key': key, 'error': str(exc)})
+
+        return JsonResponse({
+            'success': True,
+            'imported_count': len(imported),
+            'imported': imported,
+            'errors': errors,
+        }, status=200)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def upload_public_gallery_image(request):
+    """Admin: upload a public gallery image."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can upload images'}, status=403)
+    try:
+        image_file = request.FILES.get('image')
+        if not image_file:
+            return JsonResponse({'success': False, 'error': 'image file is required'}, status=400)
+
+        image_type = request.POST.get('image_type', 'product')
+        if image_type not in PUBLIC_GALLERY_TYPE_LABELS:
+            return JsonResponse({'success': False, 'error': 'Invalid image_type'}, status=400)
+
+        label = request.POST.get('label', '')
+        alt_text = request.POST.get('alt_text', '')
+        homepage_layout = request.POST.get('homepage_layout') or PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product')
+        show_on_homepage = 'true' if str(request.POST.get('show_on_homepage', 'false')).lower() in ('1', 'true', 'yes') else 'false'
+        is_active = 'true' if str(request.POST.get('is_active', 'true')).lower() in ('1', 'true', 'yes') else 'false'
+
+        max_order = 0
+        existing = PublicGalleryImage.objects()
+        if existing:
+            max_order = max([img.order for img in existing] or [0])
+
+        upload = cloudinary.uploader.upload(
+            image_file,
+            folder="homepage/public_gallery",
+            overwrite=True,
+        )
+        image_url = upload.get('secure_url')
+
+        gallery_image = PublicGalleryImage(
+            image_url=image_url,
+            image_type=image_type,
+            label=label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, ''),
+            alt_text=alt_text or label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, ''),
+            homepage_layout=homepage_layout,
+            order=max_order + 1,
+            is_active=is_active,
+            show_on_homepage=show_on_homepage,
+        )
+        gallery_image.save()
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Gallery image uploaded successfully',
+            'image': _serialize_public_gallery_image(gallery_image, include_admin_fields=True),
+        }, status=200)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@api_view(['PUT'])
+@csrf_exempt
+@authenticate
+def update_public_gallery_image(request, image_id):
+    """Admin: update public gallery image metadata."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can update images'}, status=403)
+    try:
+        data = json.loads(request.body)
+        gallery_image = PublicGalleryImage.objects.get(id=image_id)
+
+        if 'order' in data:
+            gallery_image.order = int(data['order'])
+        if 'is_active' in data:
+            gallery_image.is_active = 'true' if data['is_active'] in (True, 'true', 'True', '1', 1) else 'false'
+        if 'show_on_homepage' in data:
+            gallery_image.show_on_homepage = 'true' if data['show_on_homepage'] in (True, 'true', 'True', '1', 1) else 'false'
+        if 'label' in data:
+            gallery_image.label = data['label']
+        if 'alt_text' in data:
+            gallery_image.alt_text = data['alt_text']
+        if 'image_type' in data and data['image_type'] in PUBLIC_GALLERY_TYPE_LABELS:
+            gallery_image.image_type = data['image_type']
+        if 'homepage_layout' in data:
+            gallery_image.homepage_layout = data['homepage_layout']
+
+        gallery_image.save()
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Gallery image updated successfully',
+            'image': _serialize_public_gallery_image(gallery_image, include_admin_fields=True),
+        }, status=200)
+    except DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Image not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@api_view(['DELETE'])
+@csrf_exempt
+@authenticate
+def delete_public_gallery_image(request, image_id):
+    """Admin: delete public gallery image."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can delete images'}, status=403)
+    try:
+        gallery_image = PublicGalleryImage.objects.get(id=image_id)
+        gallery_image.delete()
+        return JsonResponse({'success': True, 'message': 'Gallery image deleted successfully'}, status=200)
+    except DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Image not found'}, status=404)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 

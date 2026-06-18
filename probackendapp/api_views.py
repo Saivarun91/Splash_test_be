@@ -3606,7 +3606,8 @@ def api_update_product_generation_selections(request, collection_id):
                     "plainBg": bool(selections.get("plainBg", False)),
                     "bgReplace": bool(selections.get("bgReplace", False)),
                     "model": bool(selections.get("model", False)),
-                    "campaign": bool(selections.get("campaign", False))
+                    "campaign": bool(selections.get("campaign", False)),
+                    "modelTiers": selections.get("modelTiers") or {},
                 }
 
                 # Mark the product as modified
