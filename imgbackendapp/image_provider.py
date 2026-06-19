@@ -158,9 +158,9 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
     if not api_key:
         raise RuntimeError("GEMINI/GOOGLE API key not configured")
 
-    configured_model = get_image_model_name(default_model="gemini-3.1-flash-image-preview")
+    configured_model = get_image_model_name(default_model="gemini-3-pro-image-preview")
     model_name = (
-        "gemini-3.1-flash-image-preview"
+        "gemini-3-pro-image-preview"
         if str(configured_model).strip().lower().startswith("imagen-")
         else configured_model
     )

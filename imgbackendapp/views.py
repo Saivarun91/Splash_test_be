@@ -37,6 +37,7 @@ from .tasks import (
 )
 from .generation_utils import parse_num_images, dispatch_variation_tasks
 from .image_provider import parse_model_tier
+from .file_utils import save_uploaded_file
 
 # Check for Gemini SDK
 try:
@@ -167,25 +168,15 @@ def change_background(request):
 
     try:
         upload_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
-        os.makedirs(upload_dir, exist_ok=True)
         ornament_image_paths = []
-        for idx, ornament in enumerate(ornaments):
-            base_name, ext = os.path.splitext(ornament.name)
-            safe_name = f"{base_name}_{idx}{ext}" if len(ornaments) > 1 else ornament.name
-            local_uploaded_path = os.path.join(upload_dir, safe_name)
-            with open(local_uploaded_path, "wb+") as dest:
-                for chunk in ornament.chunks():
-                    dest.write(chunk)
+        for ornament in ornaments:
+            local_uploaded_path = save_uploaded_file(ornament, upload_dir)
             ornament_image_paths.append(local_uploaded_path)
 
         background_image_path = None
         if background:
             bg_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_backgrounds")
-            os.makedirs(bg_dir, exist_ok=True)
-            background_image_path = os.path.join(bg_dir, background.name)
-            with open(background_image_path, "wb+") as dest:
-                for chunk in background.chunks():
-                    dest.write(chunk)
+            background_image_path = save_uploaded_file(background, bg_dir)
 
         task_kwargs = {
             "uploaded_image_paths": ornament_image_paths,
@@ -294,21 +285,13 @@ def generate_model_with_ornament(request):
         # STEP 1: Save ornament locally
         upload_dir = os.path.join(
             settings.MEDIA_ROOT, "uploaded_ornaments")
-        os.makedirs(upload_dir, exist_ok=True)
-        local_uploaded_path = os.path.join(upload_dir, ornament_img.name)
-        with open(local_uploaded_path, "wb+") as dest:
-            for chunk in ornament_img.chunks():
-                dest.write(chunk)
+        local_uploaded_path = save_uploaded_file(ornament_img, upload_dir)
 
         # STEP 2: Save pose image locally (if provided)
         pose_image_path = None
         if pose_img:
             pose_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_poses")
-            os.makedirs(pose_dir, exist_ok=True)
-            pose_image_path = os.path.join(pose_dir, pose_img.name)
-            with open(pose_image_path, "wb+") as dest:
-                for chunk in pose_img.chunks():
-                    dest.write(chunk)
+            pose_image_path = save_uploaded_file(pose_img, pose_dir)
 
         # Call Celery task asynchronously
         task_kwargs = {
@@ -417,31 +400,15 @@ def generate_real_model_with_ornament(request):
         model_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_models")
         ornament_dir = os.path.join(
             settings.MEDIA_ROOT, "uploaded_ornaments")
-        os.makedirs(model_dir, exist_ok=True)
-        os.makedirs(ornament_dir, exist_ok=True)
 
-        local_model_path = os.path.join(model_dir, model_img.name)
-        local_ornament_path = os.path.join(ornament_dir, ornament_img.name)
-
-        # Save model image locally
-        with open(local_model_path, "wb+") as dest:
-            for chunk in model_img.chunks():
-                dest.write(chunk)
-
-        # Save ornament image locally
-        with open(local_ornament_path, "wb+") as dest:
-            for chunk in ornament_img.chunks():
-                dest.write(chunk)
+        local_model_path = save_uploaded_file(model_img, model_dir)
+        local_ornament_path = save_uploaded_file(ornament_img, ornament_dir)
 
         # Save pose image locally (if provided)
         pose_image_path = None
         if pose_img:
             pose_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_poses")
-            os.makedirs(pose_dir, exist_ok=True)
-            pose_image_path = os.path.join(pose_dir, pose_img.name)
-            with open(pose_image_path, "wb+") as dest:
-                for chunk in pose_img.chunks():
-                    dest.write(chunk)
+            pose_image_path = save_uploaded_file(pose_img, pose_dir)
 
         task_kwargs = {
             "model_image_path": local_model_path,
@@ -557,35 +524,21 @@ def generate_campaign_shot_advanced(request):
 
         # === Save ornaments locally ===
         ornament_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
-        os.makedirs(ornament_dir, exist_ok=True)
         ornament_image_paths = []
-        for idx, ornament in enumerate(ornaments):
-            ornament_path = os.path.join(ornament_dir, ornament.name)
-            with open(ornament_path, "wb+") as dest:
-                for chunk in ornament.chunks():
-                    dest.write(chunk)
-            ornament_image_paths.append(ornament_path)
+        for ornament in ornaments:
+            ornament_image_paths.append(save_uploaded_file(ornament, ornament_dir))
 
         # === Save model image locally (if provided) ===
         model_image_path = None
         if model_img:
             model_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_models")
-            os.makedirs(model_dir, exist_ok=True)
-            model_image_path = os.path.join(model_dir, model_img.name)
-            with open(model_image_path, "wb+") as dest:
-                for chunk in model_img.chunks():
-                    dest.write(chunk)
+            model_image_path = save_uploaded_file(model_img, model_dir)
 
         # === Save theme images locally ===
         theme_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_themes")
-        os.makedirs(theme_dir, exist_ok=True)
         theme_image_paths = []
         for theme in theme_images:
-            theme_path = os.path.join(theme_dir, theme.name)
-            with open(theme_path, "wb+") as dest:
-                for chunk in theme.chunks():
-                    dest.write(chunk)
-            theme_image_paths.append(theme_path)
+            theme_image_paths.append(save_uploaded_file(theme, theme_dir))
 
         task_kwargs = {
             "user_id": user_id,
@@ -1037,6 +990,8 @@ def get_user_images(request):
                 "created_at": img.created_at.isoformat() if img.created_at else None,
                 "parent_image_id": str(img.parent_image_id) if img.parent_image_id else None,
                 "original_prompt": img.original_prompt,
+                "generated_image_path": img.generated_image_path,
+                "uploaded_image_path": img.uploaded_image_path,
             }
 
             # Add optional fields if they exist

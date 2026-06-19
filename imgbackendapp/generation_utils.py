@@ -1,5 +1,20 @@
 """Shared helpers for multi-image generation batches."""
 
+REFERENCE_IMAGE_USAGE_INSTRUCTION = (
+    "This is the reference/style image ONLY. Use it for background, environment, "
+    "lighting, surfaces, props, and atmosphere — NEVER for any ornament or jewelry."
+)
+
+REFERENCE_IMAGE_NO_ORNAMENT_RULE = (
+    "STRICT REFERENCE IMAGE RULE (MANDATORY): The reference image is ONLY for scene "
+    "style — backdrop, colors, lighting, surfaces, props, and atmosphere. Do NOT copy, "
+    "reproduce, blend, or include ANY ornament, jewelry, necklace, earrings, bangles, "
+    "rings, bracelet, pendant, chain, or accessory from the reference image. The ONLY "
+    "ornament(s) allowed in the output are from the uploaded product image(s). If the "
+    "reference shows jewelry on a model or anywhere in the scene, completely ignore and "
+    "exclude that jewelry from the final image."
+)
+
 
 def parse_num_images(request, default=1, max_images=3):
     try:

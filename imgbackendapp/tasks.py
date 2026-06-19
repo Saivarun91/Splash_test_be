@@ -21,8 +21,15 @@ from .models import Ornament
 from bson import ObjectId
 from common.error_reporter import report_handled_exception
 from common.user_friendly_errors import get_user_friendly_message
-from .generation_utils import build_variation_instruction
+from .generation_utils import (
+    build_variation_instruction,
+    REFERENCE_IMAGE_NO_ORNAMENT_RULE,
+    REFERENCE_IMAGE_USAGE_INSTRUCTION,
+)
 from .image_provider import generate_image_bytes, normalize_model_tier
+from .file_utils import path_stem, write_bytes_to_unique_path
+from datetime import datetime
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -148,34 +155,40 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
                     "Could not extract ornament using fallback method.")
 
         # Upload original and generated to Cloudinary
+        original_stem = path_stem(ornament.image.path)
         ornament_buf = BytesIO(img_bytes)
         ornament_buf.seek(0)
         upload_orig = cloudinary.uploader.upload(
             ornament_buf,
             folder="ornaments",
-            public_id=f"ornament_original_{ornament.id}",
+            public_id=f"ornament_original_{original_stem}",
             overwrite=True
         )
         uploaded_image_url = upload_orig["secure_url"]
+
+        # Save locally in Django model (upload_to assigns unique filename)
+        ornament.generated_image.save(
+            "generated.jpg", ContentFile(generated_bytes), save=True)
+        local_generated_path = ornament.generated_image.path
+        generated_stem = path_stem(local_generated_path)
 
         buf = BytesIO(generated_bytes)
         buf.seek(0)
         upload_gen = cloudinary.uploader.upload(
             buf,
             folder="ornaments",
-            public_id=f"ornament_generated_{ornament.id}",
+            public_id=f"ornament_generated_{generated_stem}",
             overwrite=True
         )
         generated_image_url = upload_gen["secure_url"]
 
         # Save in MongoDB
-        filename = f"{ornament.id}_generated.jpg"
         ornament_doc = OrnamentMongo(
             prompt=text_prompt,
             uploaded_image_url=uploaded_image_url,
             generated_image_url=generated_image_url,
             uploaded_image_path=ornament.image.path,
-            generated_image_path=filename,
+            generated_image_path=local_generated_path,
             type="white_background",
             user_id=user_id,
             original_prompt=text_prompt
@@ -190,7 +203,7 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
                 image_type="white_background",
                 image_url=generated_image_url,
                 prompt=text_prompt,
-                local_path=filename,
+                local_path=local_generated_path,
                 metadata={
                     "uploaded_image_url": uploaded_image_url,
                     "background_color": bg_color,
@@ -199,10 +212,6 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
             )
         except Exception as history_error:
             print(f"Error tracking image generation history: {history_error}")
-
-        # Save locally in Django model
-        ornament.generated_image.save(
-            filename, ContentFile(generated_bytes), save=True)
 
         return {
             "success": True,
@@ -291,9 +300,15 @@ def change_background_task(
         if bg_b64:
             bg_prompt = get_prompt_from_db(
                 "images_background_change_with_image",
-                "Replace the background using the uploaded background image.",
+                (
+                    "Replace the background using the uploaded reference image for scene "
+                    "style only. "
+                    f"{REFERENCE_IMAGE_NO_ORNAMENT_RULE}"
+                ),
             )
-            final_prompt = f"{user_prompt} {bg_prompt}".strip()
+            final_prompt = (
+                f"{user_prompt} {bg_prompt} {REFERENCE_IMAGE_NO_ORNAMENT_RULE}".strip()
+            )
         elif bg_color:
             color_prompt = get_prompt_from_db(
                 "images_background_change_with_color",
@@ -365,6 +380,8 @@ def change_background_task(
                         }
                     },
                     "Use this image strictly as the new background.",
+                    REFERENCE_IMAGE_USAGE_INSTRUCTION,
+                    REFERENCE_IMAGE_NO_ORNAMENT_RULE,
                 ]
             )
         contents.append(base_prompt)
@@ -389,32 +406,29 @@ def change_background_task(
 
         uploaded_urls = []
         for image_path in uploaded_image_paths:
+            image_stem = path_stem(image_path)
             uploaded_result = cloudinary.uploader.upload(
                 image_path,
                 folder="ornaments_originals",
-                public_id=f"ornament_original_{os.path.splitext(os.path.basename(image_path))[0]}",
+                public_id=f"ornament_original_{image_stem}",
                 overwrite=True,
             )
             uploaded_urls.append(uploaded_result["secure_url"])
 
         primary_uploaded_path = uploaded_image_paths[0]
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
-        os.makedirs(gen_dir, exist_ok=True)
-        suffix = (
-            f"multi_{len(uploaded_image_paths)}"
-            if len(uploaded_image_paths) > 1
-            else os.path.splitext(os.path.basename(primary_uploaded_path))[0]
+        variation_suffix = f"v{variation_index + 1}" if total_variations > 1 else ""
+        local_generated_path = write_bytes_to_unique_path(
+            gen_dir,
+            generated_bytes,
+            "generated.jpg",
+            suffix=variation_suffix,
         )
-        if total_variations > 1:
-            suffix = f"{suffix}_v{variation_index + 1}"
-        local_generated_path = os.path.join(gen_dir, f"generated_{suffix}.jpg")
-        with open(local_generated_path, "wb") as f:
-            f.write(generated_bytes)
-
+        generated_stem = path_stem(local_generated_path)
         upload_result = cloudinary.uploader.upload(
             local_generated_path,
             folder="ornaments_bg_change",
-            public_id=f"ornament_bg_{suffix}",
+            public_id=f"ornament_bg_{generated_stem}",
             overwrite=True,
         )
         generated_url = upload_result["secure_url"]
@@ -567,30 +581,31 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         )
 
         # Upload ornament to Cloudinary
+        ornament_stem = path_stem(ornament_image_path)
         uploaded_result = cloudinary.uploader.upload(
             ornament_image_path,
             folder="ornaments_originals",
-            public_id=f"ornament_original_{os.path.splitext(os.path.basename(ornament_image_path))[0]}",
+            public_id=f"ornament_original_{ornament_stem}",
             overwrite=True
         )
         uploaded_url = uploaded_result["secure_url"]
 
         # Save generated image locally
         gen_dir = os.path.join(settings.MEDIA_ROOT, "generated_ornaments")
-        os.makedirs(gen_dir, exist_ok=True)
-        base_name = os.path.splitext(os.path.basename(ornament_image_path))[0]
-        if total_variations > 1:
-            base_name = f"{base_name}_v{variation_index + 1}"
-        local_generated_path = os.path.join(gen_dir, f"generated_{base_name}")
-
-        with open(local_generated_path, "wb") as f:
-            f.write(generated_bytes)
+        variation_suffix = f"v{variation_index + 1}" if total_variations > 1 else ""
+        local_generated_path = write_bytes_to_unique_path(
+            gen_dir,
+            generated_bytes,
+            "generated.jpg",
+            suffix=variation_suffix,
+        )
+        generated_stem = path_stem(local_generated_path)
 
         # Upload generated image to Cloudinary
         upload_result = cloudinary.uploader.upload(
             local_generated_path,
             folder="model_ornament",
-            public_id=f"ornament_generated_{base_name}",
+            public_id=f"ornament_generated_{generated_stem}",
             overwrite=True
         )
         generated_url = upload_result['secure_url']
@@ -609,6 +624,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             model_tier=normalize_model_tier(model_tier),
         )
         ornament_doc.save()
+        # print("local_generated_path =", repr(local_generated_path))
+        # print("length of local_generated_path =", len(local_generated_path))
 
         return {
             "status": "success",
@@ -738,16 +755,18 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         )
 
         # Upload images to Cloudinary
+        model_stem = path_stem(model_image_path)
+        ornament_stem = path_stem(ornament_image_path)
         model_upload = cloudinary.uploader.upload(
             model_image_path,
             folder="models_originals",
-            public_id=f"model_original_{os.path.splitext(os.path.basename(model_image_path))[0]}",
+            public_id=f"model_original_{model_stem}",
             overwrite=True
         )
         ornament_upload = cloudinary.uploader.upload(
             ornament_image_path,
             folder="ornaments_originals",
-            public_id=f"ornament_original_{os.path.splitext(os.path.basename(ornament_image_path))[0]}",
+            public_id=f"ornament_original_{ornament_stem}",
             overwrite=True
         )
 
@@ -757,20 +776,20 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         # Save generated image locally
         generated_dir = os.path.join(
             settings.MEDIA_ROOT, "generated_models")
-        os.makedirs(generated_dir, exist_ok=True)
-        base_name = os.path.splitext(os.path.basename(model_image_path))[0]
-        if total_variations > 1:
-            base_name = f"{base_name}_v{variation_index + 1}"
-        local_generated_path = os.path.join(generated_dir, f"generated_{base_name}")
-
-        with open(local_generated_path, "wb") as f:
-            f.write(generated_bytes)
+        variation_suffix = f"v{variation_index + 1}" if total_variations > 1 else ""
+        local_generated_path = write_bytes_to_unique_path(
+            generated_dir,
+            generated_bytes,
+            "generated.jpg",
+            suffix=variation_suffix,
+        )
+        generated_stem = path_stem(local_generated_path)
 
         # Upload generated image to Cloudinary
         upload_result = cloudinary.uploader.upload(
             local_generated_path,
             folder="real_model_output",
-            public_id=f"model_generated_{base_name}",
+            public_id=f"model_generated_{generated_stem}",
             overwrite=True
         )
         generated_url = upload_result["secure_url"]
@@ -853,8 +872,13 @@ def generate_campaign_shot_advanced_task(
                 ornament_bytes = f.read()
             
             # Upload
+            ornament_stem = path_stem(ornament_path)
             result = cloudinary.uploader.upload(
-                ornament_path, folder="ornaments", overwrite=True)
+                ornament_path,
+                folder="ornaments",
+                public_id=f"ornament_{ornament_stem}",
+                overwrite=True,
+            )
             ornament_urls.append(result['secure_url'])
 
             # Encode
@@ -886,8 +910,13 @@ def generate_campaign_shot_advanced_task(
         if model_image_path and os.path.exists(model_image_path):
             with open(model_image_path, "rb") as f:
                 model_bytes = f.read()
+            model_stem = path_stem(model_image_path)
             model_upload = cloudinary.uploader.upload(
-                model_image_path, folder="models", overwrite=True)
+                model_image_path,
+                folder="models",
+                public_id=f"model_{model_stem}",
+                overwrite=True,
+            )
             model_url = model_upload['secure_url']
             model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
@@ -994,22 +1023,25 @@ def generate_campaign_shot_advanced_task(
             dimension=dimension,
         )
 
-        # Upload generated image
-        buf = BytesIO(generated_bytes)
-        buf.seek(0)
-        public_id = f"campaign_{len(ornament_image_paths)}"
-        if total_variations > 1:
-            public_id = f"{public_id}_v{variation_index + 1}"
+        # Save and upload generated image
+        gen_dir = os.path.join(settings.MEDIA_ROOT, "generated", "campaign")
+        variation_suffix = f"v{variation_index + 1}" if total_variations > 1 else ""
+        local_generated_path = write_bytes_to_unique_path(
+            gen_dir,
+            generated_bytes,
+            "campaign.jpg",
+            suffix=variation_suffix,
+        )
+        generated_stem = path_stem(local_generated_path)
         upload_result = cloudinary.uploader.upload(
-            buf, folder="campaign_shots", public_id=public_id, overwrite=True)
+            local_generated_path,
+            folder="campaign_shots",
+            public_id=f"campaign_{generated_stem}",
+            overwrite=True,
+        )
         generated_url = upload_result['secure_url']
 
         # Save record to MongoDB
-        generated_path = f"media/generated/campaign_{len(ornament_image_paths)}"
-        if total_variations > 1:
-            generated_path = f"{generated_path}_v{variation_index + 1}.jpg"
-        else:
-            generated_path = f"{generated_path}.jpg"
         ornament_doc = OrnamentMongo(
             prompt=prompt,
             type="campaign_shot_advanced",
@@ -1017,7 +1049,7 @@ def generate_campaign_shot_advanced_task(
             uploaded_ornament_urls=ornament_urls,
             generated_image_url=generated_url,
             uploaded_image_path="Multiple ornaments",
-            generated_image_path=generated_path,
+            generated_image_path=local_generated_path,
             user_id=user_id,
             original_prompt=prompt,
             model_tier=normalize_model_tier(model_tier),
@@ -1099,10 +1131,9 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
         regen_dir = os.path.join(settings.MEDIA_ROOT, "generated")
-        os.makedirs(regen_dir, exist_ok=True)
-        temp_ref_path = os.path.join(regen_dir, f"regen_ref_{image_id}_{int(time.time())}.jpg")
-        with open(temp_ref_path, "wb") as ref_file:
-            ref_file.write(img_bytes)
+        temp_ref_path = write_bytes_to_unique_path(
+            regen_dir, img_bytes, "regen_ref.jpg", suffix=f"ref_{image_id}"
+        )
 
         contents = [
             {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
@@ -1116,11 +1147,10 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             gemini_contents=contents,
             reference_paths=[temp_ref_path],
         )
-        regen_filename = f"regen_{image_id}_{int(time.time())}.jpg"
-        local_regen_path = os.path.join(regen_dir, regen_filename)
-
-        with open(local_regen_path, "wb") as f:
-            f.write(generated_bytes)
+        local_regen_path = write_bytes_to_unique_path(
+            regen_dir, generated_bytes, "regen.jpg", suffix=image_id
+        )
+        regen_stem = path_stem(local_regen_path)
 
         # Upload regenerated image to Cloudinary
         buf = BytesIO(generated_bytes)
@@ -1128,7 +1158,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
         upload_result = cloudinary.uploader.upload(
             buf,
             folder="ornaments_regenerated",
-            public_id=f"regen_{image_id}_{int(time.time())}",
+            public_id=f"regen_{regen_stem}",
             overwrite=True
         )
         regenerated_url = upload_result['secure_url']

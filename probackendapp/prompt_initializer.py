@@ -614,6 +614,39 @@ Modifications: {new_prompt}""",
             "is_active": True,
         },
         {
+            "prompt_key": "images_background_change_with_image",
+            "title": "Background Change with Reference Image Prompt",
+            "description": "Prompt for themed background change when a reference image is uploaded",
+            "prompt_content": (
+                "Replace the background using the uploaded reference image for scene style "
+                "only — backdrop, colors, lighting, surfaces, props, and atmosphere. "
+                "Do NOT copy any ornament or jewelry from the reference image."
+            ),
+            "rules": """RULES FOR BACKGROUND CHANGE WITH REFERENCE IMAGE:
+
+1. UPLOADED PRODUCT ORNAMENT ONLY (MANDATORY):
+   - The ONLY ornament(s) in the final image must come from the uploaded product image(s)
+   - Do NOT copy, reproduce, blend, or include ANY jewelry from the reference image
+   - If the reference shows a model wearing jewelry, ignore that jewelry completely
+   - Never merge reference jewelry with the uploaded product ornament
+
+2. REFERENCE IMAGE USAGE (MANDATORY):
+   - Use the reference ONLY for background, environment, lighting, surfaces, props, and mood
+   - Do NOT treat the reference as a source of ornaments or product design
+   - Props and styling elements are allowed ONLY when they are not jewelry/ornaments
+
+3. ORNAMENT PRESERVATION (MANDATORY - EXACT MATCH):
+   - The uploaded product ornament must remain EXACTLY identical in design, stones, metal, and proportions
+   - Replace ONLY the background and scene around the uploaded ornament
+
+4. QUALITY:
+   - Seamless integration of the uploaded ornament into the reference-inspired scene
+   - Professional product photography quality with the uploaded ornament as the sole jewelry subject""",
+            "category": "images",
+            "prompt_type": "background_replace",
+            "is_active": True,
+        },
+        {
             "prompt_key": "images_background_change_default",
             "title": "Background Change Default Prompt",
             "description": "Default prompt for background change without color",

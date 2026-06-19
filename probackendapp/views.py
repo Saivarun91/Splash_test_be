@@ -25,6 +25,12 @@ from common.middleware import authenticate
 from common.error_reporter import report_handled_exception
 from common.user_friendly_errors import get_user_friendly_message
 from CREDITS.utils import get_image_model_name
+from imgbackendapp.file_utils import (
+    generate_unique_image_path,
+    path_stem,
+    save_uploaded_file,
+    write_bytes_to_unique_path,
+)
 # -------------------------
 # Dashboard - Shows all projects
 # -------------------------
@@ -834,8 +840,9 @@ def save_generated_images(request, collection_id):
             img, dict) and img.get("cloud") in selected_images]
 
         for url in selected_images - existing_urls:
-            filename = url.split("/")[-1]
-            local_path = os.path.join(local_dir, filename)
+            url_filename = url.split("/")[-1]
+            ext = os.path.splitext(url_filename)[1] or ".jpg"
+            local_path = generate_unique_image_path(local_dir, f"image{ext}")
 
             resp = requests.get(url)
             if resp.status_code == 200:
@@ -919,17 +926,16 @@ def upload_product_images_api(request, collection_id):
         new_product_images = []
 
         for index, file in enumerate(uploaded_files):
+            local_path = save_uploaded_file(file, local_dir)
+            file_stem = path_stem(local_path)
+
             upload_result = cloudinary.uploader.upload(
-                file,
+                local_path,
                 folder="collection_product_images",
-                overwrite=True
+                public_id=file_stem,
+                overwrite=True,
             )
             cloud_url = upload_result.get("secure_url")
-
-            local_path = os.path.join(local_dir, file.name)
-            with open(local_path, "wb") as f:
-                for chunk in file.chunks():
-                    f.write(chunk)
 
             # Ornament fitting rules (from frontend ornamentRules.js), same index as ornament_types
             rules_for_index = ornament_rules[index] if index < len(ornament_rules) else ""
@@ -1072,21 +1078,18 @@ def generate_product_model_api(request, collection_id):
             return Response({"success": False, "error": "Gemini did not return an image."})
 
         # Save locally
-        output_dir = os.path.join("media", "composite_images", str(
-            collection_id), str(uuid.uuid4()))
-        os.makedirs(output_dir, exist_ok=True)
-        local_path = os.path.join(output_dir, "composite.png")
-        with open(local_path, "wb") as f:
-            f.write(generated_bytes)
+        output_dir = os.path.join(
+            settings.MEDIA_ROOT, "composite_images", str(collection_id))
+        local_path = write_bytes_to_unique_path(
+            output_dir, generated_bytes, "composite.png")
 
         # Upload to Cloudinary
         import cloudinary.uploader
         cloud_upload = cloudinary.uploader.upload(
             local_path,
-            folder=f"ai_studio/composite/{collection_id}/{uuid.uuid4()}/",
-            use_filename=True,
-            unique_filename=False,
-            resource_type="image"
+            folder=f"ai_studio/composite/{collection_id}",
+            public_id=path_stem(local_path),
+            resource_type="image",
         )
 
         result = {
@@ -1821,12 +1824,11 @@ Follow this specific style prompt: {prompt_text}"""
                     if response.status_code == 200:
                         # Save temporarily
                         temp_dir = os.path.join(
-                            "media", "temp_products", str(collection_id))
-                        os.makedirs(temp_dir, exist_ok=True)
-                        product_path = os.path.join(
-                            temp_dir, f"product_{product_index}_{uuid.uuid4()}.jpg")
-                        with open(product_path, "wb") as f:
-                            f.write(response.content)
+                            settings.MEDIA_ROOT, "temp_products", str(collection_id))
+                        product_path = write_bytes_to_unique_path(
+                            temp_dir, response.content, "product.jpg",
+                            suffix=f"p{product_index}",
+                        )
                     else:
                         return {"success": False, "error": f"Could not download product image from URL: {product.uploaded_image_url}"}
                 except Exception as download_error:
@@ -1893,20 +1895,15 @@ Follow this specific style prompt: {prompt_text}"""
 
         # Save locally
         output_dir = os.path.join(
-            "media", "composite_images", str(collection_id))
-        os.makedirs(output_dir, exist_ok=True)
-        local_path = os.path.join(
-            output_dir, f"{uuid.uuid4()}_{prompt_key}.png")
-
-        with open(local_path, "wb") as f:
-            f.write(generated_bytes)
+            settings.MEDIA_ROOT, "composite_images", str(collection_id))
+        local_path = write_bytes_to_unique_path(
+            output_dir, generated_bytes, f"{prompt_key}.png")
 
         # Upload to Cloudinary
         cloud_upload = cloudinary.uploader.upload(
             local_path,
-            folder=f"ai_studio/composite/{collection_id}/{uuid.uuid4()}/",
-            use_filename=True,
-            unique_filename=False,
+            folder=f"ai_studio/composite/{collection_id}",
+            public_id=path_stem(local_path),
             resource_type="image",
         )
 
@@ -2103,12 +2100,9 @@ def generate_all_product_model_images_background(collection_id, user_id):
                     if response.status_code == 200:
                         # Save temporarily
                         temp_dir = os.path.join(
-                            "media", "temp_models", str(collection_id))
-                        os.makedirs(temp_dir, exist_ok=True)
-                        model_local_path = os.path.join(
-                            temp_dir, f"model_{uuid.uuid4()}.jpg")
-                        with open(model_local_path, "wb") as f:
-                            f.write(response.content)
+                            settings.MEDIA_ROOT, "temp_models", str(collection_id))
+                        model_local_path = write_bytes_to_unique_path(
+                            temp_dir, response.content, "model.jpg")
                         print(
                             f"Model downloaded successfully to: {model_local_path}")
                     else:
@@ -3099,21 +3093,12 @@ Follow this specific style prompt: {prompt_text}"""
                     # 6. Save locally
                     # ---------------------------
                     output_dir = os.path.join(
-                        "media", "composite_images", str(collection_id))
-                    os.makedirs(output_dir, exist_ok=True)
-                    local_path = os.path.join(
-                        output_dir, f"{uuid.uuid4()}_{key}.png")
+                        settings.MEDIA_ROOT, "composite_images", str(collection_id))
+                    local_path = write_bytes_to_unique_path(
+                        output_dir, generated_bytes, f"{key}.png")
 
                     if key == "campaign_image":
                         log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] 💾 Saving image locally to: {local_path}"
-                        logger.info(log_msg)
-                        print(log_msg)
-
-                    with open(local_path, "wb") as f:
-                        f.write(generated_bytes)
-
-                    if key == "campaign_image":
-                        log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ✅ Image saved locally successfully"
                         logger.info(log_msg)
                         print(log_msg)
 
@@ -3128,9 +3113,8 @@ Follow this specific style prompt: {prompt_text}"""
                     try:
                         cloud_upload = cloudinary.uploader.upload(
                             local_path,
-                            folder=f"ai_studio/composite/{collection_id}/{uuid.uuid4()}/",
-                            use_filename=True,
-                            unique_filename=False,
+                            folder=f"ai_studio/composite/{collection_id}",
+                            public_id=path_stem(local_path),
                             resource_type="image",
                         )
                         if key == "campaign_image":
@@ -3502,19 +3486,16 @@ def regenerate_product_model_image(request, collection_id):
             return Response({"success": False, "error": "No image generated by GenAI"})
 
         # --- Save new regenerated image locally ---
-        new_filename = f"{uuid.uuid4()}_regenerated.png"
         local_dir = os.path.join(
-            "media", "composite_images", str(collection_id))
-        os.makedirs(local_dir, exist_ok=True)
-        local_output_path = os.path.join(local_dir, new_filename)
-
-        with open(local_output_path, "wb") as f:
-            f.write(generated_bytes)
+            settings.MEDIA_ROOT, "composite_images", str(collection_id))
+        local_output_path = write_bytes_to_unique_path(
+            local_dir, generated_bytes, "regenerated.png")
 
         # --- Upload to Cloudinary ---
         upload_result = cloudinary.uploader.upload(
             local_output_path,
-            folder=f"ai_studio/regenerated/{collection_id}/"
+            folder=f"ai_studio/regenerated/{collection_id}",
+            public_id=path_stem(local_output_path),
         )
         cloud_url = upload_result["secure_url"]
 

@@ -24,6 +24,7 @@ from django.shortcuts import get_object_or_404
 from mongoengine.errors import DoesNotExist
 from bson.dbref import DBRef
 from django.conf import settings
+from imgbackendapp.file_utils import path_stem, save_uploaded_file
 from common.user_friendly_errors import get_user_friendly_message
 import json
 import os
@@ -946,24 +947,18 @@ def api_upload_workflow_image(request, project_id, collection_id):
         uploaded_images = []
 
         for file in uploaded_files:
-            # Generate unique filename
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            filename = f"{timestamp}_{file.name}"
-            local_path = os.path.join(local_dir, filename)
-
-            # Save locally
-            with open(local_path, "wb") as f:
-                for chunk in file.chunks():
-                    f.write(chunk)
+            local_path = save_uploaded_file(file, local_dir)
+            filename = os.path.basename(local_path)
+            file_stem = path_stem(local_path)
 
             # Reset file pointer to beginning for Cloudinary upload
             file.seek(0)
 
             # Upload to Cloudinary
             upload_result = cloudinary.uploader.upload(
-                file,
+                local_path,
                 folder=f"workflow_images/{category}",
-                public_id=f"{category}_{timestamp}_{os.path.splitext(file.name)[0]}",
+                public_id=f"{category}_{file_stem}",
                 overwrite=True
             )
             cloud_url = upload_result.get("secure_url")
@@ -2325,19 +2320,17 @@ def api_upload_real_models(request, collection_id):
         new_real_models = []
 
         for file in uploaded_files:
+            local_path = save_uploaded_file(file, local_dir)
+            file_stem = path_stem(local_path)
+
             # Upload to Cloudinary
             upload_result = cloudinary.uploader.upload(
-                file,
+                local_path,
                 folder="collection_real_models",
-                overwrite=True
+                public_id=file_stem,
+                overwrite=True,
             )
             cloud_url = upload_result.get("secure_url")
-
-            # Save locally
-            local_path = os.path.join(local_dir, file.name)
-            with open(local_path, "wb") as f:
-                for chunk in file.chunks():
-                    f.write(chunk)
 
             # Create entry
             entry = {"local": local_path,
