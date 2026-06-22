@@ -596,7 +596,11 @@ def generate_ai_images_background(collection_id, user_id):
                 model=model_name,
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"]
+                    response_modalities=["TEXT", "IMAGE"],
+                    image_config=types.ImageConfig(
+                        image_size="4K",
+                        aspect_ratio="1:1"
+                    )
                 ),
             )
         except Exception as gen_err:
@@ -1060,7 +1064,12 @@ def generate_product_model_api(request, collection_id):
         ]
 
         config = types.GenerateContentConfig(
-            response_modalities=["TEXT", "IMAGE"])
+            response_modalities=["TEXT", "IMAGE"],
+            image_config=types.ImageConfig(
+                image_size="4K",
+                aspect_ratio="1:1"
+            )
+        )
 
         resp = client.models.generate_content(
             model=model_name, contents=contents, config=config)
@@ -1867,7 +1876,11 @@ Follow this specific style prompt: {prompt_text}"""
         ]
 
         config = types.GenerateContentConfig(
-            response_modalities=["TEXT", "IMAGE"]
+            response_modalities=["TEXT", "IMAGE"],
+            image_config=types.ImageConfig(
+                image_size="4K",
+                aspect_ratio="1:1"
+            )
         )
 
         resp = client.models.generate_content(
@@ -2945,7 +2958,11 @@ Follow this specific style prompt: {prompt_text}"""
                         print(log_msg)
 
                     config = types.GenerateContentConfig(
-                        response_modalities=["TEXT", "IMAGE"]
+                        response_modalities=["TEXT", "IMAGE"],
+                        image_config=types.ImageConfig(
+                            image_size="4K",
+                            aspect_ratio="1:1"
+                        )
                     )
 
                     try:
@@ -3463,7 +3480,11 @@ def regenerate_product_model_image(request, collection_id):
         ]
 
         config = types.GenerateContentConfig(
-            response_modalities=["TEXT", "IMAGE"]
+            response_modalities=["TEXT", "IMAGE"],
+            image_config=types.ImageConfig(
+                image_size="4K",
+                aspect_ratio="1:1"
+            )
         )
 
         resp = client.models.generate_content(

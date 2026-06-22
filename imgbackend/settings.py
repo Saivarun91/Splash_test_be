@@ -287,7 +287,7 @@ FRONTEND_URL = os.getenv('FRONTEND_URL') or config('FRONTEND_URL', default='http
 # AI Model Configuration - Dynamically loaded from database
 DEFAULT_GEMINI_IMAGE_MODEL = config(
     "GEMINI_IMAGE_MODEL",
-    default="gemini-3.1-flash-image-preview",
+    default="gemini-3.0-pro-image-preview",
 )
 try:
     from CREDITS.utils import get_image_model_name

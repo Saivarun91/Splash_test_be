@@ -96,8 +96,17 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
                 }
             ]
 
+            supported_ratios = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
+            aspect = (dimension or "1:1").strip().replace(" ", "")
+            if aspect not in supported_ratios:
+                aspect = "1:1"
+
             config = types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"]
+                response_modalities=["TEXT", "IMAGE"],
+                image_config=types.ImageConfig(
+                    image_size="4K",
+                    aspect_ratio=aspect
+                )
             )
 
             resp = client.models.generate_content(

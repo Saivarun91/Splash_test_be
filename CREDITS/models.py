@@ -11,7 +11,7 @@ class CreditSettings(Document):
     credits_per_regular_regeneration = IntField(default=1)
     credits_per_premium_regeneration = IntField(default=1)
     # Global AI image model name used for Gemini-based image generation
-    default_image_model_name = StringField(default="gemini-3.1-flash-image-preview")
+    default_image_model_name = StringField(default="gemini-3.0-pro-image-preview")
     # Credits recharge reminder thresholds (admin-controlled). Send reminder when balance <= threshold.
     credit_reminder_threshold_1 = IntField(default=20)   # e.g. remind at 20 credits
     credit_reminder_threshold_2 = IntField(default=10)   # e.g. remind at 10 credits

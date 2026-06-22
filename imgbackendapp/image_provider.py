@@ -158,18 +158,31 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
     if not api_key:
         raise RuntimeError("GEMINI/GOOGLE API key not configured")
 
-    configured_model = get_image_model_name(default_model="gemini-3-pro-image-preview")
+    configured_model = get_image_model_name(default_model="gemini-3.0-pro-image-preview")
     model_name = (
-        "gemini-3-pro-image-preview"
+        "gemini-3.0-pro-image-preview"
         if str(configured_model).strip().lower().startswith("imagen-")
         else configured_model
     )
 
     client = genai.Client(api_key=api_key)
+    
+    # Normalize aspect ratio to one supported by types.ImageConfig
+    supported_ratios = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
+    aspect = (dimension or "1:1").strip().replace(" ", "")
+    if aspect not in supported_ratios:
+        aspect = "1:1"
+
     response = client.models.generate_content(
         model=model_name,
         contents=contents,
-        config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
+        config=types.GenerateContentConfig(
+            response_modalities=["TEXT", "IMAGE"],
+            image_config=types.ImageConfig(
+                image_size="4K",
+                aspect_ratio=aspect
+            )
+        ),
     )
 
     candidates = getattr(response, "candidates", None) or []

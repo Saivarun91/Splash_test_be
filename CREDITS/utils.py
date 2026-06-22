@@ -40,7 +40,7 @@ def get_credit_settings():
             'default_image_model_name': getattr(
                 settings,
                 'default_image_model_name',
-                'gemini-3.1-flash-image-preview'
+                'gemini-3.0-pro-image-preview'
             ),
             'credit_reminder_threshold_1': getattr(settings, 'credit_reminder_threshold_1', 20),
             'credit_reminder_threshold_2': getattr(settings, 'credit_reminder_threshold_2', 10),
@@ -54,7 +54,7 @@ def get_credit_settings():
             'credits_per_premium_generation': 2,
             'credits_per_regular_regeneration': 1,
             'credits_per_premium_regeneration': 1,
-            'default_image_model_name': 'gemini-3.1-flash-image-preview',
+            'default_image_model_name': 'gemini-3.0-pro-image-preview',
             'credit_reminder_threshold_1': 20,
             'credit_reminder_threshold_2': 10,
         }
@@ -214,7 +214,7 @@ def maybe_send_credit_reminder_user(user, balance_after):
         print(f"Credit reminder check failed: {e}")
 
 
-def get_image_model_name(default_model: str = "gemini-3.1-flash-image-preview") -> str:
+def get_image_model_name(default_model: str = "gemini-3.0-pro-image-preview") -> str:
     """
     Get the active AI model name for image generation.
 
@@ -228,11 +228,13 @@ def get_image_model_name(default_model: str = "gemini-3.1-flash-image-preview") 
             return default_model
         normalized = str(model_name).strip()
         normalized_lower = normalized.lower()
-        # Backward-compatible alias for older naming present in existing DB/settings.
-        if normalized_lower == "gemini-3.0-pro-image-preview":
-            return "gemini-3.1-flash-image-preview"
-        if normalized_lower == "gemini-3-pro-image-preview":
-            return "gemini-3.1-flash-image-preview"
+        # Map regular Gemini model names to "gemini-3.0-pro-image-preview" per requirement
+        if normalized_lower in {
+            "gemini-3.1-flash-image-preview",
+            "gemini-3-pro-image-preview",
+            "gemini-3.0-pro-image-preview"
+        }:
+            return "gemini-3.0-pro-image-preview"
         # The project uses `client.models.generate_content(...)` for image flows.
         # Imagen-family models are not supported by generateContent and cause
         # 404 NOT_FOUND on v1beta. Fallback to provided Gemini model.
