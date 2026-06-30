@@ -23,9 +23,10 @@ DIMENSION_TO_OPENAI_SIZE = {
 
 
 def normalize_model_tier(value, default="regular") -> str:
-    tier = (value or default).strip().lower()
-    if tier in {"premium", "openai", "gpt", "gpt-image-1"}:
-        return "premium"
+    _ = (value, default)
+    # Premium/OpenAI view is disabled for now.
+    # if tier in {"premium", "openai", "gpt", "gpt-image-1"}:
+    #     return "premium"
     return "regular"
 
 
@@ -187,7 +188,7 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
 
     candidates = getattr(response, "candidates", None) or []
     if not candidates:
-        raise RuntimeError("Gemini returned no candidates.")
+        raise RuntimeError("We couldn't generate an image from the uploaded image. It may not be supported or may not meet the AI model's content requirements. Please try with a different images.")
 
     parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
     for part in parts:
@@ -201,7 +202,7 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
         if generated_bytes:
             return generated_bytes
 
-    raise RuntimeError("Gemini returned no inline image data.")
+    raise RuntimeError("AI returned no inline image data.")
 
 
 def generate_image_bytes(
@@ -213,6 +214,8 @@ def generate_image_bytes(
     dimension: str = "1:1",
 ) -> bytes:
     tier = normalize_model_tier(model_tier)
+    # Premium/OpenAI path remains in place but is unreachable while tier normalization
+    # is forced to "regular" above.
     if tier == "premium":
         logger.info("Using OpenAI model %s for image generation", OPENAI_IMAGE_MODEL)
         return generate_with_openai(prompt, reference_paths, dimension)

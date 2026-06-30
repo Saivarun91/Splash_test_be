@@ -494,7 +494,7 @@ def change_background_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="premium"):
+def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="regular"):
     """
     Celery task to generate model with ornament.
     """
@@ -660,7 +660,7 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="premium"):
+def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="regular"):
     """
     Celery task to generate real model with ornament.
     """
@@ -858,7 +858,7 @@ def generate_campaign_shot_advanced_task(
     ornament_measurements='[]',
     variation_index=0,
     total_variations=1,
-    model_tier="premium",
+    model_tier="regular",
 ):
     """
     Celery task to generate campaign shot.

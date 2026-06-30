@@ -239,7 +239,7 @@ def generate_model_with_ornament(request):
         get_tier_credit_cost,
     )
 
-    model_tier = parse_model_tier(request, default="premium")
+    model_tier = parse_model_tier(request, default="regular")
     num_images = parse_num_images(request)
     credit_amount = get_tier_credit_cost(model_tier, "generation") * num_images
 
@@ -354,7 +354,7 @@ def generate_real_model_with_ornament(request):
         get_tier_credit_cost,
     )
 
-    model_tier = parse_model_tier(request, default="premium")
+    model_tier = parse_model_tier(request, default="regular")
     num_images = parse_num_images(request)
     credit_amount = get_tier_credit_cost(model_tier, "generation") * num_images
 
@@ -461,7 +461,7 @@ def generate_campaign_shot_advanced(request):
             get_tier_credit_cost,
         )
 
-        model_tier = parse_model_tier(request, default="premium")
+        model_tier = parse_model_tier(request, default="regular")
         num_images = parse_num_images(request)
         credit_amount = get_tier_credit_cost(model_tier, "generation") * num_images
 
