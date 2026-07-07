@@ -27,8 +27,12 @@ from common.user_friendly_errors import get_user_friendly_message
 from CREDITS.utils import get_image_model_name
 from imgbackendapp.file_utils import (
     generate_unique_image_path,
+    media_paths_equal,
+    normalize_media_path,
     path_stem,
+    resolve_media_path,
     save_uploaded_file,
+    to_media_db_path,
     write_bytes_to_unique_path,
 )
 # -------------------------
@@ -654,33 +658,17 @@ def generate_ai_images_background(collection_id, user_id):
                 f"⚠️ Generated image too large ({len(image_bytes)} bytes) for iteration {i+1}. Skipping.")
             continue
 
-        # Upload to Cloudinary inside try/except with a timeout and checks
-        buf = io.BytesIO(image_bytes)
-        buf.seek(0)
+        # Save generated image locally
+        local_dir = os.path.join(settings.MEDIA_ROOT, "model_images", "ai_generated")
+        os.makedirs(local_dir, exist_ok=True)
+        absolute_path = write_bytes_to_unique_path(
+            local_dir,
+            image_bytes,
+            f"collection_{collection.id}_{i + 1}.jpg",
+        )
+        db_path = to_media_db_path(absolute_path)
 
-        try:
-            upload_result = cloudinary.uploader.upload(
-                buf,
-                folder="collection_ai_models",
-                public_id=f"collection_{collection.id}_{i+1}",
-                overwrite=True,
-                timeout=CLOUDINARY_UPLOAD_TIMEOUT,
-                resource_type="image",
-            )
-        except Exception as upload_err:
-            print(
-                f"❌ Cloudinary upload failed for iteration {i+1}: {upload_err}")
-            traceback.print_exc()
-            continue
-
-        # Validate upload result
-        secure_url = upload_result.get("secure_url")
-        if not secure_url:
-            print(
-                f"⚠️ Cloudinary returned no secure_url for iteration {i+1}: {upload_result}")
-            continue
-
-        generated_images.append(secure_url)
+        generated_images.append(db_path)
 
         # Track generation in history (non-blocking)
         try:
@@ -689,7 +677,7 @@ def generate_ai_images_background(collection_id, user_id):
                 user_id=str(user_id),
                 collection_id=str(collection.id),
                 image_type="project_ai_model_generation",
-                image_url=secure_url,
+                image_url=db_path,
                 prompt=prompt_text,
                 metadata={
                     "action": "ai_model_generation",
@@ -846,14 +834,14 @@ def save_generated_images(request, collection_id):
         for url in selected_images - existing_urls:
             url_filename = url.split("/")[-1]
             ext = os.path.splitext(url_filename)[1] or ".jpg"
-            local_path = generate_unique_image_path(local_dir, f"image{ext}")
+            absolute_path = generate_unique_image_path(local_dir, f"image{ext}")
 
             resp = requests.get(url)
             if resp.status_code == 200:
-                with open(local_path, "wb") as f:
+                with open(absolute_path, "wb") as f:
                     f.write(resp.content)
 
-            updated_images.append({"local": local_path, "cloud": url})
+            updated_images.append({"local": to_media_db_path(absolute_path), "cloud": url})
 
         # Save back
         item.generated_model_images = updated_images
@@ -930,11 +918,12 @@ def upload_product_images_api(request, collection_id):
         new_product_images = []
 
         for index, file in enumerate(uploaded_files):
-            local_path = save_uploaded_file(file, local_dir)
-            file_stem = path_stem(local_path)
+            absolute_path = save_uploaded_file(file, local_dir)
+            db_path = to_media_db_path(absolute_path)
+            file_stem = path_stem(absolute_path)
 
             upload_result = cloudinary.uploader.upload(
-                local_path,
+                absolute_path,
                 folder="collection_product_images",
                 public_id=file_stem,
                 overwrite=True,
@@ -947,7 +936,7 @@ def upload_product_images_api(request, collection_id):
             # ✅ Create EmbeddedDocument object instead of dict
             product_img = ProductImage(
                 uploaded_image_url=cloud_url,
-                uploaded_image_path=local_path,
+                uploaded_image_path=db_path,
                 generated_images=[],
                 ornament_type=ornament_types[index] if index < len(
                     ornament_types) else None,
@@ -1089,21 +1078,13 @@ def generate_product_model_api(request, collection_id):
         # Save locally
         output_dir = os.path.join(
             settings.MEDIA_ROOT, "composite_images", str(collection_id))
-        local_path = write_bytes_to_unique_path(
+        absolute_path = write_bytes_to_unique_path(
             output_dir, generated_bytes, "composite.png")
-
-        # Upload to Cloudinary
-        import cloudinary.uploader
-        cloud_upload = cloudinary.uploader.upload(
-            local_path,
-            folder=f"ai_studio/composite/{collection_id}",
-            public_id=path_stem(local_path),
-            resource_type="image",
-        )
+        db_path = to_media_db_path(absolute_path)
 
         result = {
-            "url": cloud_upload["secure_url"],
-            "path": local_path
+            "url": db_path,
+            "path": db_path
         }
 
         return Response({"success": True, "image": result})
@@ -1647,11 +1628,11 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
             return {"success": False, "error": "No model selected. Please select a model first."}
 
         selected_model = item.selected_model
-        model_local_path = selected_model.get("local")
+        model_absolute_path = resolve_media_path(selected_model.get("local"))
         model_cloud_url = selected_model.get("cloud")
 
         # Check if model local path exists, if not try to download from cloud URL
-        if not model_local_path or not os.path.exists(model_local_path):
+        if not model_absolute_path or not os.path.exists(model_absolute_path):
             return {"success": False, "error": "Selected model image not found on server."}
 
         if not hasattr(item, "generated_prompts") or not item.generated_prompts:
@@ -1665,7 +1646,7 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
             return {"success": False, "error": f"Prompt key '{prompt_key}' not found."}
 
         # Read model image once
-        with open(model_local_path, "rb") as f:
+        with open(model_absolute_path, "rb") as f:
             model_bytes = f.read()
         model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
@@ -1826,7 +1807,7 @@ Follow this specific style prompt: {prompt_text}"""
             # Fallback to uploaded_image_url if path is not available
             if hasattr(product, 'uploaded_image_url') and product.uploaded_image_url:
                 # Try to download from URL if path doesn't exist
-                product_path = None
+                product_absolute_path = None
                 try:
                     response = requests.get(
                         product.uploaded_image_url, timeout=10)
@@ -1834,7 +1815,7 @@ Follow this specific style prompt: {prompt_text}"""
                         # Save temporarily
                         temp_dir = os.path.join(
                             settings.MEDIA_ROOT, "temp_products", str(collection_id))
-                        product_path = write_bytes_to_unique_path(
+                        product_absolute_path = write_bytes_to_unique_path(
                             temp_dir, response.content, "product.jpg",
                             suffix=f"p{product_index}",
                         )
@@ -1847,15 +1828,15 @@ Follow this specific style prompt: {prompt_text}"""
             else:
                 return {"success": False, "error": "Product image path or URL not found."}
         else:
-            product_path = product.uploaded_image_path
+            product_absolute_path = resolve_media_path(product.uploaded_image_path)
 
-        if not product_path or not os.path.exists(product_path):
-            msg = f"[JOB {job_id}] Product image path does not exist: {product_path}"
+        if not product_absolute_path or not os.path.exists(product_absolute_path):
+            msg = f"[JOB {job_id}] Product image path does not exist: {product_absolute_path}"
             logger.warning(msg)
             print(msg)
             return {"success": False, "error": "Product image path does not exist."}
 
-        with open(product_path, "rb") as f:
+        with open(product_absolute_path, "rb") as f:
             product_bytes = f.read()
         product_b64 = base64.b64encode(product_bytes).decode("utf-8")
 
@@ -1909,16 +1890,9 @@ Follow this specific style prompt: {prompt_text}"""
         # Save locally
         output_dir = os.path.join(
             settings.MEDIA_ROOT, "composite_images", str(collection_id))
-        local_path = write_bytes_to_unique_path(
+        absolute_path = write_bytes_to_unique_path(
             output_dir, generated_bytes, f"{prompt_key}.png")
-
-        # Upload to Cloudinary
-        cloud_upload = cloudinary.uploader.upload(
-            local_path,
-            folder=f"ai_studio/composite/{collection_id}",
-            public_id=path_stem(local_path),
-            resource_type="image",
-        )
+        db_path = to_media_db_path(absolute_path)
 
         # Reload collection to avoid race conditions from concurrent tasks
         try:
@@ -1946,8 +1920,8 @@ Follow this specific style prompt: {prompt_text}"""
         new_image_data = {
             "type": prompt_key,
             "prompt": prompt_text,
-            "local_path": local_path,
-            "cloud_url": cloud_upload["secure_url"],
+            "local_path": db_path,
+            "cloud_url": db_path,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "model_tier": model_tier,
             "model_used": {
@@ -1995,9 +1969,9 @@ Follow this specific style prompt: {prompt_text}"""
                 user_id=str(user_id),
                 collection_id=str(collection.id),
                 image_type=f"project_{prompt_key}",
-                image_url=cloud_upload["secure_url"],
+                image_url=db_path,
                 prompt=prompt_text,
-                local_path=local_path,
+                local_path=db_path,
                 metadata={
                     "model_used": selected_model.get("type"),
                     "product_url": product.uploaded_image_url,
@@ -2026,8 +2000,8 @@ Follow this specific style prompt: {prompt_text}"""
                         f"[JOB {job_id}] Job is {job.status}, not tracking image (job may have been cancelled or completed)")
                 else:
                     image_info = {
-                        "cloud_url": cloud_upload["secure_url"],
-                        "local_path": local_path,
+                        "cloud_url": db_path,
+                        "local_path": db_path,
                         "collection_id": str(collection.id),
                         "product_index": product_index,
                         "prompt_key": prompt_key,
@@ -2050,8 +2024,8 @@ Follow this specific style prompt: {prompt_text}"""
 
         return {
             "success": True,
-            "cloud_url": cloud_upload["secure_url"],
-            "local_path": local_path,
+            "cloud_url": db_path,
+            "local_path": db_path,
             "prompt_key": prompt_key,
             "product_index": product_index,
         }
@@ -2099,11 +2073,11 @@ def generate_all_product_model_images_background(collection_id, user_id):
             return {"success": False, "error": "No model selected. Please select a model first."}
 
         selected_model = item.selected_model
-        model_local_path = selected_model.get("local")
+        model_absolute_path = resolve_media_path(selected_model.get("local"))
         model_cloud_url = selected_model.get("cloud")
 
         # Check if model local path exists, if not try to download from cloud URL
-        if not model_local_path or not os.path.exists(model_local_path):
+        if not model_absolute_path or not os.path.exists(model_absolute_path):
             if model_cloud_url:
                 # Try to download from cloud URL
                 try:
@@ -2114,10 +2088,10 @@ def generate_all_product_model_images_background(collection_id, user_id):
                         # Save temporarily
                         temp_dir = os.path.join(
                             settings.MEDIA_ROOT, "temp_models", str(collection_id))
-                        model_local_path = write_bytes_to_unique_path(
+                        model_absolute_path = write_bytes_to_unique_path(
                             temp_dir, response.content, "model.jpg")
                         print(
-                            f"Model downloaded successfully to: {model_local_path}")
+                            f"Model downloaded successfully to: {model_absolute_path}")
                     else:
                         return {"success": False, "error": f"Could not download model image from URL: {model_cloud_url}"}
                 except Exception as download_error:
@@ -2132,7 +2106,7 @@ def generate_all_product_model_images_background(collection_id, user_id):
         # ---------------------------
         # 2. Read model image once
         # ---------------------------
-        with open(model_local_path, "rb") as f:
+        with open(model_absolute_path, "rb") as f:
             model_bytes = f.read()
         model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
@@ -2312,10 +2286,10 @@ Follow this specific style prompt: {prompt_text}"""
             print(log_msg)
 
         for product_idx, product in enumerate(item.product_images, 1):
-            product_path = product.uploaded_image_path
+            product_absolute_path = resolve_media_path(product.uploaded_image_path)
 
-            if not os.path.exists(product_path):
-                log_msg = f"[PRODUCT {product_idx}] ⚠️ Product image path does not exist: {product_path}"
+            if not os.path.exists(product_absolute_path):
+                log_msg = f"[PRODUCT {product_idx}] ⚠️ Product image path does not exist: {product_absolute_path}"
                 logger.warning(log_msg)
                 print(log_msg)
                 continue
@@ -2324,7 +2298,7 @@ Follow this specific style prompt: {prompt_text}"""
             logger.info(log_msg)
             print(log_msg)
 
-            with open(product_path, "rb") as f:
+            with open(product_absolute_path, "rb") as f:
                 product_bytes = f.read()
             product_b64 = base64.b64encode(product_bytes).decode("utf-8")
 
@@ -3111,40 +3085,14 @@ Follow this specific style prompt: {prompt_text}"""
                     # ---------------------------
                     output_dir = os.path.join(
                         settings.MEDIA_ROOT, "composite_images", str(collection_id))
-                    local_path = write_bytes_to_unique_path(
+                    absolute_path = write_bytes_to_unique_path(
                         output_dir, generated_bytes, f"{key}.png")
+                    db_path = to_media_db_path(absolute_path)
 
                     if key == "campaign_image":
-                        log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] 💾 Saving image locally to: {local_path}"
+                        log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] 💾 Saving image locally to: {absolute_path}"
                         logger.info(log_msg)
                         print(log_msg)
-
-                    # ---------------------------
-                    # 7. Upload to Cloudinary
-                    # ---------------------------
-                    if key == "campaign_image":
-                        log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ☁️ Uploading to Cloudinary..."
-                        logger.info(log_msg)
-                        print(log_msg)
-
-                    try:
-                        cloud_upload = cloudinary.uploader.upload(
-                            local_path,
-                            folder=f"ai_studio/composite/{collection_id}",
-                            public_id=path_stem(local_path),
-                            resource_type="image",
-                        )
-                        if key == "campaign_image":
-                            log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ✅ Cloudinary upload successful, URL: {cloud_upload.get('secure_url', 'N/A')}"
-                            logger.info(log_msg)
-                            print(log_msg)
-                    except Exception as cloud_error:
-                        if key == "campaign_image":
-                            log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ❌ ERROR uploading to Cloudinary: {str(cloud_error)}"
-                            logger.error(log_msg)
-                            print(log_msg)
-                            traceback.print_exc()
-                        raise  # Re-raise to be caught by outer exception handler
 
                     # ---------------------------
                     # 8. Store result in product with model tracking
@@ -3152,8 +3100,8 @@ Follow this specific style prompt: {prompt_text}"""
                     product.generated_images.append({
                         "type": key,
                         "prompt": prompt_text,
-                        "local_path": local_path,
-                        "cloud_url": cloud_upload["secure_url"],
+                        "local_path": db_path,
+                        "cloud_url": db_path,
                         "created_at": datetime.now(timezone.utc).isoformat(),
                         "model_used": {
                             "type": selected_model.get("type"),
@@ -3178,9 +3126,9 @@ Follow this specific style prompt: {prompt_text}"""
                             user_id=str(user_id),
                             collection_id=str(collection.id),
                             image_type=f"project_{key}",
-                            image_url=cloud_upload["secure_url"],
+                            image_url=db_path,
                             prompt=prompt_text,
-                            local_path=local_path,
+                            local_path=db_path,
                             metadata={
                                 "model_used": selected_model.get("type"),
                                 "product_url": product.uploaded_image_url,
@@ -3336,14 +3284,14 @@ def regenerate_product_model_image(request, collection_id):
 
         for p in item.product_images:
             for g in p.generated_images:
-                if g.get("local_path") == generated_image_path:
+                if media_paths_equal(g.get("local_path"), generated_image_path):
                     target_generated = g
                     target_product = p
                     original_prompt = g.get("prompt")
                     break
                 if "regenerated_images" in g:
                     for regen in g.get("regenerated_images", []):
-                        if regen.get("local_path") == generated_image_path:
+                        if media_paths_equal(regen.get("local_path"), generated_image_path):
                             target_generated = g
                             target_product = p
                             is_regenerated_image = True
@@ -3361,7 +3309,7 @@ def regenerate_product_model_image(request, collection_id):
         stored_tier = None
         if is_regenerated_image:
             for regen in target_generated.get("regenerated_images", []):
-                if regen.get("local_path") == generated_image_path:
+                if media_paths_equal(regen.get("local_path"), generated_image_path):
                     stored_tier = regen.get("model_tier")
                     break
         else:
@@ -3408,19 +3356,20 @@ def regenerate_product_model_image(request, collection_id):
             return Response({"success": False, "error": "No model specified for regeneration"})
 
         # Load model image
-        model_local_path = model_to_use.get("local")
-        if not model_local_path or not os.path.exists(model_local_path):
+        model_absolute_path = resolve_media_path(model_to_use.get("local"))
+        if not model_absolute_path or not os.path.exists(model_absolute_path):
             return Response({"success": False, "error": "Model image not found"})
 
-        with open(model_local_path, "rb") as f:
+        with open(model_absolute_path, "rb") as f:
             model_bytes = f.read()
         model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
         # Load product image
-        if not os.path.exists(product_image_path):
+        product_absolute_path = resolve_media_path(product_image_path)
+        if not os.path.exists(product_absolute_path):
             return Response({"success": False, "error": "Product image not found"})
 
-        with open(product_image_path, "rb") as f:
+        with open(product_absolute_path, "rb") as f:
             product_bytes = f.read()
         product_b64 = base64.b64encode(product_bytes).decode("utf-8")
 
@@ -3509,16 +3458,10 @@ def regenerate_product_model_image(request, collection_id):
         # --- Save new regenerated image locally ---
         local_dir = os.path.join(
             settings.MEDIA_ROOT, "composite_images", str(collection_id))
-        local_output_path = write_bytes_to_unique_path(
+        absolute_output_path = write_bytes_to_unique_path(
             local_dir, generated_bytes, "regenerated.png")
-
-        # --- Upload to Cloudinary ---
-        upload_result = cloudinary.uploader.upload(
-            local_output_path,
-            folder=f"ai_studio/regenerated/{collection_id}",
-            public_id=path_stem(local_output_path),
-        )
-        cloud_url = upload_result["secure_url"]
+        db_output_path = to_media_db_path(absolute_output_path)
+        db_product_path = normalize_media_path(product_image_path) if product_image_path else product_image_path
 
         # --- Append regenerated image metadata with model tracking ---
         # This tracks which model was used for each regeneration, supporting both AI and Real models
@@ -3530,10 +3473,10 @@ def regenerate_product_model_image(request, collection_id):
             "original_prompt": original_base_prompt,
             "combined_prompt": custom_prompt,
             "type": original_type,
-            "local_path": local_output_path,
-            "cloud_url": cloud_url,
+            "local_path": db_output_path,
+            "cloud_url": db_output_path,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "product_image_path": product_image_path,
+            "product_image_path": db_product_path,
             "model_tier": model_tier,
             "model_used": {
                 "type": model_to_use.get("type"),  # 'ai' or 'real'
@@ -3553,13 +3496,13 @@ def regenerate_product_model_image(request, collection_id):
             track_image_regeneration(
                 user_id=str(request.user.id),
                 original_image_id=str(target_generated.get("id", "unknown")),
-                new_image_url=cloud_url,
+                new_image_url=db_output_path,
                 new_prompt=new_prompt or "",
                 original_prompt=original_base_prompt,
                 image_type=original_type,
                 project_id=str(collection.project.id),
                 collection_id=str(collection.id),
-                local_path=local_output_path,
+                local_path=db_output_path,
                 metadata={
                     "model_used": regenerated_data["model_used"],
                     "regeneration_count": len(target_generated.get("regenerated_images", [])),
@@ -3571,8 +3514,8 @@ def regenerate_product_model_image(request, collection_id):
 
         return Response({
             "success": True,
-            "url": cloud_url,
-            "local_path": local_output_path,
+            "url": db_output_path,
+            "local_path": db_output_path,
             "model_used": regenerated_data["model_used"],
             "original_prompt": original_base_prompt,
             "new_prompt": new_prompt or "",

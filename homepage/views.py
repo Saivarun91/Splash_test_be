@@ -15,6 +15,7 @@ from common.middleware import authenticate
 from datetime import datetime
 from django.conf import settings
 import cloudinary.uploader
+from imgbackendapp.file_utils import resolve_media_path, to_media_db_path
 
 
 def is_admin(user):
@@ -172,8 +173,8 @@ def upload_before_after_images(request):
         before_after_image = BeforeAfterImage(
             before_image_url=before_url,
             after_image_url=after_url,
-            before_image_path=before_path,
-            after_image_path=after_path,
+            before_image_path=to_media_db_path(before_path),
+            after_image_path=to_media_db_path(after_path),
             order=max_order + 1,
             is_active='true',
             created_at=datetime.utcnow(),

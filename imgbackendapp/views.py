@@ -51,44 +51,64 @@ except ImportError:
 @csrf_exempt
 @authenticate
 def upload_ornament(request):
-    # Get user from authentication middleware
+    """
+    Upload ornament image and start white background generation.
+    Uses MongoDB workflow (no Django ORM).
+    """
     user = request.user
     user_id = str(user.id)
 
-    form = OrnamentForm(request.POST, request.FILES)
-    if form.is_valid():
-        ornament = form.save()
-        try:
-            bg_color = request.POST.get(
-                "background_color", "white").strip()
-            extra_prompt = request.POST.get("prompt", "").strip()
-            dimension = request.POST.get("dimension", "1:1").strip()
+    try:
+        uploaded_image = request.FILES.get("image")
 
-            # Call Celery task asynchronously
-            task = generate_white_background_task.delay(
-                ornament_id=ornament.id,
-                user_id=user_id,
-                bg_color=bg_color,
-                extra_prompt=extra_prompt,
-                dimension=dimension
+        if not uploaded_image:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "error": "Please upload an ornament image."
+                },
+                status=400,
             )
 
-            return JsonResponse({
+        bg_color = request.POST.get("background_color", "white").strip()
+        extra_prompt = request.POST.get("prompt", "").strip()
+        dimension = request.POST.get("dimension", "1:1").strip()
+
+        # Save uploaded image locally
+        upload_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")
+        local_uploaded_path = save_uploaded_file(
+            uploaded_image,
+            upload_dir
+        )
+
+        # Start Celery task
+        task = generate_white_background_task.delay(
+            uploaded_image_path=local_uploaded_path,
+            user_id=user_id,
+            bg_color=bg_color,
+            extra_prompt=extra_prompt,
+            dimension=dimension,
+        )
+
+        return JsonResponse(
+            {
                 "success": True,
                 "message": "Image generation task started",
                 "task_id": task.id,
-                "ornament_id": ornament.id,
-                "status": "processing"
-            })
+                "status": "processing",
+            },
+            status=200,
+        )
 
-        except Exception as e:
-            traceback.print_exc()
-            return JsonResponse({"success": False, "error": get_user_friendly_message(e)})
-
-    else:
-        print("Form errors:", form.errors)
-        return JsonResponse({"success": False, "error": "Invalid form submission"})
-
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse(
+            {
+                "success": False,
+                "error": get_user_friendly_message(e),
+            },
+            status=500,
+        )
 
 @api_view(['POST'])
 @csrf_exempt

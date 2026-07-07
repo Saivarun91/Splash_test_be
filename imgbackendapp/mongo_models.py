@@ -62,7 +62,7 @@ class OrnamentMongo(Document):
     uploaded_ornament_urls = ListField(URLField())
 
     # Generated image
-    generated_image_url = URLField(required=True)
+    generated_image_url = StringField(required=True)
 
     # Local paths
     uploaded_image_path = StringField()

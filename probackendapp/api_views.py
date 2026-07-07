@@ -24,7 +24,14 @@ from django.shortcuts import get_object_or_404
 from mongoengine.errors import DoesNotExist
 from bson.dbref import DBRef
 from django.conf import settings
-from imgbackendapp.file_utils import path_stem, save_uploaded_file
+from imgbackendapp.file_utils import (
+    media_paths_equal,
+    normalize_media_path,
+    path_stem,
+    resolve_media_path,
+    save_uploaded_file,
+    to_media_db_path,
+)
 from common.user_friendly_errors import get_user_friendly_message
 import json
 import os
@@ -947,16 +954,17 @@ def api_upload_workflow_image(request, project_id, collection_id):
         uploaded_images = []
 
         for file in uploaded_files:
-            local_path = save_uploaded_file(file, local_dir)
-            filename = os.path.basename(local_path)
-            file_stem = path_stem(local_path)
+            absolute_path = save_uploaded_file(file, local_dir)
+            db_path = to_media_db_path(absolute_path)
+            filename = os.path.basename(absolute_path)
+            file_stem = path_stem(absolute_path)
 
             # Reset file pointer to beginning for Cloudinary upload
             file.seek(0)
 
             # Upload to Cloudinary
             upload_result = cloudinary.uploader.upload(
-                local_path,
+                absolute_path,
                 folder=f"workflow_images/{category}",
                 public_id=f"{category}_{file_stem}",
                 overwrite=True
@@ -1032,7 +1040,7 @@ def api_upload_workflow_image(request, project_id, collection_id):
 
             # Create UploadedImage object with analysis
             uploaded_image = UploadedImage(
-                local_path=local_path,
+                local_path=db_path,
                 cloud_url=cloud_url,
                 original_filename=file.name,
                 uploaded_by=user_id,
@@ -2320,12 +2328,13 @@ def api_upload_real_models(request, collection_id):
         new_real_models = []
 
         for file in uploaded_files:
-            local_path = save_uploaded_file(file, local_dir)
-            file_stem = path_stem(local_path)
+            absolute_path = save_uploaded_file(file, local_dir)
+            db_path = to_media_db_path(absolute_path)
+            file_stem = path_stem(absolute_path)
 
             # Upload to Cloudinary
             upload_result = cloudinary.uploader.upload(
-                local_path,
+                absolute_path,
                 folder="collection_real_models",
                 public_id=file_stem,
                 overwrite=True,
@@ -2333,7 +2342,7 @@ def api_upload_real_models(request, collection_id):
             cloud_url = upload_result.get("secure_url")
 
             # Create entry
-            entry = {"local": local_path,
+            entry = {"local": db_path,
                      "cloud": cloud_url, "name": file.name}
             new_real_models.append(entry)
 
@@ -3219,7 +3228,11 @@ def api_collection_history(request, collection_id):
             # Find matching product image
             product_image_info = None
             for key, info in product_images_map.items():
-                if key == product_key or info.get('uploaded_image_url') == product_url or info.get('uploaded_image_path') == product_path:
+                if (
+                    key == product_key
+                    or info.get('uploaded_image_url') == product_url
+                    or media_paths_equal(info.get('uploaded_image_path'), product_path)
+                ):
                     product_image_info = info
                     product_key = key
                     break
@@ -3353,7 +3366,7 @@ def api_image_enhance(request):
 
             # Find the specific product image
             for product in item.product_images:
-                if product.uploaded_image_path == product_image_path:
+                if media_paths_equal(product.uploaded_image_path, product_image_path):
                     product_image = product
                     break
 
@@ -3363,24 +3376,27 @@ def api_image_enhance(request):
             # Find the specific generated image
             generated_image = None
             for img in product_image.generated_images:
-                if img.get("local_path") == generated_image_path:
+                if media_paths_equal(img.get("local_path"), generated_image_path):
                     generated_image = img
                     break
 
             if not generated_image:
                 return Response({"error": "Generated image not found"}, status=404)
 
+            normalized_generated_path = normalize_media_path(generated_image_path)
+            enhanced_db_path = normalized_generated_path.replace('.png', '_enhanced.png')
+
             # Create enhanced image entry
             enhanced_image_entry = {
                 "type": f"{generated_image.get('type', 'generated')}_enhanced",
                 "prompt": f"{generated_image.get('prompt', '')} (Enhanced with AI)",
-                "local_path": generated_image_path.replace('.png', '_enhanced.png'),
+                "local_path": enhanced_db_path,
                 "cloud_url": enhanced_url,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "model_used": generated_image.get("model_used", {}),
                 "enhanced_from": {
                     "original_url": image_url,
-                    "original_path": generated_image_path,
+                    "original_path": normalized_generated_path,
                     "enhancement_type": "cloudinary_auto_enhance"
                 }
             }
@@ -3406,8 +3422,8 @@ def api_image_enhance(request):
                 metadata={
                     "enhanced_from": image_url,
                     "enhancement_type": "cloudinary_auto_enhance",
-                    "product_image_path": product_image_path,
-                    "generated_image_path": generated_image_path
+                    "product_image_path": normalize_media_path(product_image_path),
+                    "generated_image_path": normalized_generated_path
                 }
             )
 
@@ -3472,8 +3488,10 @@ def api_remove_model(request, collection_id):
         # Filter out the model to delete
         model_cloud = model.get("cloud")
         model_local = model.get("local")
-        new_list = [m for m in models_list if m.get(
-            "cloud") != model_cloud and m.get("local") != model_local]
+        new_list = [
+            m for m in models_list
+            if m.get("cloud") != model_cloud and not media_paths_equal(m.get("local"), model_local)
+        ]
 
         # Update the list
         if model_type == "ai":
@@ -3483,7 +3501,7 @@ def api_remove_model(request, collection_id):
 
         # If deleted model was selected, clear it
         selected = item.selected_model or {}
-        if selected.get("cloud") == model_cloud or selected.get("local") == model_local:
+        if selected.get("cloud") == model_cloud or media_paths_equal(selected.get("local"), model_local):
             item.selected_model = {}
 
         collection.save()
@@ -3532,7 +3550,7 @@ def api_remove_product_image(request, collection_id):
             # Match by URL or path
             if product_image_url and product_img.uploaded_image_url == product_image_url:
                 continue  # Skip this product image
-            if product_image_path and product_img.uploaded_image_path == product_image_path:
+            if product_image_path and media_paths_equal(product_img.uploaded_image_path, product_image_path):
                 continue  # Skip this product image
             new_product_images.append(product_img)
 

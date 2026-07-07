@@ -24,7 +24,7 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
-
+MONGO_DB_NAME = config("MONGO_DB_NAME")
 cloudinary.config(
     cloud_name="dxjtd5vcf",
     api_key="173447711599692",
@@ -64,7 +64,7 @@ uri = f"mongodb+srv://bhargavraavi4444_db_user:bhargav4444@cluster0.5dfeawc.mong
 # Connect MongoEngine (MongoDB)
 try:
     mongoengine.connect(
-        db='tarnika',
+        db=MONGO_DB_NAME,
         host=uri,
 
     )
@@ -103,7 +103,7 @@ INSTALLED_APPS = [
 CELERY_BROKER_URL = "redis://127.0.0.1:6379/0"
 # Use MongoDB as result backend to store task results
 # Construct MongoDB URL for Celery from existing URI
-mongodb_db_name = 'tarnika'
+mongodb_db_name = MONGO_DB_NAME
 # Replace the query string part and add database name
 celery_mongodb_uri = uri.replace('/?', f'/{mongodb_db_name}?')
 CELERY_RESULT_BACKEND = celery_mongodb_uri

@@ -3,3 +3,9 @@ media/
 env/
 db.sqlite3
 vertex-ai-project-495009-f461c5938564.json
+venv/
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc

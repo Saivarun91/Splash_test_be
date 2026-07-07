@@ -3,7 +3,11 @@ import secrets
 import string
 from datetime import datetime
 
+from django.conf import settings
+
 _ALPHANUM = string.ascii_letters + string.digits
+
+_NON_FILE_PATH_VALUES = frozenset({"Multiple products", "Multiple ornaments"})
 
 
 def generate_unique_filename(original_filename: str = "image.jpg", suffix: str = "") -> str:
@@ -29,6 +33,61 @@ def generate_unique_image_path(
 
 def path_stem(file_path: str) -> str:
     return os.path.splitext(os.path.basename(file_path))[0]
+
+
+def _media_root_normalized() -> str:
+    return os.path.normpath(str(settings.MEDIA_ROOT)).replace("\\", "/").rstrip("/")
+
+
+def normalize_media_path(stored_path: str) -> str:
+    """Return canonical ``/media/...`` form for comparisons and API payloads."""
+    if not stored_path or stored_path in _NON_FILE_PATH_VALUES:
+        return stored_path
+
+    normalized = stored_path.replace("\\", "/")
+    if normalized.startswith("/media/"):
+        return normalized
+
+    norm = os.path.normpath(stored_path).replace("\\", "/")
+    media_root = _media_root_normalized()
+    if norm.lower().startswith(media_root.lower() + "/") or norm.lower() == media_root.lower():
+        rel = norm[len(media_root):].lstrip("/")
+        return f"/media/{rel}"
+
+    idx = norm.lower().find("/media/")
+    if idx != -1:
+        return norm[idx:]
+
+    return normalized
+
+
+def to_media_db_path(absolute_path: str) -> str:
+    """Convert an absolute filesystem path under MEDIA_ROOT to ``/media/...``."""
+    if not absolute_path or absolute_path in _NON_FILE_PATH_VALUES:
+        return absolute_path
+    return normalize_media_path(absolute_path)
+
+
+def resolve_media_path(stored_path: str) -> str:
+    """Resolve ``/media/...`` or legacy absolute paths to a filesystem path."""
+    if not stored_path or stored_path in _NON_FILE_PATH_VALUES:
+        return stored_path
+
+    db_path = normalize_media_path(stored_path)
+    if db_path.startswith("/media/"):
+        rel = db_path[len("/media/"):].lstrip("/")
+        return os.path.join(str(settings.MEDIA_ROOT), rel.replace("/", os.sep))
+
+    return os.path.normpath(stored_path)
+
+
+def media_paths_equal(path_a: str, path_b: str) -> bool:
+    """Compare stored paths regardless of absolute vs ``/media/`` representation."""
+    if not path_a or not path_b:
+        return path_a == path_b
+    if path_a in _NON_FILE_PATH_VALUES or path_b in _NON_FILE_PATH_VALUES:
+        return path_a == path_b
+    return normalize_media_path(path_a) == normalize_media_path(path_b)
 
 
 def save_uploaded_file(uploaded_file, base_dir: str, suffix: str = "") -> str:

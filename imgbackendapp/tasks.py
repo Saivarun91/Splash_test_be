@@ -27,7 +27,7 @@ from .generation_utils import (
     REFERENCE_IMAGE_USAGE_INSTRUCTION,
 )
 from .image_provider import generate_image_bytes, normalize_model_tier
-from .file_utils import path_stem, write_bytes_to_unique_path
+from .file_utils import path_stem, resolve_media_path, to_media_db_path, write_bytes_to_unique_path
 from datetime import datetime
 import uuid
 
@@ -42,62 +42,95 @@ except ImportError:
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_prompt, dimension):
+def generate_white_background_task(
+    self,
+    uploaded_image_path,
+    user_id,
+    bg_color,
+    extra_prompt,
+    dimension,
+):
     """
-    Celery task to generate white background image.
-    
-    Args:
-        ornament_id: Django model ID of the uploaded ornament
-        user_id: User ID string
-        bg_color: Background color
-        extra_prompt: Additional prompt text
-        dimension: Aspect ratio dimension
+    Celery task to generate white background image using MongoDB workflow.
     """
+
     try:
-        # Get ornament from database
-        ornament = Ornament.objects.get(id=ornament_id)
-        
-        # Read image file
-        with open(ornament.image.path, "rb") as f:
+        # Read uploaded image
+        with open(uploaded_image_path, "rb") as f:
             img_bytes = f.read()
+
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
-        # Get prompt from database
+        # Build prompt
         from probackendapp.prompt_initializer import get_prompt_from_db
+
         extra_prompt_text = f" {extra_prompt}" if extra_prompt else ""
-        dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
-        default_prompt = f"Remove the background from this ornament image and replace it with a plain {bg_color} background.{extra_prompt_text}{dimension_text}"
+        dimension_text = (
+            f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)."
+            if dimension else ""
+        )
+
+        default_prompt = (
+            f"Remove the background from this ornament image and replace it with a plain "
+            f"{bg_color} background.{extra_prompt_text}{dimension_text}"
+        )
+
         text_prompt = get_prompt_from_db(
-            'images_white_background',
+            "images_white_background",
             default_prompt,
             bg_color=bg_color,
-            extra_prompt=extra_prompt_text
+            extra_prompt=extra_prompt_text,
         )
-        # Add dimension to prompt if not already included
+
         if dimension and dimension not in text_prompt:
-            text_prompt = f"{text_prompt} Generate the image in {dimension} aspect ratio (width:height)."
+            text_prompt += (
+                f" Generate the image in {dimension} aspect ratio (width:height)."
+            )
 
         generated_bytes = None
 
+        # ---------------- Gemini ----------------
         if has_genai:
-            if not (getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")):
-                raise Exception("GEMINI/GOOGLE API key not configured")
+            if not (
+                getattr(settings, "GEMINI_API_KEY", "")
+                or getattr(settings, "GOOGLE_API_KEY", "")
+            ):
+                raise Exception("Gemini API key not configured")
 
             client = genai.Client()
-            model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
+            model_name = get_image_model_name(
+                default_model=settings.IMAGE_MODEL_NAME
+            )
 
             contents = [
                 {
                     "parts": [
-                        {"inline_data": {
-                            "mime_type": "image/jpeg", "data": img_b64}},
-                        {"text": text_prompt}
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": img_b64,
+                            }
+                        },
+                        {"text": text_prompt},
                     ]
                 }
             ]
 
-            supported_ratios = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
-            aspect = (dimension or "1:1").strip().replace(" ", "")
+            supported_ratios = {
+                "1:1",
+                "2:3",
+                "3:2",
+                "3:4",
+                "4:3",
+                "4:5",
+                "5:4",
+                "9:16",
+                "16:9",
+                "21:9",
+            }
+
+            aspect = (dimension or "1:1").strip()
+
             if aspect not in supported_ratios:
                 aspect = "1:1"
 
@@ -105,144 +138,165 @@ def generate_white_background_task(self, ornament_id, user_id, bg_color, extra_p
                 response_modalities=["TEXT", "IMAGE"],
                 image_config=types.ImageConfig(
                     image_size="4K",
-                    aspect_ratio=aspect
-                )
+                    aspect_ratio=aspect,
+                ),
             )
 
             resp = client.models.generate_content(
                 model=model_name,
                 contents=contents,
-                config=config
+                config=config,
             )
 
-            candidates = getattr(resp, "candidates", [])
-            for cand in candidates:
-                content = getattr(cand, "content", [])
-                for part in content.parts if hasattr(content, "parts") else []:
+            for candidate in getattr(resp, "candidates", []):
+                content = getattr(candidate, "content", None)
+
+                if not content:
+                    continue
+
+                for part in getattr(content, "parts", []):
                     if getattr(part, "inline_data", None):
                         data = part.inline_data.data
-                        generated_bytes = data if isinstance(
-                            data, bytes) else base64.b64decode(data)
+                        generated_bytes = (
+                            data
+                            if isinstance(data, bytes)
+                            else base64.b64decode(data)
+                        )
                         break
+
                 if generated_bytes:
                     break
 
-            if not generated_bytes:
-                raise Exception("Gemini did not return an image. Using local fallback.")
-
-        # Fallback
+        # ---------------- OpenCV fallback ----------------
         if not generated_bytes:
-            original = Image.open(ornament.image.path).convert("RGB")
+
+            original = Image.open(uploaded_image_path).convert("RGB")
+
             img_array = np.array(original)
             img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
             gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
-            _, thresh = cv2.threshold(
-                blur, 240, 255, cv2.THRESH_BINARY_INV)
-            kernel = np.ones((3, 3), np.uint8)
-            thresh = cv2.morphologyEx(
-                thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
-            thresh = cv2.morphologyEx(
-                thresh, cv2.MORPH_OPEN, kernel, iterations=1)
-            contours, _ = cv2.findContours(
-                thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest_contour = max(contours, key=cv2.contourArea)
-                mask = np.zeros_like(gray)
-                cv2.drawContours(mask, [largest_contour], -1, 255, -1)
-                mask = cv2.GaussianBlur(mask, (5, 5), 0)
-                rgba_array = np.dstack((img_array, mask))
-                transparent_img = Image.fromarray(rgba_array, 'RGBA')
-                bg = Image.new("RGB", original.size, bg_color)
-                bg.paste(transparent_img,
-                         mask=transparent_img.split()[3])
-                buf = BytesIO()
-                bg.save(buf, format="JPEG", quality=95)
-                generated_bytes = buf.getvalue()
-            else:
-                raise Exception(
-                    "Could not extract ornament using fallback method.")
 
-        # Upload original and generated to Cloudinary
-        original_stem = path_stem(ornament.image.path)
-        ornament_buf = BytesIO(img_bytes)
-        ornament_buf.seek(0)
+            _, thresh = cv2.threshold(
+                blur,
+                240,
+                255,
+                cv2.THRESH_BINARY_INV,
+            )
+
+            kernel = np.ones((3, 3), np.uint8)
+
+            thresh = cv2.morphologyEx(
+                thresh,
+                cv2.MORPH_CLOSE,
+                kernel,
+                iterations=2,
+            )
+
+            contours, _ = cv2.findContours(
+                thresh,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+
+            if not contours:
+                raise Exception("Could not extract ornament.")
+
+            largest = max(contours, key=cv2.contourArea)
+
+            mask = np.zeros_like(gray)
+
+            cv2.drawContours(mask, [largest], -1, 255, -1)
+
+            mask = cv2.GaussianBlur(mask, (5, 5), 0)
+
+            rgba = np.dstack((img_array, mask))
+
+            transparent = Image.fromarray(rgba, "RGBA")
+
+            bg = Image.new("RGB", original.size, bg_color)
+
+            bg.paste(transparent, mask=transparent.split()[3])
+
+            buf = BytesIO()
+
+            bg.save(buf, format="JPEG", quality=95)
+
+            generated_bytes = buf.getvalue()
+
+        # ---------------- Upload original ----------------
+
+        original_stem = path_stem(uploaded_image_path)
+
         upload_orig = cloudinary.uploader.upload(
-            ornament_buf,
+            BytesIO(img_bytes),
             folder="ornaments",
             public_id=f"ornament_original_{original_stem}",
-            overwrite=True
+            overwrite=True,
         )
+
         uploaded_image_url = upload_orig["secure_url"]
 
-        # Save locally in Django model (upload_to assigns unique filename)
-        ornament.generated_image.save(
-            "generated.jpg", ContentFile(generated_bytes), save=True)
-        local_generated_path = ornament.generated_image.path
-        generated_stem = path_stem(local_generated_path)
+        # ---------------- Save generated locally ----------------
 
-        buf = BytesIO(generated_bytes)
-        buf.seek(0)
-        upload_gen = cloudinary.uploader.upload(
-            buf,
-            folder="ornaments",
-            public_id=f"ornament_generated_{generated_stem}",
-            overwrite=True
-        )
-        generated_image_url = upload_gen["secure_url"]
+        generated_dir = os.path.join(settings.MEDIA_ROOT, "generated")
 
-        # Save in MongoDB
+        os.makedirs(generated_dir, exist_ok=True)
+
+        filename = f"{int(time.time()*1000)}.jpg"
+
+        local_generated_path = os.path.join(generated_dir, filename)
+
+        with open(local_generated_path, "wb") as f:
+            f.write(generated_bytes)
+
+        generated_db_path = to_media_db_path(local_generated_path)
+        generated_image_url = generated_db_path
+
+        # ---------------- MongoDB ----------------
+
         ornament_doc = OrnamentMongo(
             prompt=text_prompt,
-            uploaded_image_url=uploaded_image_url,
-            generated_image_url=generated_image_url,
-            uploaded_image_path=ornament.image.path,
-            generated_image_path=local_generated_path,
             type="white_background",
             user_id=user_id,
-            original_prompt=text_prompt
+            uploaded_image_url=uploaded_image_url,
+            generated_image_url=generated_image_url,
+            uploaded_image_path=to_media_db_path(uploaded_image_path),
+            generated_image_path=to_media_db_path(local_generated_path),
+            original_prompt=text_prompt,
         )
-        ornament_doc.save()
 
-        # Track image generation in history
-        try:
-            from probackendapp.history_utils import track_image_generation
-            track_image_generation(
-                user_id=user_id,
-                image_type="white_background",
-                image_url=generated_image_url,
-                prompt=text_prompt,
-                local_path=local_generated_path,
-                metadata={
-                    "uploaded_image_url": uploaded_image_url,
-                    "background_color": bg_color,
-                    "extra_prompt": extra_prompt
-                }
-            )
-        except Exception as history_error:
-            print(f"Error tracking image generation history: {history_error}")
+        ornament_doc.save()
 
         return {
             "success": True,
-            "message": "Image generated successfully",
             "uploaded_image_url": uploaded_image_url,
             "generated_image_url": generated_image_url,
-            "prompt": text_prompt,
-            "ornament_id": ornament.id,
             "mongo_id": str(ornament_doc.id),
-            "type": "white_background"
+            "prompt": text_prompt,
+            "type": "white_background",
+            "local": to_media_db_path(local_generated_path),
         }
 
     except Exception as e:
         traceback.print_exc()
-        report_handled_exception(e, request=self.request, context={"user_id": user_id})
+
+        report_handled_exception(
+            e,
+            request=self.request,
+            context={"user_id": user_id},
+        )
+
         if self.request.retries < self.max_retries:
-            raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
+            raise self.retry(
+                exc=e,
+                countdown=60 * (self.request.retries + 1),
+            )
+
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
         }
-
 
 @shared_task(bind=True, max_retries=3)
 def change_background_task(
@@ -276,7 +330,9 @@ def change_background_task(
             uploaded_image_paths = [uploaded_image_paths]
 
         uploaded_image_paths = [
-            p for p in (uploaded_image_paths or []) if p and os.path.exists(p)
+            resolve_media_path(p)
+            for p in (uploaded_image_paths or [])
+            if p and os.path.exists(resolve_media_path(p))
         ]
         if not uploaded_image_paths:
             raise FileNotFoundError("No valid uploaded product image paths provided.")
@@ -292,8 +348,11 @@ def change_background_task(
             buf_ornament.close()
 
         bg_b64 = None
-        if background_image_path and os.path.exists(background_image_path):
-            with open(background_image_path, "rb") as f:
+        background_absolute_path = (
+            resolve_media_path(background_image_path) if background_image_path else None
+        )
+        if background_absolute_path and os.path.exists(background_absolute_path):
+            with open(background_absolute_path, "rb") as f:
                 bg_bytes = f.read()
             bg_img = Image.open(BytesIO(bg_bytes)).convert("RGB")
             buf_bg = BytesIO()
@@ -396,8 +455,8 @@ def change_background_task(
         contents.append(base_prompt)
 
         reference_paths = list(uploaded_image_paths)
-        if background_image_path and os.path.exists(background_image_path):
-            reference_paths.append(background_image_path)
+        if background_absolute_path and os.path.exists(background_absolute_path):
+            reference_paths.append(background_absolute_path)
 
         logger.info(
             "change_background_task: tier=%s user=%s products=%s",
@@ -433,19 +492,13 @@ def change_background_task(
             "generated.jpg",
             suffix=variation_suffix,
         )
-        generated_stem = path_stem(local_generated_path)
-        upload_result = cloudinary.uploader.upload(
-            local_generated_path,
-            folder="ornaments_bg_change",
-            public_id=f"ornament_bg_{generated_stem}",
-            overwrite=True,
-        )
-        generated_url = upload_result["secure_url"]
+        generated_db_path = to_media_db_path(local_generated_path)
+        generated_url = generated_db_path
 
         ornament_doc_kwargs = {
             "prompt": final_prompt,
             "generated_image_url": generated_url,
-            "generated_image_path": local_generated_path,
+            "generated_image_path": to_media_db_path(local_generated_path),
             "type": "background_change",
             "user_id": user_id,
             "original_prompt": prompt,
@@ -457,7 +510,7 @@ def change_background_task(
             ornament_doc_kwargs["uploaded_image_url"] = uploaded_urls[0]
         else:
             ornament_doc_kwargs["uploaded_image_url"] = uploaded_urls[0]
-            ornament_doc_kwargs["uploaded_image_path"] = primary_uploaded_path
+            ornament_doc_kwargs["uploaded_image_path"] = to_media_db_path(primary_uploaded_path)
 
         ornament_doc = OrnamentMongo(**ornament_doc_kwargs)
         ornament_doc.save()
@@ -477,6 +530,7 @@ def change_background_task(
             "prompt": prompt,
             "mongo_id": str(ornament_doc.id),
             "type": "background_change",
+            "local": to_media_db_path(local_generated_path),
         }
 
     except Exception as e:
@@ -500,15 +554,18 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
     """
     try:
         # Read images
-        with open(ornament_image_path, "rb") as f:
+        ornament_absolute_path = resolve_media_path(ornament_image_path)
+        with open(ornament_absolute_path, "rb") as f:
             ornament_bytes = f.read()
         ornament_b64 = base64.b64encode(ornament_bytes).decode("utf-8")
         
         pose_b64 = None
-        if pose_image_path and os.path.exists(pose_image_path):
-            with open(pose_image_path, "rb") as f:
-                pose_bytes = f.read()
-            pose_b64 = base64.b64encode(pose_bytes).decode('utf-8')
+        if pose_image_path:
+            pose_absolute_path = resolve_media_path(pose_image_path)
+            if os.path.exists(pose_absolute_path):
+                with open(pose_absolute_path, "rb") as f:
+                    pose_bytes = f.read()
+                pose_b64 = base64.b64encode(pose_bytes).decode('utf-8')
 
         if normalize_model_tier(model_tier) == "regular" and not (
             getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
@@ -577,9 +634,11 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
         contents.append({"text": user_prompt})
 
-        reference_paths = [ornament_image_path]
-        if pose_image_path and os.path.exists(pose_image_path):
-            reference_paths.append(pose_image_path)
+        reference_paths = [ornament_absolute_path]
+        if pose_image_path:
+            pose_absolute_path = resolve_media_path(pose_image_path)
+            if os.path.exists(pose_absolute_path):
+                reference_paths.append(pose_absolute_path)
 
         generated_bytes = generate_image_bytes(
             model_tier,
@@ -590,9 +649,9 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         )
 
         # Upload ornament to Cloudinary
-        ornament_stem = path_stem(ornament_image_path)
+        ornament_stem = path_stem(ornament_absolute_path)
         uploaded_result = cloudinary.uploader.upload(
-            ornament_image_path,
+            ornament_absolute_path,
             folder="ornaments_originals",
             public_id=f"ornament_original_{ornament_stem}",
             overwrite=True
@@ -608,24 +667,16 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             "generated.jpg",
             suffix=variation_suffix,
         )
-        generated_stem = path_stem(local_generated_path)
-
-        # Upload generated image to Cloudinary
-        upload_result = cloudinary.uploader.upload(
-            local_generated_path,
-            folder="model_ornament",
-            public_id=f"ornament_generated_{generated_stem}",
-            overwrite=True
-        )
-        generated_url = upload_result['secure_url']
+        generated_db_path = to_media_db_path(local_generated_path)
+        generated_url = generated_db_path
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
             prompt=user_prompt,
             uploaded_image_url=uploaded_url,
             generated_image_url=generated_url,
-            uploaded_image_path=ornament_image_path,
-            generated_image_path=local_generated_path,
+            uploaded_image_path=to_media_db_path(ornament_absolute_path),
+            generated_image_path=generated_db_path,
             type="model_with_ornament",
             user_id=user_id,
             original_prompt=prompt,
@@ -644,7 +695,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             "uploaded_image_url": uploaded_url,
             "generated_image_url": generated_url,
             "mongo_id": str(ornament_doc.id),
-            "type": "model_with_ornament"
+            "type": "model_with_ornament",
+            "local": to_media_db_path(local_generated_path),
         }
 
     except Exception as e:
@@ -666,19 +718,23 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
     """
     try:
         # Read images
-        with open(model_image_path, "rb") as f:
+        model_absolute_path = resolve_media_path(model_image_path)
+        ornament_absolute_path = resolve_media_path(ornament_image_path)
+        with open(model_absolute_path, "rb") as f:
             model_bytes = f.read()
         model_b64 = base64.b64encode(model_bytes).decode("utf-8")
         
-        with open(ornament_image_path, "rb") as f:
+        with open(ornament_absolute_path, "rb") as f:
             ornament_bytes = f.read()
         ornament_b64 = base64.b64encode(ornament_bytes).decode("utf-8")
         
         pose_b64 = None
-        if pose_image_path and os.path.exists(pose_image_path):
-            with open(pose_image_path, "rb") as f:
-                pose_bytes = f.read()
-            pose_b64 = base64.b64encode(pose_bytes).decode("utf-8")
+        if pose_image_path:
+            pose_absolute_path = resolve_media_path(pose_image_path)
+            if os.path.exists(pose_absolute_path):
+                with open(pose_absolute_path, "rb") as f:
+                    pose_bytes = f.read()
+                pose_b64 = base64.b64encode(pose_bytes).decode("utf-8")
 
         if normalize_model_tier(model_tier) == "regular" and not (
             getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
@@ -751,9 +807,11 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
 
         contents.append({"text": user_prompt})
 
-        reference_paths = [model_image_path, ornament_image_path]
-        if pose_image_path and os.path.exists(pose_image_path):
-            reference_paths.append(pose_image_path)
+        reference_paths = [model_absolute_path, ornament_absolute_path]
+        if pose_image_path:
+            pose_absolute_path = resolve_media_path(pose_image_path)
+            if os.path.exists(pose_absolute_path):
+                reference_paths.append(pose_absolute_path)
 
         generated_bytes = generate_image_bytes(
             model_tier,
@@ -764,16 +822,16 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         )
 
         # Upload images to Cloudinary
-        model_stem = path_stem(model_image_path)
-        ornament_stem = path_stem(ornament_image_path)
+        model_stem = path_stem(model_absolute_path)
+        ornament_stem = path_stem(ornament_absolute_path)
         model_upload = cloudinary.uploader.upload(
-            model_image_path,
+            model_absolute_path,
             folder="models_originals",
             public_id=f"model_original_{model_stem}",
             overwrite=True
         )
         ornament_upload = cloudinary.uploader.upload(
-            ornament_image_path,
+            ornament_absolute_path,
             folder="ornaments_originals",
             public_id=f"ornament_original_{ornament_stem}",
             overwrite=True
@@ -792,16 +850,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             "generated.jpg",
             suffix=variation_suffix,
         )
-        generated_stem = path_stem(local_generated_path)
-
-        # Upload generated image to Cloudinary
-        upload_result = cloudinary.uploader.upload(
-            local_generated_path,
-            folder="real_model_output",
-            public_id=f"model_generated_{generated_stem}",
-            overwrite=True
-        )
-        generated_url = upload_result["secure_url"]
+        generated_db_path = to_media_db_path(local_generated_path)
+        generated_url = generated_db_path
 
         # Save to MongoDB
         ornament_doc = OrnamentMongo(
@@ -809,8 +859,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             model_image_url=model_url,
             uploaded_image_url=ornament_url,
             generated_image_url=generated_url,
-            uploaded_image_path=model_image_path,
-            generated_image_path=local_generated_path,
+            uploaded_image_path=to_media_db_path(model_absolute_path),
+            generated_image_path=generated_db_path,
             type="real_model_with_ornament",
             user_id=user_id,
             original_prompt=prompt,
@@ -828,7 +878,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             "ornament_image_url": ornament_url,
             "generated_image_url": generated_url,
             "mongo_id": str(ornament_doc.id),
-            "type": "real_model_with_ornament"
+            "type": "real_model_with_ornament",
+            "local": to_media_db_path(local_generated_path),
         }
 
     except Exception as e:
@@ -877,13 +928,14 @@ def generate_campaign_shot_advanced_task(
             ornament_measurements_list = []
 
         for idx, ornament_path in enumerate(ornament_image_paths):
-            with open(ornament_path, "rb") as f:
+            ornament_absolute_path = resolve_media_path(ornament_path)
+            with open(ornament_absolute_path, "rb") as f:
                 ornament_bytes = f.read()
             
             # Upload
-            ornament_stem = path_stem(ornament_path)
+            ornament_stem = path_stem(ornament_absolute_path)
             result = cloudinary.uploader.upload(
-                ornament_path,
+                ornament_absolute_path,
                 folder="ornaments",
                 public_id=f"ornament_{ornament_stem}",
                 overwrite=True,
@@ -916,12 +968,13 @@ def generate_campaign_shot_advanced_task(
         # Model upload & encoding
         model_url = None
         model_b64 = None
-        if model_image_path and os.path.exists(model_image_path):
-            with open(model_image_path, "rb") as f:
+        model_absolute_path = resolve_media_path(model_image_path) if model_image_path else None
+        if model_absolute_path and os.path.exists(model_absolute_path):
+            with open(model_absolute_path, "rb") as f:
                 model_bytes = f.read()
-            model_stem = path_stem(model_image_path)
+            model_stem = path_stem(model_absolute_path)
             model_upload = cloudinary.uploader.upload(
-                model_image_path,
+                model_absolute_path,
                 folder="models",
                 public_id=f"model_{model_stem}",
                 overwrite=True,
@@ -932,8 +985,9 @@ def generate_campaign_shot_advanced_task(
         # Theme images encoding
         theme_b64_list = []
         for theme_path in theme_image_paths:
-            if os.path.exists(theme_path):
-                with open(theme_path, "rb") as f:
+            theme_absolute_path = resolve_media_path(theme_path)
+            if os.path.exists(theme_absolute_path):
+                with open(theme_absolute_path, "rb") as f:
                     theme_bytes = f.read()
                 theme_b64_list.append(base64.b64encode(
                     theme_bytes).decode('utf-8'))
@@ -1015,13 +1069,21 @@ def generate_campaign_shot_advanced_task(
         contents = [{"parts": parts}]
 
         reference_paths = []
-        if model_image_path and os.path.exists(model_image_path):
-            reference_paths.append(model_image_path)
+        if model_absolute_path and os.path.exists(model_absolute_path):
+            reference_paths.append(model_absolute_path)
         reference_paths.extend(
-            [path for path in ornament_image_paths if path and os.path.exists(path)]
+            [
+                resolve_media_path(path)
+                for path in ornament_image_paths
+                if path and os.path.exists(resolve_media_path(path))
+            ]
         )
         reference_paths.extend(
-            [path for path in theme_image_paths if path and os.path.exists(path)]
+            [
+                resolve_media_path(path)
+                for path in theme_image_paths
+                if path and os.path.exists(resolve_media_path(path))
+            ]
         )
 
         generated_bytes = generate_image_bytes(
@@ -1041,14 +1103,8 @@ def generate_campaign_shot_advanced_task(
             "campaign.jpg",
             suffix=variation_suffix,
         )
-        generated_stem = path_stem(local_generated_path)
-        upload_result = cloudinary.uploader.upload(
-            local_generated_path,
-            folder="campaign_shots",
-            public_id=f"campaign_{generated_stem}",
-            overwrite=True,
-        )
-        generated_url = upload_result['secure_url']
+        generated_db_path = to_media_db_path(local_generated_path)
+        generated_url = generated_db_path
 
         # Save record to MongoDB
         ornament_doc = OrnamentMongo(
@@ -1058,7 +1114,7 @@ def generate_campaign_shot_advanced_task(
             uploaded_ornament_urls=ornament_urls,
             generated_image_url=generated_url,
             uploaded_image_path="Multiple ornaments",
-            generated_image_path=local_generated_path,
+            generated_image_path=generated_db_path,
             user_id=user_id,
             original_prompt=prompt,
             model_tier=normalize_model_tier(model_tier),
@@ -1075,7 +1131,8 @@ def generate_campaign_shot_advanced_task(
             "model_image_url": model_url,
             "generated_image_url": generated_url,
             "mongo_id": str(ornament_doc.id),
-            "type": "campaign_shot_advanced"
+            "type": "campaign_shot_advanced",
+            "local": to_media_db_path(local_generated_path),
         }
 
     except Exception as e:
@@ -1125,19 +1182,33 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
                 "user_friendly_message": get_user_friendly_message("permission to regenerate"),
             }
 
-        # Get the previous generated image URL from Cloudinary
+        # Load the previous generated image from disk (fallback to URL for legacy records)
         prev_generated_url = prev_doc.generated_image_url
+        img_bytes = None
+        if prev_doc.generated_image_path:
+            ref_path = resolve_media_path(prev_doc.generated_image_path)
+            if os.path.exists(ref_path):
+                with open(ref_path, "rb") as f:
+                    img_bytes = f.read()
+
+        if img_bytes is None and prev_generated_url:
+            with urlopen(prev_generated_url) as resp:
+                img_bytes = resp.read()
+
+        if not img_bytes:
+            return {
+                "success": False,
+                "error": "Previous generated image not found",
+                "user_friendly_message": get_user_friendly_message("Previous generated image not found"),
+            }
+
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
         # Combine the original prompt with the new prompt
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
         combined_prompt = f"{original_prompt}. {new_prompt}"
         measurements = getattr(prev_doc, 'measurements', None) or ''
         measurements_text = f"measurements: {measurements}. " if measurements else ""
-        
-        # Download the previous generated image from Cloudinary
-        with urlopen(prev_generated_url) as resp:
-            img_bytes = resp.read()
-        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
         regen_dir = os.path.join(settings.MEDIA_ROOT, "generated")
         temp_ref_path = write_bytes_to_unique_path(
@@ -1159,18 +1230,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
         local_regen_path = write_bytes_to_unique_path(
             regen_dir, generated_bytes, "regen.jpg", suffix=image_id
         )
-        regen_stem = path_stem(local_regen_path)
-
-        # Upload regenerated image to Cloudinary
-        buf = BytesIO(generated_bytes)
-        buf.seek(0)
-        upload_result = cloudinary.uploader.upload(
-            buf,
-            folder="ornaments_regenerated",
-            public_id=f"regen_{regen_stem}",
-            overwrite=True
-        )
-        regenerated_url = upload_result['secure_url']
+        regen_db_path = to_media_db_path(local_regen_path)
+        regenerated_url = regen_db_path
 
         # Create new MongoDB document for the regenerated image
         new_doc = OrnamentMongo(
@@ -1183,7 +1244,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             uploaded_image_url=prev_doc.uploaded_image_url,
             generated_image_url=regenerated_url,
             uploaded_image_path=prev_doc.uploaded_image_path,
-            generated_image_path=local_regen_path,
+            generated_image_path=regen_db_path,
             model_image_url=prev_doc.model_image_url if hasattr(
                 prev_doc, 'model_image_url') else None,
             uploaded_ornament_urls=prev_doc.uploaded_ornament_urls if hasattr(
@@ -1202,7 +1263,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
                 new_prompt=new_prompt,
                 original_prompt=original_prompt,
                 image_type=prev_doc.type,
-                local_path=local_regen_path,
+                local_path=to_media_db_path(local_regen_path),
                 metadata={
                     "uploaded_image_url": prev_doc.uploaded_image_url,
                     "model_image_url": getattr(prev_doc, 'model_image_url', None)
@@ -1221,7 +1282,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             "combined_prompt": combined_prompt,
             "original_prompt": original_prompt,
             "new_prompt": new_prompt,
-            "type": prev_doc.type
+            "type": prev_doc.type,
+            "local": to_media_db_path(local_regen_path),
         }
 
     except Exception as e:

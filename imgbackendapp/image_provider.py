@@ -12,6 +12,8 @@ from google import genai
 from google.genai import types
 from PIL import Image
 
+from .file_utils import resolve_media_path
+
 logger = logging.getLogger(__name__)
 
 OPENAI_IMAGE_MODEL = "gpt-image-1"
@@ -215,8 +217,11 @@ def map_dimension_to_openai_size(dimension: str) -> str:
 def collect_existing_paths(paths: Optional[Iterable[str]]) -> List[str]:
     collected = []
     for path in paths or []:
-        if path and os.path.exists(path):
-            collected.append(path)
+        if not path:
+            continue
+        absolute_path = resolve_media_path(path)
+        if os.path.exists(absolute_path):
+            collected.append(absolute_path)
     return collected
 
 
