@@ -1,5 +1,7 @@
 """Shared helpers for multi-image generation batches."""
 
+from .file_utils import _NON_FILE_PATH_VALUES, resolve_media_path
+
 REFERENCE_IMAGE_USAGE_INSTRUCTION = (
     "This is the reference/style image ONLY. Use it for background, environment, "
     "lighting, surfaces, props, and atmosphere — NEVER for any ornament or jewelry."
@@ -14,6 +16,218 @@ REFERENCE_IMAGE_NO_ORNAMENT_RULE = (
     "reference shows jewelry on a model or anywhere in the scene, completely ignore and "
     "exclude that jewelry from the final image."
 )
+
+REFERENCE_DESCRIPTION_USAGE_INSTRUCTION = (
+    "The following scene/style description was derived from a reference image. "
+    "Use it ONLY for background, environment, lighting, surfaces, props, pose, and "
+    "atmosphere — NEVER for any ornament or jewelry."
+)
+
+REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE = (
+    "STRICT REFERENCE DESCRIPTION RULE (MANDATORY): The reference description is ONLY "
+    "for scene style — backdrop, colors, lighting, surfaces, props, pose, and atmosphere. "
+    "Do NOT copy, reproduce, blend, or include ANY ornament, jewelry, necklace, earrings, "
+    "bangles, rings, bracelet, pendant, chain, or accessory mentioned or implied in the "
+    "reference description. The ONLY ornament(s) allowed in the output are from the "
+    "uploaded product image(s)."
+)
+
+REGENERATION_ORIGINAL_ORNAMENT_INSTRUCTION = (
+    "The first image is the original uploaded ornament and is the authoritative reference "
+    "for the product. Preserve it exactly without altering its design, proportions, "
+    "gemstones, metal finish, textures or fine details. This image must never influence "
+    "the background, lighting or composition."
+)
+
+REGENERATION_ORIGINAL_ORNAMENTS_INSTRUCTION = (
+    "The first images are the original uploaded ornaments and are the authoritative "
+    "references for the products. Preserve them exactly without altering their design, "
+    "proportions, gemstones, metal finish, textures or fine details. These images must "
+    "never influence the background, lighting or composition."
+)
+
+REGENERATION_PREVIOUS_GENERATED_INSTRUCTION = (
+    "The following image is the previously generated result. Use it only as a reference "
+    "for composition, lighting, camera angle, model pose, styling and overall scene. "
+    "Do not modify the ornament based on this image if it conflicts with the original ornament."
+)
+
+REGENERATION_APPLY_MODIFICATIONS_INSTRUCTION = (
+    "Apply only the requested prompt modifications while keeping the ornament identical "
+    "to the original uploaded image."
+)
+
+REGENERATION_MODEL_IMAGE_INSTRUCTION = (
+    "When a model reference image is provided, use it only for the model's face, body "
+    "and pose. Do not copy ornament details from the model image — ornament fidelity "
+    "must always follow the original uploaded ornament image(s)."
+)
+
+_STANDARD_DIMENSIONS = (
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+)
+
+
+def get_root_ornament_doc(doc):
+    """Return the first image record in a regeneration chain."""
+    current = doc
+    seen = set()
+    while getattr(current, "parent_image_id", None) and current.parent_image_id:
+        parent_id = current.parent_image_id
+        if parent_id in seen:
+            break
+        seen.add(parent_id)
+        try:
+            from .mongo_models import OrnamentMongo
+
+            current = OrnamentMongo.objects.get(id=parent_id)
+        except Exception:
+            break
+    return current
+
+
+def resolve_original_ornament_sources(doc):
+    """
+    Return path/URL strings for the original uploaded ornament image(s) on ``doc``.
+    """
+    root = get_root_ornament_doc(doc)
+    image_type = getattr(root, "type", "") or ""
+
+    if image_type == "campaign_shot_advanced":
+        ornament_urls = getattr(root, "uploaded_ornament_urls", None) or []
+        if ornament_urls:
+            return list(ornament_urls)
+        if getattr(root, "uploaded_image_url", None):
+            return [root.uploaded_image_url]
+        return []
+
+    if image_type == "real_model_with_ornament":
+        if getattr(root, "uploaded_image_url", None):
+            return [root.uploaded_image_url]
+        return []
+
+    uploaded_path = getattr(root, "uploaded_image_path", None)
+    if uploaded_path and uploaded_path not in _NON_FILE_PATH_VALUES:
+        return [uploaded_path]
+
+    if getattr(root, "uploaded_image_url", None):
+        return [root.uploaded_image_url]
+
+    return []
+
+
+def load_image_bytes_from_source(source):
+    """Load image bytes from a local media path, filesystem path, or URL."""
+    import os
+    from urllib.request import urlopen
+
+    if not source:
+        raise FileNotFoundError("Empty image source")
+
+    if source.startswith(("http://", "https://")):
+        with urlopen(source) as resp:
+            return resp.read()
+
+    resolved_path = resolve_media_path(source)
+    if resolved_path and os.path.exists(resolved_path):
+        with open(resolved_path, "rb") as image_file:
+            return image_file.read()
+
+    if os.path.exists(source):
+        with open(source, "rb") as image_file:
+            return image_file.read()
+
+    raise FileNotFoundError(f"Image not found for source: {source}")
+
+
+def resolve_model_image_source(doc):
+    """Return path/URL for the original model image when applicable."""
+    root = get_root_ornament_doc(doc)
+    image_type = getattr(root, "type", "") or ""
+
+    if image_type not in ("real_model_with_ornament", "campaign_shot_advanced"):
+        return None
+
+    model_url = getattr(root, "model_image_url", None)
+    if model_url:
+        return model_url
+
+    if image_type == "real_model_with_ornament":
+        uploaded_path = getattr(root, "uploaded_image_path", None)
+        if uploaded_path and uploaded_path not in _NON_FILE_PATH_VALUES:
+            return uploaded_path
+
+    return None
+
+
+def infer_dimension_from_image_bytes(image_bytes):
+    """Map image pixel dimensions to the nearest supported aspect ratio string."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    with Image.open(BytesIO(image_bytes)) as image:
+        width, height = image.size
+
+    if width <= 0 or height <= 0:
+        return "1:1"
+
+    aspect = width / height
+    best_dimension = "1:1"
+    best_diff = float("inf")
+
+    for dimension in _STANDARD_DIMENSIONS:
+        width_ratio, height_ratio = dimension.split(":")
+        target_aspect = float(width_ratio) / float(height_ratio)
+        diff = abs(aspect - target_aspect)
+        if diff < best_diff:
+            best_diff = diff
+            best_dimension = dimension
+
+    return best_dimension
+
+
+def resolve_regeneration_dimension(doc, generated_image_bytes=None):
+    """Return the aspect ratio to use when regenerating an image."""
+    root = get_root_ornament_doc(doc)
+
+    for candidate in (
+        getattr(doc, "dimension", None),
+        getattr(root, "dimension", None),
+    ):
+        if candidate and str(candidate).strip():
+            return str(candidate).strip()
+
+    if generated_image_bytes:
+        return infer_dimension_from_image_bytes(generated_image_bytes)
+
+    return "1:1"
+
+
+def build_regeneration_image_instructions(*, ornament_count=1, has_model_image=False):
+    """Prompt instructions describing how to use original vs generated images."""
+    if ornament_count > 1:
+        original_instruction = REGENERATION_ORIGINAL_ORNAMENTS_INSTRUCTION
+    else:
+        original_instruction = REGENERATION_ORIGINAL_ORNAMENT_INSTRUCTION
+
+    instructions = (
+        f"{original_instruction} "
+        f"{REGENERATION_PREVIOUS_GENERATED_INSTRUCTION} "
+        f"{REGENERATION_APPLY_MODIFICATIONS_INSTRUCTION}"
+    )
+    if has_model_image:
+        instructions = f"{instructions} {REGENERATION_MODEL_IMAGE_INSTRUCTION}"
+    return instructions
 
 
 def parse_num_images(request, default=1, max_images=3):

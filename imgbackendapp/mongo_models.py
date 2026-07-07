@@ -50,7 +50,9 @@ class OrnamentMongo(Document):
     parent_image_id = ObjectIdField()
     original_prompt = StringField()  # Store the original prompt for context
     measurements = StringField()
+    dimension = StringField()  # Aspect ratio used for generation, e.g. 1:1, 16:9
     model_tier = StringField()  # regular | premium
+    reference_analysis = StringField()  # Optimized text from reference image analyzer
 
     # Single model image (only for campaign)
     model_image_url = URLField()

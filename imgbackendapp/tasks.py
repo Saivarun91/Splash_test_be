@@ -23,8 +23,12 @@ from common.error_reporter import report_handled_exception
 from common.user_friendly_errors import get_user_friendly_message
 from .generation_utils import (
     build_variation_instruction,
-    REFERENCE_IMAGE_NO_ORNAMENT_RULE,
-    REFERENCE_IMAGE_USAGE_INSTRUCTION,
+    build_regeneration_image_instructions,
+    load_image_bytes_from_source,
+    REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE,
+    REFERENCE_DESCRIPTION_USAGE_INSTRUCTION,
+    resolve_original_ornament_sources,
+    resolve_regeneration_dimension,
 )
 from .image_provider import generate_image_bytes, normalize_model_tier
 from .file_utils import path_stem, resolve_media_path, to_media_db_path, write_bytes_to_unique_path
@@ -264,6 +268,7 @@ def generate_white_background_task(
             uploaded_image_path=to_media_db_path(uploaded_image_path),
             generated_image_path=to_media_db_path(local_generated_path),
             original_prompt=text_prompt,
+            dimension=dimension or "1:1",
         )
 
         ornament_doc.save()
@@ -304,25 +309,23 @@ def change_background_task(
     uploaded_image_paths,
     user_id,
     bg_color,
-    background_image_path,
     prompt,
     dimension,
     reference_analysis="",
     variation_index=0,
     total_variations=1,
     model_tier="regular",
-):
+    ):
     """
     Celery task to change background of one or more product images.
 
     Args:
         uploaded_image_paths: List of local paths to uploaded product images
         user_id: User ID string
-        bg_color: Background color (if no background image)
-        background_image_path: Path to background image (optional)
+        bg_color: Background color (if no reference analysis)
         prompt: User prompt
         dimension: Aspect ratio dimension
-        reference_analysis: Optional pre-analyzed reference background text
+        reference_analysis: Optimized text description from reference image analyzer
     """
     local_generated_path = None
     try:
@@ -347,35 +350,24 @@ def change_background_task(
             product_b64_list.append(base64.b64encode(buf_ornament.getvalue()).decode("utf-8"))
             buf_ornament.close()
 
-        bg_b64 = None
-        background_absolute_path = (
-            resolve_media_path(background_image_path) if background_image_path else None
-        )
-        if background_absolute_path and os.path.exists(background_absolute_path):
-            with open(background_absolute_path, "rb") as f:
-                bg_bytes = f.read()
-            bg_img = Image.open(BytesIO(bg_bytes)).convert("RGB")
-            buf_bg = BytesIO()
-            bg_img.save(buf_bg, format="JPEG")
-            bg_b64 = base64.b64encode(buf_bg.getvalue()).decode("utf-8")
-            buf_bg.close()
-
         from probackendapp.prompt_initializer import get_prompt_from_db
         user_prompt = prompt.strip() if prompt else ""
-        if reference_analysis and reference_analysis.strip():
+        has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
+        if has_reference_analysis:
             user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
 
-        if bg_b64:
+        if has_reference_analysis:
             bg_prompt = get_prompt_from_db(
                 "images_background_change_with_image",
                 (
-                    "Replace the background using the uploaded reference image for scene "
-                    "style only. "
-                    f"{REFERENCE_IMAGE_NO_ORNAMENT_RULE}"
+                    "Replace the background using the following scene description derived "
+                    "from a reference image. "
+                    f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
                 ),
             )
             final_prompt = (
-                f"{user_prompt} {bg_prompt} {REFERENCE_IMAGE_NO_ORNAMENT_RULE}".strip()
+                f"{user_prompt} {bg_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
+                f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}".strip()
             )
         elif bg_color:
             color_prompt = get_prompt_from_db(
@@ -438,25 +430,13 @@ def change_background_task(
                 "in a single composition with the new background. Do not omit any product."
             )
 
-        if bg_b64:
-            contents.extend(
-                [
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": bg_b64,
-                        }
-                    },
-                    "Use this image strictly as the new background.",
-                    REFERENCE_IMAGE_USAGE_INSTRUCTION,
-                    REFERENCE_IMAGE_NO_ORNAMENT_RULE,
-                ]
-            )
+        if has_reference_analysis:
+            contents.append(REFERENCE_DESCRIPTION_USAGE_INSTRUCTION)
+            contents.append(REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE)
+
         contents.append(base_prompt)
 
         reference_paths = list(uploaded_image_paths)
-        if background_absolute_path and os.path.exists(background_absolute_path):
-            reference_paths.append(background_absolute_path)
 
         logger.info(
             "change_background_task: tier=%s user=%s products=%s",
@@ -503,7 +483,10 @@ def change_background_task(
             "user_id": user_id,
             "original_prompt": prompt,
             "model_tier": normalize_model_tier(model_tier),
+            "dimension": dimension or "1:1",
         }
+        if has_reference_analysis:
+            ornament_doc_kwargs["reference_analysis"] = reference_analysis.strip()
         if len(uploaded_urls) > 1:
             ornament_doc_kwargs["uploaded_ornament_urls"] = uploaded_urls
             ornament_doc_kwargs["uploaded_image_path"] = "Multiple products"
@@ -548,7 +531,20 @@ def change_background_task(
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="regular"):
+def generate_model_with_ornament_task(
+    self,
+    ornament_image_path,
+    user_id,
+    prompt,
+    measurements,
+    ornament_type,
+    ornament_measurements,
+    dimension,
+    reference_analysis="",
+    variation_index=0,
+    total_variations=1,
+    model_tier="regular",
+):
     """
     Celery task to generate model with ornament.
     """
@@ -558,14 +554,8 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         with open(ornament_absolute_path, "rb") as f:
             ornament_bytes = f.read()
         ornament_b64 = base64.b64encode(ornament_bytes).decode("utf-8")
-        
-        pose_b64 = None
-        if pose_image_path:
-            pose_absolute_path = resolve_media_path(pose_image_path)
-            if os.path.exists(pose_absolute_path):
-                with open(pose_absolute_path, "rb") as f:
-                    pose_bytes = f.read()
-                pose_b64 = base64.b64encode(pose_bytes).decode('utf-8')
+
+        has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
 
         if normalize_model_tier(model_tier) == "regular" and not (
             getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
@@ -575,10 +565,6 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         contents = [
             {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
         ]
-        if pose_b64:
-            contents.append(
-                {"inline_data": {"mime_type": "image/jpeg", "data": pose_b64}}
-            )
 
         # Parse ornament measurements
         import json
@@ -602,6 +588,11 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         from probackendapp.prompt_initializer import get_prompt_from_db
         measurements_text = f"measurements: {measurements}. " if measurements else ""
         prompt_text = f"\nmandatory consideration details: {prompt}" if prompt else ""
+        pose_ref_text = ""
+        if has_reference_analysis:
+            pose_ref_text = (
+                f"Follow this pose and styling direction: {reference_analysis.strip()}. "
+            )
         default_prompt = (
             "Generate a close-up, high-fashion portrait of an elegant Indian woman "
             "wearing this 100% real accurate uploaded ornament. Focus tightly on the neckline and jewelry area according to the ornament. "
@@ -619,12 +610,10 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             ornament_description=ornament_description,
             measurements_text=measurements_text,
             user_prompt=prompt,
-            pose_ref_text=(
-                "Follow the pose from the uploaded pose reference image. "
-                if pose_b64
-                else ""
-            ),
+            pose_ref_text=pose_ref_text,
         )
+        if has_reference_analysis:
+            user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
@@ -635,10 +624,6 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
         contents.append({"text": user_prompt})
 
         reference_paths = [ornament_absolute_path]
-        if pose_image_path:
-            pose_absolute_path = resolve_media_path(pose_image_path)
-            if os.path.exists(pose_absolute_path):
-                reference_paths.append(pose_absolute_path)
 
         generated_bytes = generate_image_bytes(
             model_tier,
@@ -681,7 +666,9 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
             user_id=user_id,
             original_prompt=prompt,
             measurements=measurements,
+            dimension=dimension or "1:1",
             model_tier=normalize_model_tier(model_tier),
+            reference_analysis=reference_analysis.strip() if has_reference_analysis else "",
         )
         ornament_doc.save()
         # print("local_generated_path =", repr(local_generated_path))
@@ -712,7 +699,21 @@ def generate_model_with_ornament_task(self, ornament_image_path, user_id, pose_i
 
 
 @shared_task(bind=True, max_retries=3)
-def generate_real_model_with_ornament_task(self, model_image_path, ornament_image_path, user_id, pose_image_path, prompt, measurements, ornament_type, ornament_measurements, dimension, variation_index=0, total_variations=1, model_tier="regular"):
+def generate_real_model_with_ornament_task(
+    self,
+    model_image_path,
+    ornament_image_path,
+    user_id,
+    prompt,
+    measurements,
+    ornament_type,
+    ornament_measurements,
+    dimension,
+    reference_analysis="",
+    variation_index=0,
+    total_variations=1,
+    model_tier="regular",
+):
     """
     Celery task to generate real model with ornament.
     """
@@ -727,14 +728,8 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         with open(ornament_absolute_path, "rb") as f:
             ornament_bytes = f.read()
         ornament_b64 = base64.b64encode(ornament_bytes).decode("utf-8")
-        
-        pose_b64 = None
-        if pose_image_path:
-            pose_absolute_path = resolve_media_path(pose_image_path)
-            if os.path.exists(pose_absolute_path):
-                with open(pose_absolute_path, "rb") as f:
-                    pose_bytes = f.read()
-                pose_b64 = base64.b64encode(pose_bytes).decode("utf-8")
+
+        has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
 
         if normalize_model_tier(model_tier) == "regular" and not (
             getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
@@ -745,9 +740,6 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},
             {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}},
         ]
-        if pose_b64:
-            contents.append(
-                {"inline_data": {"mime_type": "image/jpeg", "data": pose_b64}})
 
         # Parse ornament measurements
         import json
@@ -771,6 +763,11 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         from probackendapp.prompt_initializer import get_prompt_from_db
         measurements_text = f"Additional measurements: {measurements}. " if measurements else ""
         prompt_text = f" Additional user instructions: {prompt}" if prompt else ""
+        pose_ref_text = ""
+        if has_reference_analysis:
+            pose_ref_text = (
+                f"Follow this pose and styling direction: {reference_analysis.strip()}. "
+            )
         default_prompt = (
             "Generate a realistic, high-quality close-up image of the uploaded model wearing "
             "the exact uploaded ornament. Keep the model's face fully intact and recognizable. "
@@ -778,7 +775,7 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             "Generate a background suitable for both the model and the ornament. "
             "Lighting should be soft, natural, and elegant. "
             "Focus tightly on the jewelry area. "
-            "Follow the pose from the uploaded pose image if provided. "
+            f"{pose_ref_text}"
             f"{ornament_description}"
             f"{measurements_text}"
             f"{prompt_text}"
@@ -789,14 +786,12 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             ornament_description=ornament_description,
             measurements_text=measurements_text,
             user_prompt=prompt,
-            pose_ref_text=(
-                "Follow the pose from the uploaded pose reference image. "
-                if pose_b64
-                else ""
-            ),
+            pose_ref_text=pose_ref_text,
         )
         if prompt:
             user_prompt = f"{user_prompt} {prompt}"
+        if has_reference_analysis:
+            user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
 
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
@@ -808,10 +803,6 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
         contents.append({"text": user_prompt})
 
         reference_paths = [model_absolute_path, ornament_absolute_path]
-        if pose_image_path:
-            pose_absolute_path = resolve_media_path(pose_image_path)
-            if os.path.exists(pose_absolute_path):
-                reference_paths.append(pose_absolute_path)
 
         generated_bytes = generate_image_bytes(
             model_tier,
@@ -865,7 +856,9 @@ def generate_real_model_with_ornament_task(self, model_image_path, ornament_imag
             user_id=user_id,
             original_prompt=prompt,
             measurements=measurements,
+            dimension=dimension or "1:1",
             model_tier=normalize_model_tier(model_tier),
+            reference_analysis=reference_analysis.strip() if has_reference_analysis else "",
         )
         ornament_doc.save()
 
@@ -903,9 +896,9 @@ def generate_campaign_shot_advanced_task(
     ornament_image_paths,
     ornament_names,
     ornament_types,
-    theme_image_paths,
     prompt,
     dimension,
+    reference_analysis="",
     ornament_measurements='[]',
     variation_index=0,
     total_variations=1,
@@ -982,16 +975,7 @@ def generate_campaign_shot_advanced_task(
             model_url = model_upload['secure_url']
             model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
-        # Theme images encoding
-        theme_b64_list = []
-        for theme_path in theme_image_paths:
-            theme_absolute_path = resolve_media_path(theme_path)
-            if os.path.exists(theme_absolute_path):
-                with open(theme_absolute_path, "rb") as f:
-                    theme_bytes = f.read()
-                theme_b64_list.append(base64.b64encode(
-                    theme_bytes).decode('utf-8'))
-
+        has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
         parts = []
 
         # Model (optional)
@@ -1023,13 +1007,6 @@ def generate_campaign_shot_advanced_task(
                 }
             )
 
-        # Themes (optional)
-        for theme_b64 in theme_b64_list:
-            parts.append(
-                {"inline_data": {"mime_type": "image/jpeg", "data": theme_b64}})
-            parts.append(
-                {"text": "Reference for background or theme styling."})
-
         # Get prompt from database
         from probackendapp.prompt_initializer import get_prompt_from_db
 
@@ -1058,6 +1035,12 @@ def generate_campaign_shot_advanced_task(
             if prompt:
                 user_prompt = f"{user_prompt} {prompt}"
 
+        if has_reference_analysis:
+            user_prompt = (
+                f"{user_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
+                f"{reference_analysis.strip()} {REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
+            ).strip()
+
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
@@ -1075,13 +1058,6 @@ def generate_campaign_shot_advanced_task(
             [
                 resolve_media_path(path)
                 for path in ornament_image_paths
-                if path and os.path.exists(resolve_media_path(path))
-            ]
-        )
-        reference_paths.extend(
-            [
-                resolve_media_path(path)
-                for path in theme_image_paths
                 if path and os.path.exists(resolve_media_path(path))
             ]
         )
@@ -1117,7 +1093,9 @@ def generate_campaign_shot_advanced_task(
             generated_image_path=generated_db_path,
             user_id=user_id,
             original_prompt=prompt,
+            dimension=dimension or "1:1",
             model_tier=normalize_model_tier(model_tier),
+            reference_analysis=reference_analysis.strip() if has_reference_analysis else "",
         )
         ornament_doc.save()
 
@@ -1202,30 +1180,95 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
                 "user_friendly_message": get_user_friendly_message("Previous generated image not found"),
             }
 
-        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        prev_img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+        # Load the original uploaded ornament image(s) from the root generation record
+        ornament_sources = resolve_original_ornament_sources(prev_doc)
+        if not ornament_sources:
+            return {
+                "success": False,
+                "error": "Original uploaded ornament image not found",
+                "user_friendly_message": get_user_friendly_message("Original uploaded ornament image not found"),
+            }
+
+        ornament_images = []
+        for source in ornament_sources:
+            try:
+                ornament_bytes = load_image_bytes_from_source(source)
+            except FileNotFoundError:
+                continue
+            ornament_images.append({"source": source, "bytes": ornament_bytes})
+
+        if not ornament_images:
+            return {
+                "success": False,
+                "error": "Original uploaded ornament image not found",
+                "user_friendly_message": get_user_friendly_message("Original uploaded ornament image not found"),
+            }
+
+        dimension = resolve_regeneration_dimension(prev_doc, img_bytes)
+        dimension_text = (
+            f"Generate the ultra high quality image in {dimension} aspect ratio (width:height)."
+        )
 
         # Combine the original prompt with the new prompt
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
         combined_prompt = f"{original_prompt}. {new_prompt}"
         measurements = getattr(prev_doc, 'measurements', None) or ''
-        measurements_text = f"measurements: {measurements}. " if measurements else ""
+        measurements_text = f"measurements: {measurements}." if measurements else ""
+        regeneration_instructions = build_regeneration_image_instructions(
+            ornament_count=len(ornament_images),
+        )
+        full_prompt = " ".join(
+            part for part in (
+                regeneration_instructions,
+                combined_prompt,
+                measurements_text,
+                dimension_text,
+            ) if part
+        )
 
         regen_dir = os.path.join(settings.MEDIA_ROOT, "generated")
+        reference_paths = []
+        contents = []
+
+        for idx, ornament_image in enumerate(ornament_images):
+            ornament_b64 = base64.b64encode(ornament_image["bytes"]).decode("utf-8")
+            temp_ornament_path = write_bytes_to_unique_path(
+                regen_dir,
+                ornament_image["bytes"],
+                "regen_ornament.jpg",
+                suffix=f"ornament_{image_id}_{idx}",
+            )
+            reference_paths.append(temp_ornament_path)
+            contents.append(
+                {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}}
+            )
+            if len(ornament_images) > 1:
+                contents.append(
+                    {
+                        "text": (
+                            f"Original uploaded ornament reference {idx + 1} of "
+                            f"{len(ornament_images)}."
+                        )
+                    }
+                )
+
         temp_ref_path = write_bytes_to_unique_path(
             regen_dir, img_bytes, "regen_ref.jpg", suffix=f"ref_{image_id}"
         )
-
-        contents = [
-            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
-            {"text": combined_prompt},
-            {"text": measurements_text},
-        ]
+        reference_paths.append(temp_ref_path)
+        contents.extend([
+            {"inline_data": {"mime_type": "image/jpeg", "data": prev_img_b64}},
+            {"text": full_prompt},
+        ])
 
         generated_bytes = generate_image_bytes(
             model_tier,
-            prompt=f"{combined_prompt} {measurements_text}".strip(),
+            prompt=full_prompt,
             gemini_contents=contents,
-            reference_paths=[temp_ref_path],
+            reference_paths=reference_paths,
+            dimension=dimension,
         )
         local_regen_path = write_bytes_to_unique_path(
             regen_dir, generated_bytes, "regen.jpg", suffix=image_id
@@ -1241,6 +1284,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             parent_image_id=ObjectId(image_id),
             original_prompt=original_prompt,
             measurements=measurements,
+            dimension=dimension,
             uploaded_image_url=prev_doc.uploaded_image_url,
             generated_image_url=regenerated_url,
             uploaded_image_path=prev_doc.uploaded_image_path,
@@ -1278,11 +1322,13 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             "mongo_id": str(new_doc.id),
             "parent_image_id": image_id,
             "generated_image_url": regenerated_url,
+            "generated_image_path": regen_db_path,
             "uploaded_image_url": prev_doc.uploaded_image_url,
             "combined_prompt": combined_prompt,
             "original_prompt": original_prompt,
             "new_prompt": new_prompt,
             "type": prev_doc.type,
+            "dimension": dimension,
             "local": to_media_db_path(local_regen_path),
         }
 

@@ -5,6 +5,7 @@ urlpatterns = [
     path('', views.upload_ornament, name='upload_ornament'),
     path('user-images/', views.get_user_images, name='get_user_images'),
     path('task-status/', views.get_task_status, name='get_task_status'),
+    path('analyze-reference/', views.analyze_reference_image_view, name='analyze_reference_image'),
     path('change_background/', views.change_background, name='change_background'),
     path('generate-model/', views.generate_model_with_ornament,
          name='generate_model_with_ornament'),

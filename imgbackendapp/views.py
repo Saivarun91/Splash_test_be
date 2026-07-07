@@ -38,6 +38,11 @@ from .tasks import (
 from .generation_utils import parse_num_images, dispatch_variation_tasks
 from .image_provider import parse_model_tier
 from .file_utils import save_uploaded_file
+from .reference_analyzer import (
+    analyze_reference_image,
+    combine_reference_analyses,
+    safe_delete_reference_file,
+)
 
 # Check for Gemini SDK
 try:
@@ -45,6 +50,69 @@ try:
     has_genai = True
 except ImportError:
     has_genai = False
+
+
+def _analyze_uploaded_reference(uploaded_file, reference_type, existing_analysis=""):
+    """
+    Save a temporary reference image, analyze it, delete the file, and return text.
+
+    If existing_analysis is provided, skip Gemini and only delete the temp file when
+    the caller saved one for re-analysis fallback.
+    """
+    if not uploaded_file:
+        return (existing_analysis or "").strip()
+
+    temp_dir = os.path.join(settings.MEDIA_ROOT, "temp_reference_analysis")
+    local_path = save_uploaded_file(uploaded_file, temp_dir)
+    try:
+        if existing_analysis and existing_analysis.strip():
+            return existing_analysis.strip()
+        return analyze_reference_image(local_path, reference_type)
+    finally:
+        safe_delete_reference_file(local_path)
+
+
+def _analyze_saved_reference_paths(file_paths, reference_type):
+    """Analyze already-saved reference files, delete each, and return combined text."""
+    analyses = []
+    for file_path in file_paths or []:
+        if not file_path:
+            continue
+        try:
+            analysis = analyze_reference_image(file_path, reference_type)
+            if analysis:
+                analyses.append(analysis)
+        finally:
+            safe_delete_reference_file(file_path)
+    return combine_reference_analyses(analyses)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def analyze_reference_image_view(request):
+    """Analyze a reference image and return optimized text for image generation."""
+    image = request.FILES.get('image')
+    context = request.POST.get('context', 'background')
+
+    if not image:
+        return JsonResponse(
+            {"success": False, "analysis_text": "", "error": "No image provided."},
+            status=400,
+        )
+
+    temp_dir = os.path.join(settings.MEDIA_ROOT, "temp_reference_analysis")
+    local_path = save_uploaded_file(image, temp_dir)
+    try:
+        analysis_text = analyze_reference_image(local_path, context)
+        return JsonResponse(
+            {
+                "success": bool(analysis_text),
+                "analysis_text": analysis_text,
+            }
+        )
+    finally:
+        safe_delete_reference_file(local_path)
 
 
 @api_view(['POST'])
@@ -193,16 +261,17 @@ def change_background(request):
             local_uploaded_path = save_uploaded_file(ornament, upload_dir)
             ornament_image_paths.append(local_uploaded_path)
 
-        background_image_path = None
         if background:
-            bg_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_backgrounds")
-            background_image_path = save_uploaded_file(background, bg_dir)
+            reference_analysis = _analyze_uploaded_reference(
+                background,
+                "background",
+                existing_analysis=reference_analysis,
+            )
 
         task_kwargs = {
             "uploaded_image_paths": ornament_image_paths,
             "user_id": user_id,
             "bg_color": bg_color,
-            "background_image_path": background_image_path,
             "prompt": prompt,
             "dimension": dimension,
             "reference_analysis": reference_analysis,
@@ -291,6 +360,7 @@ def generate_model_with_ornament(request):
         ornament_img = request.FILES.get('ornament_image')
         pose_img = request.FILES.get('pose_style')
         prompt = request.POST.get('prompt', '')
+        reference_analysis = request.POST.get('reference_analysis', '').strip()
         print(prompt)
         measurements = request.POST.get('measurements', '')
         ornament_type = request.POST.get('ornament_type', '')
@@ -307,22 +377,22 @@ def generate_model_with_ornament(request):
             settings.MEDIA_ROOT, "uploaded_ornaments")
         local_uploaded_path = save_uploaded_file(ornament_img, upload_dir)
 
-        # STEP 2: Save pose image locally (if provided)
-        pose_image_path = None
-        if pose_img:
-            pose_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_poses")
-            pose_image_path = save_uploaded_file(pose_img, pose_dir)
+        reference_analysis = _analyze_uploaded_reference(
+            pose_img,
+            "pose",
+            existing_analysis=reference_analysis,
+        )
 
         # Call Celery task asynchronously
         task_kwargs = {
             "ornament_image_path": local_uploaded_path,
             "user_id": user_id,
-            "pose_image_path": pose_image_path,
             "prompt": prompt,
             "measurements": measurements,
             "ornament_type": ornament_type,
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
+            "reference_analysis": reference_analysis,
             "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
@@ -406,6 +476,7 @@ def generate_real_model_with_ornament(request):
         ornament_img = request.FILES.get('ornament_image')
         pose_img = request.FILES.get('pose_style')
         prompt = request.POST.get('prompt', '')
+        reference_analysis = request.POST.get('reference_analysis', '').strip()
         print("prompt from request : ", prompt)
         measurements = request.POST.get('measurements', '')
         ornament_type = request.POST.get('ornament_type', '')
@@ -424,22 +495,22 @@ def generate_real_model_with_ornament(request):
         local_model_path = save_uploaded_file(model_img, model_dir)
         local_ornament_path = save_uploaded_file(ornament_img, ornament_dir)
 
-        # Save pose image locally (if provided)
-        pose_image_path = None
-        if pose_img:
-            pose_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_poses")
-            pose_image_path = save_uploaded_file(pose_img, pose_dir)
+        reference_analysis = _analyze_uploaded_reference(
+            pose_img,
+            "pose",
+            existing_analysis=reference_analysis,
+        )
 
         task_kwargs = {
             "model_image_path": local_model_path,
             "ornament_image_path": local_ornament_path,
             "user_id": user_id,
-            "pose_image_path": pose_image_path,
             "prompt": prompt,
             "measurements": measurements,
             "ornament_type": ornament_type,
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
+            "reference_analysis": reference_analysis,
             "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
@@ -529,6 +600,7 @@ def generate_campaign_shot_advanced(request):
         theme_images = request.FILES.getlist('theme_images')
         prompt = request.POST.get('prompt')
         dimension = request.POST.get('dimension', '1:1').strip()
+        reference_analysis = request.POST.get('reference_analysis', '').strip()
 
         # === Validation ===
         if not ornaments:
@@ -554,11 +626,19 @@ def generate_campaign_shot_advanced(request):
             model_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_models")
             model_image_path = save_uploaded_file(model_img, model_dir)
 
-        # === Save theme images locally ===
+        # === Save theme images temporarily, analyze, and discard ===
         theme_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_themes")
         theme_image_paths = []
         for theme in theme_images:
             theme_image_paths.append(save_uploaded_file(theme, theme_dir))
+
+        theme_reference_analysis = _analyze_saved_reference_paths(
+            theme_image_paths,
+            "campaign",
+        )
+        reference_analysis = combine_reference_analyses(
+            [theme_reference_analysis, reference_analysis]
+        )
 
         task_kwargs = {
             "user_id": user_id,
@@ -568,9 +648,9 @@ def generate_campaign_shot_advanced(request):
             "ornament_names": ornament_names,
             "ornament_types": ornament_types,
             "ornament_measurements": ornament_measurements,
-            "theme_image_paths": theme_image_paths,
             "prompt": prompt,
             "dimension": dimension,
+            "reference_analysis": reference_analysis,
             "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
@@ -1019,6 +1099,10 @@ def get_user_images(request):
                 img_dict["model_image_url"] = img.model_image_url
             if hasattr(img, 'uploaded_ornament_urls') and img.uploaded_ornament_urls:
                 img_dict["uploaded_ornament_urls"] = img.uploaded_ornament_urls
+            if hasattr(img, 'reference_analysis') and img.reference_analysis:
+                img_dict["reference_analysis"] = img.reference_analysis
+            if hasattr(img, 'dimension') and img.dimension:
+                img_dict["dimension"] = img.dimension
 
             images_list.append(img_dict)
 
