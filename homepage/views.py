@@ -489,70 +489,209 @@ def get_all_support_requests(request):
 # =====================
 # Default page content (fallback when no DB record)
 # =====================
+def _deep_merge_content(base, override):
+    """Merge stored CMS content over defaults; lists replace only when non-empty."""
+    if override is None:
+        return base
+    if not isinstance(base, dict) or not isinstance(override, dict):
+        return override if override is not None else base
+    merged = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_content(merged[key], value)
+        elif key in merged and isinstance(merged[key], list) and isinstance(value, list):
+            merged[key] = value if len(value) > 0 else merged[key]
+        else:
+            merged[key] = value
+    return merged
+
+
+def get_resolved_page_content(slug):
+    defaults = get_default_page_content(slug)
+    if not defaults:
+        doc = PageContent.objects(page_slug=slug).first()
+        return doc.content if doc else {}
+    doc = PageContent.objects(page_slug=slug).first()
+    stored = doc.content if doc else {}
+    return _deep_merge_content(defaults, stored)
+
+
 def get_default_page_content(slug):
     defaults = {
         'home': {
             'hero': {
-                'title': 'CAMPAIGN READY VISUALS, WITHOUT THE SHOOT',
-                'cta_primary_text': 'Try Free Splash AI',
-                'cta_primary_href': '/login',
-                'cta_secondary_text': 'See Showcase',
-                'cta_secondary_href': '#showcase',
-                'bottom_text': 'Moodboard to model shots to perfect retouches— Splash AI Studio turns your concepts into stunning, shoppable imagery.',
-                'images': ['/images/hero-campaign-01.jpg', '/images/hero-campaign-02.jpg', '/images/hero-campaign-03.jpg'],
+                'pill_text': 'Built exclusively for jewelry brands',
+                'title_html': 'Your jewelry.<br /><em>Studio-quality visuals.</em><br />No photographer needed.',
+                'title': 'Your jewelry. Studio-quality visuals. No photographer needed.',
+                'subtitle': 'Upload a reference photo — or nothing at all. Splash understands jewelry and generates product shots, model imagery, and campaign visuals in minutes.',
+                'cta_primary_text': 'Get a demo',
+                'cta_primary_href': '/contact',
+                'cta_secondary_text': 'Start creating for free',
+                'cta_secondary_href': '/signup',
+                'note': 'No credit card required · No prompts needed · First images on us',
+                'bottom_text': 'Upload a reference photo — or nothing at all. Splash understands jewelry and generates product shots, model imagery, and campaign visuals in minutes.',
+                'images': [],
             },
-            'product_chapters': [
-                {'title': 'Start with a spark.', 'description': 'Upload moodboards, pick styles, and define your brand feel. Our AI understands luxury aesthetics and translates your vision into precise creative direction.', 'image_url': '/images/chapter-brief.jpg', 'image_alt': 'Luxury jewelry design moodboard', 'image_position': 'right'},
-                {'title': 'Cast the perfect face.', 'description': 'Choose AI models or upload approved talent—control poses, angles, and expressions.', 'image_url': '/images/chapter-model.jpeg', 'image_alt': 'Professional model portrait', 'image_position': 'left'},
-                {'title': 'Your pieces, flawlessly rendered.', 'description': 'Import SKUs and we preserve every detail—metal sheen, stone fire, and micro-details.', 'image_url': '/images/chapter-product.jpg', 'image_alt': 'Macro close-up of luxury diamond ring', 'image_position': 'right'},
-                {'title': 'Set the scene.', 'description': 'Pick locations, backdrops, and palettes. Go from studio-clean to editorial drama.', 'image_url': '/images/chapter-scene.png', 'image_alt': 'Editorial jewelry photography setup', 'image_position': 'left'},
-                {'title': 'Generate. Refine. Perfect.', 'description': 'Create multiple takes, prompt micro-edits, correct reflections, and match skin tones.', 'image_url': '/images/variants-bangles.jpg', 'image_alt': 'Three bangle variants', 'image_position': 'right'},
-            ],
-            'features': [
-                {'title': 'Photoreal Metals & Gems', 'description': 'True-to-life sheen and sparkle.', 'icon': 'Gem'},
-                {'title': 'Skin-Tone Fidelity', 'description': 'Editorial lighting and natural texture.', 'icon': 'Star'},
-                {'title': 'Pose Library', 'description': 'From subtle tilts to bold looks.', 'icon': 'User'},
-                {'title': 'Style Presets', 'description': 'Studio clean, editorial luxe, outdoor daylight.', 'icon': 'Palette'},
-                {'title': 'Variant Consistency', 'description': 'One look, many SKUs.', 'icon': 'Repeat'},
-                {'title': 'Marketplace-Ready', 'description': 'Compliant crops, backgrounds, and sizes.', 'icon': 'Box'},
+            'ticker': [
+                {'strong': 'Save up to 80%', 'span': 'on photography costs'},
+                {'strong': 'No prompts needed', 'span': 'upload & generate'},
+                {'strong': 'Understands jewelry', 'span': 'metals, gems & styling'},
+                {'strong': 'India-first', 'span': 'built for the Indian jewelry market'},
             ],
             'showcase': {
-                'heading': 'See it in action',
+                'eye_label': 'Showcase',
+                'title_html': 'Created<br />with Splash',
+                'heading': 'Created with Splash',
                 'subheading': 'Campaign-ready visuals created entirely with Splash AI Studio.',
-                'images': [
-                    {'src': '/images/showcase-01.jpg', 'alt': 'Pearl and diamond drop earrings editorial close-up', 'tall': True},
-                    {'src': '/images/showcase-02.jpg', 'alt': 'Luxury tennis bracelet with diamonds', 'tall': False},
-                    {'src': '/images/showcase-03.jpg', 'alt': 'Stack of gold rings with gemstones', 'tall': False},
-                    {'src': '/images/showcase-04.jpg', 'alt': 'Pendant necklace editorial portrait', 'tall': True},
-                    {'src': '/images/showcase-05.jpg', 'alt': 'Flat lay jewelry collection on marble', 'tall': False},
-                    {'src': '/images/showcase-06.jpg', 'alt': 'Model wearing statement earrings and necklaces', 'tall': True},
+                'cta_text': 'View all →',
+                'cta_href': '/gallery',
+            },
+            'how': {
+                'eye_label': 'How it works',
+                'title_html': 'Three steps to<br /><em>studio-perfect visuals</em>',
+                'steps': [
+                    {'number': '01', 'title': 'Upload your jewelry piece', 'description': 'Take a simple photo with your phone or use an existing product image. Or skip it entirely — Splash can generate beautiful visuals from scratch. It works brilliantly either way.'},
+                    {'number': '02', 'title': 'AI composes the scene', 'description': "Splash reads your jewelry's metal finish, gemstone type, and style — then generates a campaign-ready visual with the perfect lighting, backdrop, and composition. Share a reference image to match any mood."},
+                    {'number': '03', 'title': 'Download & publish', 'description': 'Export in full resolution. Use it on your website, social media, ads, catalogues, or share directly with your team for review — all from one place.'},
                 ],
+                'visual': {
+                    'label': 'One upload',
+                    'title_html': 'Multiple campaign-ready<br />outputs in seconds',
+                },
             },
             'how_it_works': {
                 'heading': 'How it works',
                 'steps': [
-                    {'title': 'Brief', 'description': 'Upload moodboards and define your brand feel.'},
-                    {'title': 'Model', 'description': 'Choose AI models or upload approved talent.'},
-                    {'title': 'Generate', 'description': 'Create multiple takes and refine details.'},
-                    {'title': 'Publish', 'description': 'Export for PDP, marketplace, and social.'},
-                ],
-                'image_options': [
-                    {'title': 'Background Generation', 'description': 'Generate plain background images or replace existing backgrounds for your product.'},
-                    {'title': 'Model Integration', 'description': 'Generate AI or real model images with the product for authentic representation.'},
-                    {'title': 'Campaign Shots', 'description': 'Generate campaign shots after selecting your campaign reference materials.'},
-                    {'title': 'Direct Prompting', 'description': 'Generate custom images by providing direct text prompts for maximum flexibility.'},
+                    {'title': 'Upload your jewelry piece', 'description': 'Take a simple photo with your phone or use an existing product image. Or skip it entirely — Splash can generate beautiful visuals from scratch. It works brilliantly either way.'},
+                    {'title': 'AI composes the scene', 'description': "Splash reads your jewelry's metal finish, gemstone type, and style — then generates a campaign-ready visual with the perfect lighting, backdrop, and composition. Share a reference image to match any mood."},
+                    {'title': 'Download & publish', 'description': 'Export in full resolution. Use it on your website, social media, ads, catalogues, or share directly with your team for review — all from one place.'},
                 ],
             },
+            'output': {
+                'eye_label': 'What you can create',
+                'title_html': 'Every visual<br /><em>your brand needs</em>',
+                'items': [
+                    {'title': 'Clean product shot', 'description': 'White or plain background. Perfect for websites, marketplaces, and catalogs.'},
+                    {'title': 'Campaign visual', 'description': 'Editorial, mood-driven imagery for ads, lookbooks, and seasonal campaigns.'},
+                    {'title': 'Lifestyle setup', 'description': 'Themed scenes with props, textures, and environments that match your brand.'},
+                    {'title': 'Model shot', 'description': 'Jewelry worn on a model — up to 5 pieces styled together in a single image.'},
+                    {'title': 'Bulk catalog', 'description': 'Generate dozens of consistent images across your full collection in one session.'},
+                ],
+            },
+            'capabilities': {
+                'eye_label': 'Capabilities',
+                'title_html': 'Built different.<br /><em>For jewelry.</em>',
+                'items': [
+                    {'tag': 'No prompt required', 'title': 'Generate without typing a single word', 'description': 'Most AI tools require technical descriptions. Splash understands jewelry — metals, gemstones, silhouettes — and composes the perfect scene automatically. Just upload and go.', 'pills': ['White background', 'Themed setups', 'Auto-composed'], 'highlighted': True},
+                    {'tag': 'Mood matching', 'title': 'Share a reference. Get that exact feel.', 'description': "Upload any inspiration image — a campaign you love, a competitor's shoot, a mood board. Splash reads the lighting, backdrop, colour palette, and styling, then applies it to your piece.", 'pills': ['Reads lighting', 'Matches colour tone', 'Captures mood'], 'highlighted': True},
+                    {'tag': 'Team collaboration', 'title': 'Your whole team, one shared studio', 'description': 'Invite designers, marketers, and your agency. Work inside shared projects, review outputs, and publish — no email chains, no file transfers.', 'pills': ['Shared projects', 'Review & comment', 'Agency ready'], 'highlighted': False},
+                    {'tag': 'Multi-piece generation', 'title': 'Style up to 5 pieces in one image', 'description': 'Create cohesive campaign shots featuring a full set — necklace, earrings, ring, bracelet — worn together on a model or arranged in a single scene.', 'pills': ['Up to 5 pieces', 'Model shots', 'Set styling'], 'highlighted': False},
+                ],
+            },
+            'features': [
+                {'title': 'Generate without typing a single word', 'description': 'Most AI tools require technical descriptions. Splash understands jewelry — metals, gemstones, silhouettes — and composes the perfect scene automatically.', 'icon': 'Gem'},
+                {'title': 'Share a reference. Get that exact feel.', 'description': 'Upload any inspiration image — a campaign you love, a competitor\'s shoot, a mood board.', 'icon': 'Star'},
+                {'title': 'Your whole team, one shared studio', 'description': 'Invite designers, marketers, and your agency. Work inside shared projects, review outputs, and publish.', 'icon': 'User'},
+                {'title': 'Style up to 5 pieces in one image', 'description': 'Create cohesive campaign shots featuring a full set — necklace, earrings, ring, bracelet.', 'icon': 'Palette'},
+            ],
+            'who_uses': {
+                'eye_label': 'Who uses Splash',
+                'title_html': 'Built for everyone<br /><em>in the jewelry space</em>',
+                'items': [
+                    {'icon': 'Gem', 'title': 'D2C Jewelry Brands', 'description': 'Stop spending ₹25,000–₹1,50,000 per photoshoot. Splash gives you studio-quality product images for your website, Instagram, and marketplace listings — at a fraction of the cost and in a fraction of the time.', 'pills': ['Product catalog', 'Instagram content', 'Marketplace listings', 'Campaign visuals']},
+                    {'icon': 'Store', 'title': 'Traditional Jewelers Going Digital', 'description': 'Upload one photo of your piece. Get stunning catalog images, ready to share on WhatsApp or your new website. No technical knowledge needed.', 'pills': ['WhatsApp catalog', 'Website gallery']},
+                    {'icon': 'Palette', 'title': 'Creative Agencies', 'description': 'Deliver more for your jewelry clients without adding headcount. Team collaboration, bulk generation, and white-label ready.', 'pills': ['Bulk delivery', 'Team projects']},
+                    {'icon': 'Share2', 'title': 'Social Media Managers', 'description': 'Never run out of jewelry content again. Generate 30 days of social posts in one session with consistent styling.', 'pills': ['Content calendar', 'Reels & Stories']},
+                ],
+            },
+            'testimonials': {
+                'eye_label': 'Stories',
+                'title_html': 'What jewelry brands<br /><em>are saying</em>',
+                'items': [
+                    {'quote_html': '"A single jewellery shoot used to cost us <strong>₹2 lakhs minimum</strong> — studio, photographer, stylist, editing. With Splash we generate the same campaign-quality imagery in minutes, at a fraction of that cost."', 'initials': 'TR', 'name': 'Tarinika', 'role': 'Fine Jewellery Brand'},
+                    {'quote_html': '"We were spending <strong>₹3.5 lakhs+ per shoot</strong> every season. Splash replaced our entire production workflow — we now launch collections faster, with more visual variations, and at a cost that actually makes sense."', 'initials': 'PK', 'name': 'Paksha', 'role': 'Contemporary Jewellery Brand'},
+                    {'quote_html': '"Our Diwali campaign had <strong>5 collections, 200+ images, generated in 2 days</strong>. Previously that would take 3 weeks and a full production crew costing ₹2 lakhs+. Splash is now our primary creative tool."', 'initials': 'SN', 'name': 'Sneha Nair', 'role': 'Marketing Director'},
+                ],
+            },
+            'pricing': {
+                'eye_label': 'Pricing',
+                'title_html': 'Need pricing details?<br /><em>We\'ll help you find the best plan for you.</em>',
+                'card_title': 'Every jewellery brand is different — the number of products, the type of shoots, the frequency of content.',
+                'card_description': "We'll understand your needs and help you get the most out of Splash.",
+                'cta_text': 'Contact Us',
+                'cta_href': '/contact',
+            },
+            'cta': {
+                'title_html': 'Your next collection.<br /><em>Ready before the shoot<br />would\'ve been booked.</em>',
+                'subtitle': 'Start creating jewelry visuals today — your first images are on us.',
+                'primary_text': 'Start creating for free',
+                'primary_href': '/signup',
+                'whatsapp_text': 'Chat on WhatsApp',
+                'whatsapp_number': '+918861308898',
+                'whatsapp_href': 'https://wa.me/918861308898',
+                'note': 'No credit card · No prompts · Just your jewelry and Splash',
+            },
             'footer': {
-                'logo_url': '/images/logo-splash.png',
-                'tagline': 'Campaign-ready visuals powered by AI.',
-                'copyright': '© 2026 Splash AI Studio. All rights reserved.',
-                'links': {
-                    'Platform': [{'label': 'Features', 'href': '/#product'}, {'label': 'Pricing', 'href': '/#pricing'}, {'label': 'Showcase', 'href': '/#showcase'}],
-                    'Resources': [{'label': 'Blog', 'href': '/blog'}, {'label': 'Tutorials', 'href': '/tutorials'}, {'label': 'FAQs', 'href': '/faqs'}],
-                    'Company': [{'label': 'About Us', 'href': '/about'}, {'label': 'Contact Us', 'href': '/contact'}, {'label': 'Vision & Mission', 'href': '/vision-mision'}],
-                    'Legal': [{'label': 'Privacy Policy', 'href': '/privacy'}, {'label': 'Terms & Conditions', 'href': '/terms'}, {'label': 'Security & Data Protection', 'href': '/security'}],
+                'logo_url': '/images/SplashLogoPNG.png',
+                'copyright': '© 2025 Splash AI Studio',
+                'links': [
+                    {'label': 'Instagram', 'href': 'https://www.instagram.com/splash_ai_studios/'},
+                    {'label': 'Privacy', 'href': '/privacy'},
+                    {'label': 'Terms', 'href': '/terms'},
+                    {'label': 'Contact', 'href': '/contact'},
+                ],
+            },
+            'product_chapters': [],
+        },
+        'faqs': {
+            'header': {
+                'title': 'Frequently Asked Questions',
+                'subtitle': 'Quick answers to common questions about Splash AI Studio',
+            },
+            'items': [
+                {'question': 'How many credits does each generation cost?', 'answer': 'Plain images cost 2 credits, themed images cost 8 credits, model images cost 12 credits, and campaign images cost 15 credits.'},
+                {'question': 'Can I use my own model photos?', 'answer': 'Yes! You can upload human model photos with plain backgrounds and front or 3/4 angle poses for best results.'},
+                {'question': 'How long does image generation take?', 'answer': 'Plain images take 2–3 seconds, themed images 3–4 seconds, model images 4–5 seconds, and campaign images 5–6 seconds.'},
+                {'question': 'Can I collaborate with team members?', 'answer': 'Yes! You can invite collaborators to your projects with Owner, Editor, or Viewer permissions.'},
+            ],
+            'cta': {
+                'title': 'Still have questions?',
+                'subtitle': 'Our team is happy to help you understand how Splash AI Studio fits your workflow.',
+                'button_text': 'Contact Us',
+                'button_href': '/contact',
+            },
+        },
+        'contact': {
+            'header': {
+                'title': 'Contact Us',
+                'subtitle': "We'd love to hear from you. Please fill out the form below or reach out to us directly.",
+            },
+            'details': {
+                'section_title': 'Get in Touch',
+                'office': {
+                    'label': 'Office Address',
+                    'lines': ['501, Manjeera Majestic Commercial Complex,', 'JNTU Road,KPHB, Hyderabad , Telangana, India 500085'],
+                    'map_url': 'https://maps.app.goo.gl/3tMuX7F4xemYYrxH6',
                 },
+                'phone': {
+                    'label': 'Contact Number',
+                    'number': '+91 8790900881',
+                    'tel_href': 'tel:+918790900881',
+                    'hours': 'Assistance hours: Monday - Sunday 24/7 Hours',
+                },
+                'email': {
+                    'label': 'Email Address',
+                    'address': 'support@gosplash.ai',
+                    'mailto_href': 'mailto:support@gosplash.ai',
+                    'hours': 'Assistance hours: Monday - Sunday 24/7 Hours',
+                },
+            },
+            'map_embed_url': 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3805.323180100733!2d78.39097917516732!3d17.492079483413075!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3bcb910057424ed5%3A0x199dce60198e6b9b!2sTechsprout%20AI%20Labs%20Pvt.%20Ltd.!5e0!3m2!1sen!2sin!4v1770624140087!5m2!1sen!2sin',
+            'form': {
+                'title': 'Have any query?',
+                'success_title': 'Thank you!',
+                'success_message': 'We have received your message and will get back to you shortly.',
+                'submit_text': 'Send Message',
             },
         },
         'about': {
@@ -602,10 +741,9 @@ def get_default_page_content(slug):
 @api_view(['GET'])
 @csrf_exempt
 def get_page_content(request, slug):
-    """Public: Get CMS content for a page (home, about, vision_mission, tutorials, security)."""
+    """Public: Get CMS content for a page (home, about, vision_mission, tutorials, security, faqs, contact)."""
     try:
-        doc = PageContent.objects(page_slug=slug).first()
-        content = doc.content if doc else get_default_page_content(slug)
+        content = get_resolved_page_content(slug)
         return JsonResponse({'success': True, 'content': content}, status=200)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
@@ -622,8 +760,7 @@ def get_page_content_admin(request, slug):
     if not is_admin(request.user):
         return JsonResponse({'error': 'Only admin can access this endpoint'}, status=403)
     try:
-        doc = PageContent.objects(page_slug=slug).first()
-        content = doc.content if doc else get_default_page_content(slug)
+        content = get_resolved_page_content(slug)
         return JsonResponse({'success': True, 'content': content}, status=200)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
