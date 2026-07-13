@@ -5,6 +5,13 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # Public pricing cards (must be before empty path)
+    path('pricing/', views.list_pricing_plans, name='list_pricing_plans'),
+    path('pricing/create/', views.create_pricing_plan, name='create_pricing_plan'),
+    path('pricing/tax-config/', views.update_pricing_tax_config, name='update_pricing_tax_config'),
+    path('pricing/<str:plan_id>/update/', views.update_pricing_plan, name='update_pricing_plan'),
+    path('pricing/<str:plan_id>/delete/', views.delete_pricing_plan, name='delete_pricing_plan'),
+
     # Public endpoints
     path('', views.list_plans, name='list_plans'),
     

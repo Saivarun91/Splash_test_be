@@ -12,6 +12,7 @@ urlpatterns = [
     path("profile/", views.get_user_profile, name="get_user_profile"),
     path("profile/update/", views.update_user_profile, name="update_user_profile"),
     path("profile/complete/", views.complete_profile, name="complete_profile"),
+    path("profile/change-password/", views.change_password, name="change_password"),
     path("forgot-password/", views.forgot_password, name="forgot_password"),
     path("reset-password/", views.reset_password, name="reset_password"),
     # Admin: individual users (no organization)

@@ -10,7 +10,7 @@ from .views import (
     generate_all_product_model_images,
     regenerate_product_model_image
 )
-from users.models import User
+from users.models import User, Role
 from organization.models import Organization
 from .models import Project, Collection, CollectionItem, ProjectRole, ProjectMember, UploadedImage, PromptMaster
 from .permissions import get_user_role_in_project
@@ -162,8 +162,12 @@ def api_project_detail(request, project_id):
         project = get_project_by_id_or_slug(project_id)
         
         # Check if user has access to this project
+        # Platform admins can view any project (admin portal)
         # Organization owners can view all projects in their organization
         user_role = get_user_role_in_project(user, project)
+
+        if user.role == Role.ADMIN:
+            user_role = user_role or "admin"
         
         # If user is not a team member, check if they're organization owner
         if not user_role:
@@ -222,11 +226,15 @@ def api_project_detail(request, project_id):
                     'selected_poses': item.selected_poses or [],
                     'selected_locations': item.selected_locations or [],
                     'selected_colors': item.selected_colors or [],
+                    'picked_colors': item.picked_colors or [],
+                    'color_instructions': item.color_instructions or "",
+                    'global_instructions': item.global_instructions or "",
                     'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images],
                     'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images],
                     'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
                     'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
                     'uploaded_color_images': [img.to_mongo().to_dict() for img in item.uploaded_color_images],
+                    'final_moodboard_prompt': item.final_moodboard_prompt or "",
                     'generated_prompts': item.generated_prompts or {},
                     'generated_model_images': item.generated_model_images or [],
                     'moodboard_explanation': item.moodboard_explanation or "",
@@ -415,9 +423,11 @@ def api_collection_detail(request, collection_id):
                 'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
                 'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
                 'uploaded_color_images': [img.to_mongo().to_dict() for img in item.uploaded_color_images],
+                'final_moodboard_prompt': item.final_moodboard_prompt or "",
                 'generated_prompts': item.generated_prompts or {},
                 'generated_model_images': item.generated_model_images or [],
                 'picked_colors': item.picked_colors or [],
+                'color_instructions': item.color_instructions or "",
                 "global_instructions": item.global_instructions or "",
                 'moodboard_explanation': item.moodboard_explanation or "",
                 'uploaded_model_images': item.uploaded_model_images or [],

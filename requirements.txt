@@ -66,6 +66,7 @@ pyparsing==3.2.5
 python-dateutil==2.9.0.post0
 python-decouple==3.8
 python-dotenv==1.1.1
+setuptools<81
 razorpay==1.4.1
 redis==5.0.4
 requests==2.32.5

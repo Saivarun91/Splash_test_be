@@ -1,4 +1,4 @@
-from mongoengine import Document, StringField, FloatField, IntField
+from mongoengine import Document, StringField, FloatField, IntField, ListField
 
 
 class InvoiceConfig(Document):
@@ -10,6 +10,13 @@ class InvoiceConfig(Document):
     company_name = StringField(default="Splash Ai Studio")
     invoice_prefix = StringField(default="INV-")
     tax_rate = FloatField(default=18.0)  # GST percentage
+    cgst_rate = FloatField(default=9.0)
+    sgst_rate = FloatField(default=9.0)
+    home_state = StringField(default="Telangana")
+    gst_enabled_countries = ListField(StringField(), default=["India"])
+    pricing_footer_note = StringField(
+        default="Secure payments. Cancel or change plans anytime."
+    )
 
     bank_name = StringField(default="Borcelle Bank")
     account_name = StringField(default="Studio Shodwe")

@@ -16,6 +16,7 @@ import secrets
 from common.middleware import authenticate
 from common.email_utils import send_registration_email, send_registration_admin_email, send_password_reset_email, generate_random_password
 from common.email_utils import generate_otp, send_email_otp
+from plans.pricing_helpers import resolve_signup_credits
 
 SECRET_KEY = settings.SECRET_KEY
 
@@ -113,6 +114,7 @@ def register_user(request):
         full_name = data.get("full_name")
         username = data.get("username")
         role = data.get("role")
+        signup_source = data.get("signup_source")
 
         if not email or not password:
             return Response({"error": "Email and password required"}, status=400)
@@ -164,7 +166,7 @@ def register_user(request):
                 full_name=full_name,
                 username=username,
                 role=role,
-                credit_balance=10,
+                credit_balance=resolve_signup_credits(signup_source),
                 profile_completed=True,
                 is_email_verified=False,
                 email_otp=otp,
@@ -243,14 +245,33 @@ def verify_email_otp(request):
 
         token = generate_jwt(user)
 
+        organization_data = None
+        organization_id = None
+        if user.organization:
+            try:
+                org = user.organization
+                organization_id = str(org.id)
+                organization_data = {"id": organization_id, "name": getattr(org, "name", None)}
+            except Exception:
+                organization_id = str(user.organization)
+                organization_data = {"id": organization_id}
+
         return Response(
             {
                 "message": "Email verified successfully",
                 "token": token,
                 "user": {
                     "id": str(user.id),
+                    "slug": user.slug if hasattr(user, "slug") and user.slug else None,
                     "email": user.email,
+                    "preferred_language": getattr(user, "preferred_language", "en") or "en",
                     "role": user.role.value,
+                    "full_name": user.full_name,
+                    "username": user.username,
+                    "organization": organization_data,
+                    "organization_id": organization_id,
+                    "organization_role": user.organization_role or None,
+                    "profile_completed": user.profile_completed,
                 },
             },
             status=200,
@@ -722,5 +743,41 @@ def reset_password(request):
             "message": "Password reset successfully. You can now log in with your new password."
         }, status=200)
 
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# =====================
+# Change Password (Authenticated)
+# =====================
+@api_view(["POST"])
+@csrf_exempt
+@authenticate
+def change_password(request):
+    """Change password for the currently authenticated user."""
+    try:
+        user = request.user
+        data = json.loads(request.body or "{}")
+        current_password = data.get("current_password")
+        new_password = data.get("new_password")
+
+        if not current_password or not new_password:
+            return JsonResponse(
+                {"error": "Current password and new password are required"}, status=400
+            )
+
+        if not check_password(current_password, user.password):
+            return JsonResponse({"error": "Current password is incorrect"}, status=400)
+
+        if len(new_password) < 8:
+            return JsonResponse(
+                {"error": "Password must be at least 8 characters long"}, status=400
+            )
+
+        user.password = make_password(new_password)
+        user.updated_at = datetime.datetime.utcnow()
+        user.save()
+
+        return JsonResponse({"success": True, "message": "Password updated successfully"}, status=200)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)

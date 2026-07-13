@@ -7,9 +7,177 @@ from django.views.decorators.csrf import csrf_exempt
 import json
 from mongoengine.errors import DoesNotExist, NotUniqueError, ValidationError
 from .models import Plan
+from .pricing_helpers import (
+    apply_pricing_payload,
+    get_pricing_plans_queryset,
+    seed_pricing_plans_if_empty,
+    serialize_pricing_plan,
+    DEFAULT_FOOTER_NOTE,
+)
 from users.models import User, Role
 from common.middleware import authenticate
 from datetime import datetime
+from invoices.models import InvoiceConfig
+
+
+def _get_tax_config_dict():
+    config = InvoiceConfig.objects.first()
+    if not config:
+        config = InvoiceConfig()
+        config.save()
+    countries = getattr(config, "gst_enabled_countries", None) or ["India"]
+    return {
+        "tax_rate": float(config.tax_rate or 18.0),
+        "cgst_rate": float(getattr(config, "cgst_rate", None) or 9.0),
+        "sgst_rate": float(getattr(config, "sgst_rate", None) or 9.0),
+        "home_state": getattr(config, "home_state", None) or "Telangana",
+        "gst_enabled_countries": countries,
+        "pricing_footer_note": getattr(config, "pricing_footer_note", None) or DEFAULT_FOOTER_NOTE,
+    }
+
+
+# =====================
+# Public pricing cards (Starter / Growth / Custom)
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+def list_pricing_plans(request):
+    """List active public pricing cards for marketing and checkout."""
+    try:
+        seed_pricing_plans_if_empty()
+        active_only = request.GET.get('active_only', 'true').lower() != 'false'
+        plans = get_pricing_plans_queryset(active_only=active_only)
+        tax_config = _get_tax_config_dict()
+        return JsonResponse({
+            'success': True,
+            'plans': [serialize_pricing_plan(p) for p in plans],
+            'tax_config': {
+                'tax_rate': tax_config['tax_rate'],
+                'cgst_rate': tax_config['cgst_rate'],
+                'sgst_rate': tax_config['sgst_rate'],
+                'home_state': tax_config['home_state'],
+                'gst_enabled_countries': tax_config['gst_enabled_countries'],
+            },
+            'footer_note': tax_config['pricing_footer_note'],
+            'count': len(plans),
+        }, status=200)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+@csrf_exempt
+@authenticate
+def create_pricing_plan(request):
+    """Admin: create a public pricing card."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can create pricing plans'}, status=403)
+    try:
+        data = json.loads(request.body)
+        name = data.get('name')
+        if not name:
+            return JsonResponse({'error': 'Plan name is required'}, status=400)
+        if Plan.objects(name=name).first():
+            return JsonResponse({'error': 'Plan with this name already exists'}, status=400)
+        slug = data.get('slug')
+        if slug and Plan.objects(slug=slug).first():
+            return JsonResponse({'error': 'Plan with this slug already exists'}, status=400)
+
+        plan = Plan(
+            name=name,
+            price=float(data.get('price', 0) or 0),
+            plan_type='pricing',
+            slug=slug or name.lower().replace(' ', '-'),
+            created_by=request.user,
+            updated_by=request.user,
+        )
+        apply_pricing_payload(plan, data, request.user)
+        plan.save()
+        return JsonResponse({
+            'success': True,
+            'message': 'Pricing plan created',
+            'plan': serialize_pricing_plan(plan),
+        }, status=201)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@api_view(['PUT'])
+@csrf_exempt
+@authenticate
+def update_pricing_plan(request, plan_id):
+    """Admin: update a public pricing card."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can update pricing plans'}, status=403)
+    try:
+        plan = Plan.objects.get(id=plan_id)
+        data = json.loads(request.body)
+        if 'name' in data:
+            existing = Plan.objects(name=data['name']).first()
+            if existing and str(existing.id) != str(plan_id):
+                return JsonResponse({'error': 'Plan with this name already exists'}, status=400)
+        if 'slug' in data and data['slug']:
+            existing_slug = Plan.objects(slug=data['slug']).first()
+            if existing_slug and str(existing_slug.id) != str(plan_id):
+                return JsonResponse({'error': 'Plan with this slug already exists'}, status=400)
+        apply_pricing_payload(plan, data, request.user)
+        plan.save()
+        return JsonResponse({
+            'success': True,
+            'message': 'Pricing plan updated',
+            'plan': serialize_pricing_plan(plan),
+        }, status=200)
+    except DoesNotExist:
+        return JsonResponse({'error': 'Plan not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@api_view(['DELETE'])
+@csrf_exempt
+@authenticate
+def delete_pricing_plan(request, plan_id):
+    """Admin: delete a public pricing card."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can delete pricing plans'}, status=403)
+    try:
+        plan = Plan.objects.get(id=plan_id)
+        plan.delete()
+        return JsonResponse({'success': True, 'message': 'Pricing plan deleted'}, status=200)
+    except DoesNotExist:
+        return JsonResponse({'error': 'Plan not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@api_view(['PUT'])
+@csrf_exempt
+@authenticate
+def update_pricing_tax_config(request):
+    """Admin: update GST settings used on pricing/checkout pages."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can update tax configuration'}, status=403)
+    try:
+        data = json.loads(request.body)
+        config = InvoiceConfig.objects.first()
+        if not config:
+            config = InvoiceConfig()
+        if 'tax_rate' in data:
+            config.tax_rate = float(data['tax_rate'])
+        if 'cgst_rate' in data:
+            config.cgst_rate = float(data['cgst_rate'])
+        if 'sgst_rate' in data:
+            config.sgst_rate = float(data['sgst_rate'])
+        if 'home_state' in data:
+            config.home_state = data['home_state']
+        if 'gst_enabled_countries' in data:
+            config.gst_enabled_countries = data['gst_enabled_countries']
+        if 'pricing_footer_note' in data:
+            config.pricing_footer_note = data['pricing_footer_note']
+        config.save()
+        return JsonResponse({'success': True, 'tax_config': _get_tax_config_dict()}, status=200)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
 
 
 def is_admin(user):
