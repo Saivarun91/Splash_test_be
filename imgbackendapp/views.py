@@ -56,7 +56,7 @@ def _analyze_uploaded_reference(uploaded_file, reference_type, existing_analysis
     """
     Save a temporary reference image, analyze it, delete the file, and return text.
 
-    If existing_analysis is provided, skip Gemini and only delete the temp file when
+    If existing_analysis is provided, skip AI and only delete the temp file when
     the caller saved one for re-analysis fallback.
     """
     if not uploaded_file:

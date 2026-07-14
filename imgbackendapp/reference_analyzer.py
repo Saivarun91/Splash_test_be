@@ -73,12 +73,12 @@ def _clean_analysis_output(text: str) -> str:
 
 
 def _call_gemini_vision(prompt: str, image_path: str) -> Optional[str]:
-    """Call Gemini Vision with a local image file."""
+    """Call AI Vision with a local image file."""
     api_key = getattr(settings, "GEMINI_API_KEY", None) or getattr(
         settings, "GOOGLE_API_KEY", None
     ) or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        logger.warning("Reference image analysis skipped: Gemini API key not configured")
+        logger.warning("Reference image analysis skipped: AI not configured")
         return None
 
     try:
@@ -97,7 +97,7 @@ def _call_gemini_vision(prompt: str, image_path: str) -> Optional[str]:
         )
         return (response.text or "").strip() or None
     except Exception as exc:
-        logger.exception("Gemini Vision reference analysis failed: %s", exc)
+        logger.exception("AI Vision reference analysis failed: %s", exc)
         return None
 
 

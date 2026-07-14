@@ -99,7 +99,7 @@ def generate_white_background_task(
                 getattr(settings, "GEMINI_API_KEY", "")
                 or getattr(settings, "GOOGLE_API_KEY", "")
             ):
-                raise Exception("Gemini API key not configured")
+                raise Exception("AI not configured")
 
             client = genai.Client()
             model_name = get_image_model_name(
@@ -734,7 +734,7 @@ def generate_real_model_with_ornament_task(
         if normalize_model_tier(model_tier) == "regular" and not (
             getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
         ):
-            raise Exception("GEMINI/GOOGLE API key not configured")
+            raise Exception("AI not configured")
 
         contents = [
             {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}},

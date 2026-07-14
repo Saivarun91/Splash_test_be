@@ -101,7 +101,7 @@ def map_dimension_to_gemini_aspect_ratio(dimension: str) -> str:
     parsed = parse_aspect_ratio(normalized)
     if not parsed:
         logger.warning(
-            "Unmapped dimension %r; defaulting Gemini aspect ratio to 1:1",
+            "Unmapped dimension %r; defaulting AI aspect ratio to 1:1",
             dimension,
         )
         return "1:1"
@@ -183,7 +183,7 @@ def _log_gemini_response_diagnostics(response, *, model_name: str, dimension: st
     block_reason = getattr(prompt_feedback, "block_reason", None)
     safety_ratings = getattr(prompt_feedback, "safety_ratings", None)
     logger.error(
-        "Gemini returned no candidates model=%s requested_dimension=%s gemini_aspect=%s "
+        "AI returned no candidates model=%s requested_dimension=%s AI_aspect=%s "
         "block_reason=%s safety_ratings=%s",
         model_name,
         dimension,
@@ -228,7 +228,7 @@ def collect_existing_paths(paths: Optional[Iterable[str]]) -> List[str]:
 def _get_openai_api_key() -> str:
     api_key = getattr(settings, "OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
     if not api_key:
-        raise RuntimeError("OPENAI API key not configured")
+        raise RuntimeError("AI not configured")
     return api_key
 
 
@@ -265,7 +265,7 @@ def generate_with_openai(
             )
 
         if not response.data:
-            raise RuntimeError("OpenAI returned no image data")
+            raise RuntimeError("AI returned no image data")
 
         item = response.data[0]
         if getattr(item, "b64_json", None):
@@ -277,13 +277,13 @@ def generate_with_openai(
             with urlopen(item.url) as resp:
                 return resp.read()
 
-        raise RuntimeError("OpenAI response missing image bytes")
+        raise RuntimeError("AI response missing image bytes")
     finally:
         for handle in opened_files:
             try:
                 handle.close()
             except Exception:
-                logger.warning("Failed closing OpenAI reference file handle")
+                logger.warning("Failed closing AI reference file handle")
 
 
 def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
@@ -307,7 +307,7 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
     normalized_dimension = (dimension or "1:1").strip().replace(" ", "")
     if normalized_dimension and normalized_dimension != aspect:
         logger.info(
-            "Mapped requested dimension %s to nearest Gemini aspect ratio %s",
+            "Mapped requested dimension %s to nearest AI aspect ratio %s",
             normalized_dimension,
             aspect,
         )
@@ -334,7 +334,7 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
             dimension=normalized_dimension,
             aspect=aspect,
         )
-        raise RuntimeError("Gemini returned no candidates")
+        raise RuntimeError("AI returned no candidates")
 
     candidate = candidates[0]
     finish_reason = getattr(candidate, "finish_reason", None)
@@ -350,7 +350,7 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
         generated_bytes = data if isinstance(data, bytes) else base64.b64decode(data)
         if generated_bytes:
             logger.info(
-                "Gemini image generated model=%s dimension=%s gemini_aspect=%s finish_reason=%s",
+                "AI image generated model=%s dimension=%s AI_aspect=%s finish_reason=%s",
                 model_name,
                 normalized_dimension,
                 aspect,
@@ -359,8 +359,8 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
             return _crop_image_to_dimension(generated_bytes, normalized_dimension)
 
     logger.error(
-        "Gemini candidate contained no inline image data model=%s dimension=%s "
-        "gemini_aspect=%s finish_reason=%s safety_ratings=%s part_count=%s",
+        "AI candidate contained no inline image data model=%s dimension=%s "
+        "AI_aspect=%s finish_reason=%s safety_ratings=%s part_count=%s",
         model_name,
         normalized_dimension,
         aspect,
@@ -368,7 +368,7 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
         safety_ratings,
         len(parts),
     )
-    raise RuntimeError("Gemini returned no inline image data")
+    raise RuntimeError("AI returned no inline image data")
 
 
 def generate_image_bytes(
@@ -383,11 +383,11 @@ def generate_image_bytes(
     # Premium/OpenAI path remains in place but is unreachable while tier normalization
     # is forced to "regular" above.
     if tier == "premium":
-        logger.info("Using OpenAI model %s for image generation", OPENAI_IMAGE_MODEL)
+        logger.info("Using AI model %s for image generation", OPENAI_IMAGE_MODEL)
         return generate_with_openai(prompt, reference_paths, dimension)
 
     if gemini_contents is None:
-        raise RuntimeError("Gemini generation requires gemini_contents")
+        raise RuntimeError("AI generation requires AI_contents")
 
     clothing_marker = "CRITICAL CLOTHING RULES:"
     enriched_prompt = prompt
@@ -396,7 +396,7 @@ def generate_image_bytes(
 
     prepared_contents = _append_clothing_rules_to_contents(gemini_contents)
     logger.info(
-        "Using Gemini for image generation dimension=%s prompt_chars=%s",
+        "Using AI for image generation dimension=%s prompt_chars=%s",
         dimension,
         len(enriched_prompt),
     )
