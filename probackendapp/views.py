@@ -674,6 +674,7 @@ def generate_ai_images_background(collection_id, user_id):
                 collection_id=str(collection.id),
                 image_type="project_ai_model_generation",
                 image_url=db_path,
+                local_path=db_path,
                 prompt=prompt_text,
                 metadata={
                     "action": "ai_model_generation",
@@ -818,26 +819,75 @@ def save_generated_images(request, collection_id):
         item = collection.items[0]
 
         existing = item.generated_model_images or []
-        existing_urls = {img.get("cloud")
-                         for img in existing if img and isinstance(img, dict)}
+
+        def _image_keys(img):
+            if not img or not isinstance(img, dict):
+                return set()
+            keys = set()
+            if img.get("cloud"):
+                keys.add(img.get("cloud"))
+            if img.get("local"):
+                keys.add(img.get("local"))
+                keys.add(normalize_media_path(img.get("local")))
+            return {k for k in keys if k}
+
+        # Keep already-saved models that are still selected (match by cloud or local)
+        updated_images = []
+        kept_keys = set()
+        for img in existing:
+            if not img or not isinstance(img, dict):
+                continue
+            keys = _image_keys(img)
+            if keys & selected_images:
+                updated_images.append(img)
+                kept_keys |= keys
 
         local_dir = os.path.join(settings.MEDIA_ROOT, "model_images")
         os.makedirs(local_dir, exist_ok=True)
 
-        updated_images = [img for img in existing if img and isinstance(
-            img, dict) and img.get("cloud") in selected_images]
+        for selected in selected_images - kept_keys:
+            if not selected:
+                continue
 
-        for url in selected_images - existing_urls:
-            url_filename = url.split("/")[-1]
+            # Local media path (newly generated models are saved to disk first)
+            is_http = str(selected).startswith("http://") or str(selected).startswith("https://")
+            if not is_http:
+                absolute_path = resolve_media_path(selected)
+                if not absolute_path or not os.path.exists(absolute_path):
+                    print(f"⚠️ Skipping missing local model image: {selected}")
+                    continue
+
+                cloud_url = ""
+                try:
+                    upload_result = cloudinary.uploader.upload(
+                        absolute_path,
+                        folder="collection_ai_models",
+                    )
+                    cloud_url = upload_result.get("secure_url") or ""
+                except Exception as upload_error:
+                    print(f"⚠️ Cloudinary upload failed for {selected}: {upload_error}")
+
+                updated_images.append({
+                    "local": to_media_db_path(absolute_path),
+                    "cloud": cloud_url or selected,
+                })
+                continue
+
+            # Remote URL: download to local disk and store both
+            url_filename = selected.split("/")[-1].split("?")[0]
             ext = os.path.splitext(url_filename)[1] or ".jpg"
             absolute_path = generate_unique_image_path(local_dir, f"image{ext}")
 
-            resp = requests.get(url)
+            resp = requests.get(selected, timeout=60)
             if resp.status_code == 200:
                 with open(absolute_path, "wb") as f:
                     f.write(resp.content)
-
-            updated_images.append({"local": to_media_db_path(absolute_path), "cloud": url})
+                updated_images.append({
+                    "local": to_media_db_path(absolute_path),
+                    "cloud": selected,
+                })
+            else:
+                print(f"⚠️ Failed to download model image ({resp.status_code}): {selected}")
 
         # Save back
         item.generated_model_images = updated_images
