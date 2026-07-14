@@ -126,6 +126,13 @@ def upload_ornament(request):
     user = request.user
     user_id = str(user.id)
 
+    from CREDITS.utils import (
+        deduct_credits,
+        get_user_organization,
+        deduct_user_credits,
+        get_tier_credit_cost,
+    )
+
     try:
         uploaded_image = request.FILES.get("image")
 
@@ -141,6 +148,42 @@ def upload_ornament(request):
         bg_color = request.POST.get("background_color", "white").strip()
         extra_prompt = request.POST.get("prompt", "").strip()
         dimension = request.POST.get("dimension", "1:1").strip()
+
+        model_tier = parse_model_tier(request, default="regular")
+        credit_amount = get_tier_credit_cost(model_tier, "generation")
+
+        organization = get_user_organization(user)
+        credit_metadata = {
+            "type": "white_background",
+            "model_tier": model_tier,
+            "wallet_type": "organization" if organization else "user",
+        }
+        if organization:
+            credit_result = deduct_credits(
+                organization=organization,
+                user=user,
+                amount=credit_amount,
+                reason="White background image generation",
+                metadata=credit_metadata,
+            )
+        else:
+            credit_result = deduct_user_credits(
+                user=user,
+                amount=credit_amount,
+                reason="White background image generation",
+                metadata=credit_metadata,
+            )
+
+        if not credit_result.get("success"):
+            return JsonResponse(
+                {
+                    "success": False,
+                    "error": credit_result.get(
+                        "message", "insufficient credits pls recharge"
+                    ),
+                },
+                status=400,
+            )
 
         # Save uploaded image locally
         upload_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_ornaments")

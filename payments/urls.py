@@ -10,6 +10,7 @@ urlpatterns = [
     path('history/', views.get_payment_history, name='get_payment_history'),
     path('admin/all/', views.get_all_payments, name='get_all_payments'),
     path('admin/revenue/', views.get_revenue_stats, name='get_revenue_stats'),
-    path('contact-sales/', views.submit_contact_sales, name='submit_contact_sales'),
     path('admin/leads/', views.get_all_sales_leads, name='get_all_sales_leads'),
+    path('admin/<str:transaction_id>/', views.get_admin_payment_detail, name='get_admin_payment_detail'),
+    path('contact-sales/', views.submit_contact_sales, name='submit_contact_sales'),
 ]

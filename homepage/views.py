@@ -309,6 +309,7 @@ def submit_contact_form(request):
         mobile = data.get('mobile')
         email = data.get('email')
         reason = data.get('reason')
+        source = (data.get('source') or 'public').strip().lower()
         
         # Validation
         if not all([name, mobile, email, reason]):
@@ -326,6 +327,8 @@ def submit_contact_form(request):
             reason=reason,
             created_at=datetime.utcnow()
         )
+        if source in ('public', 'dashboard'):
+            submission.source = source
         submission.save()
         
         # Send admin email

@@ -509,11 +509,9 @@ def generate_ai_images_background(collection_id, user_id):
     except Collection.DoesNotExist:
         return {"success": False, "error": "Collection not found."}
 
-    # Check if user has organization - if not, allow generation without credit deduction
-    # === Credit Check and Deduction ===
+    # Org members → organization wallet; individual users → personal wallet
     organization = get_user_organization(user)
 
-# Determine who pays
     if organization:
         credit_result = deduct_credits(
             organization=organization,
@@ -542,8 +540,6 @@ def generate_ai_images_background(collection_id, user_id):
 
     if not credit_result['success']:
         return {"success": False, "error": credit_result['message']}
-
-    # If no organization, allow generation to proceed without credit deduction
 
     description = (getattr(collection, "description", "") or "").strip()
     # target_audience = (getattr(collection, "target_audience", "") or "").strip()
@@ -1631,6 +1627,7 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
     try:
         from CREDITS.utils import (
             deduct_credits,
+            deduct_user_credits,
             get_user_organization,
             get_tier_credit_cost,
             resolve_product_generation_tier_for_prompt_key,
@@ -1655,24 +1652,34 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
         credit_amount = get_tier_credit_cost(model_tier, "generation")
 
         organization = get_user_organization(user)
+        project_ref = collection.project if hasattr(collection, 'project') else None
+        credit_metadata = {
+            "type": "product_model_image",
+            "prompt_key": prompt_key,
+            "product_index": product_index,
+            "model_tier": model_tier,
+            "wallet_type": "organization" if organization else "user",
+        }
         if organization:
             credit_result = deduct_credits(
                 organization=organization,
                 user=user,
                 amount=credit_amount,
                 reason=f"Product model image generation - {prompt_key}",
-                project=collection.project if hasattr(
-                    collection, 'project') else None,
-                metadata={
-                    "type": "product_model_image",
-                    "prompt_key": prompt_key,
-                    "product_index": product_index,
-                    "model_tier": model_tier,
-                }
+                project=project_ref,
+                metadata=credit_metadata,
+            )
+        else:
+            credit_result = deduct_user_credits(
+                user=user,
+                amount=credit_amount,
+                reason=f"Product model image generation - {prompt_key}",
+                project=project_ref,
+                metadata=credit_metadata,
             )
 
-            if not credit_result['success']:
-                return {"success": False, "error": credit_result['message']}
+        if not credit_result['success']:
+            return {"success": False, "error": credit_result['message']}
 
         if not hasattr(item, "selected_model") or not item.selected_model:
             return {"success": False, "error": "No model selected. Please select a model first."}
@@ -3304,6 +3311,7 @@ def regenerate_product_model_image(request, collection_id):
     # === Credit Check and Deduction ===
     from CREDITS.utils import (
         deduct_credits,
+        deduct_user_credits,
         get_user_organization,
         get_tier_credit_cost,
         resolve_regeneration_tier,
@@ -3372,6 +3380,13 @@ def regenerate_product_model_image(request, collection_id):
         credits_per_regeneration = get_tier_credit_cost(model_tier, "regeneration")
 
         organization = get_user_organization(user)
+        credit_metadata = {
+            "type": "regenerate_product_model_image",
+            "collection_id": collection_id,
+            "model_tier": model_tier,
+            "image_type": original_type,
+            "wallet_type": "organization" if organization else "user",
+        }
         if organization:
             credit_result = deduct_credits(
                 organization=organization,
@@ -3379,16 +3394,19 @@ def regenerate_product_model_image(request, collection_id):
                 amount=credits_per_regeneration,
                 reason="Product model image regeneration",
                 project=None,
-                metadata={
-                    "type": "regenerate_product_model_image",
-                    "collection_id": collection_id,
-                    "model_tier": model_tier,
-                    "image_type": original_type,
-                }
+                metadata=credit_metadata,
+            )
+        else:
+            credit_result = deduct_user_credits(
+                user=user,
+                amount=credits_per_regeneration,
+                reason="Product model image regeneration",
+                project=None,
+                metadata=credit_metadata,
             )
 
-            if not credit_result['success']:
-                return Response({"success": False, "error": credit_result['message']}, status=400)
+        if not credit_result['success']:
+            return Response({"success": False, "error": credit_result['message']}, status=400)
 
         # --- Google GenAI setup ---
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))

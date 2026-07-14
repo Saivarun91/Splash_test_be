@@ -15,6 +15,19 @@ class Plan(Document):
     features = ListField(StringField(), default=list)  # List of feature strings
     is_active = BooleanField(default=True)  # Whether plan is active/available
     is_popular = BooleanField(default=False)  # Whether to highlight as popular
+    # Public pricing card fields (Starter / Growth / Custom)
+    plan_type = StringField(choices=['pricing', 'legacy'], default='legacy')
+    slug = StringField()
+    price_display = StringField()
+    images_note = StringField()
+    icon = StringField(choices=['sparkles', 'diamond', 'growth', 'trending-up', 'crown'], default='diamond')
+    badge_text = StringField()
+    cta_text = StringField(default='Get Started')
+    cta_variant = StringField(choices=['outline', 'solid'], default='outline')
+    cta_href = StringField()
+    sort_order = IntField(default=0)
+    razorpay_enabled = BooleanField(default=True)
+    credits_label = StringField()
     custom_settings = DictField()
     created_by = ReferenceField("User")
     updated_by = ReferenceField("User")
