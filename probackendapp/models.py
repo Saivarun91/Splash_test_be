@@ -102,7 +102,7 @@ class Project(Document):
 
 
 class ProductImage(EmbeddedDocument):
-    uploaded_image_url = URLField(required=True)
+    uploaded_image_url = StringField(required=True)
     uploaded_image_path = StringField()
     # For each product, store multiple generated versions as a list of dicts
     generated_images = ListField(DictField())
@@ -122,7 +122,7 @@ class ProductImage(EmbeddedDocument):
 class UploadedImage(EmbeddedDocument):
     """Embedded document for uploaded images with both local and cloud storage"""
     local_path = StringField(required=True)
-    cloud_url = URLField(required=True)
+    cloud_url = StringField(required=True)
     original_filename = StringField(required=True)
     uploaded_by = StringField(required=True)  # User ID who uploaded
     uploaded_at = DateTimeField(default=datetime.now(timezone.utc))
@@ -256,7 +256,7 @@ class ImageGenerationHistory(Document):
     # Image details
     # 'white_background', 'model_with_ornament', 'regenerated', etc.
     image_type = StringField(required=True)
-    image_url = URLField(required=True)
+    image_url = StringField(required=True)
     local_path = StringField()
 
     # Generation details

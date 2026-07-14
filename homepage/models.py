@@ -35,7 +35,7 @@ class BlogPost(Document):
     author = StringField(default="Splash Team")
     category = StringField()
     read_time = StringField(default="5 min read")
-    image_url = URLField()
+    image_url = StringField()
     order = IntField(default=0)
     is_published = StringField(default='true')  # 'true' / 'false'
     created_at = DateTimeField(default=datetime.utcnow)
@@ -60,7 +60,7 @@ class PublicGalleryImage(Document):
     """
     Public marketing gallery images for /gallery and optional homepage showcase.
     """
-    image_url = URLField(required=True)
+    image_url = StringField(required=True)
     image_type = StringField(required=True)  # lifestyle, campaign, product, model, multi_piece, background_change
     label = StringField()
     alt_text = StringField()

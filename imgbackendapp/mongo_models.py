@@ -55,13 +55,13 @@ class OrnamentMongo(Document):
     reference_analysis = StringField()  # Optimized text from reference image analyzer
 
     # Single model image (only for campaign)
-    model_image_url = URLField()
+    model_image_url = StringField()
 
     # Single uploaded image (for 4 basic types)
-    uploaded_image_url = URLField()
+    uploaded_image_url = StringField()
 
     # Multiple uploaded ornaments (for campaign)
-    uploaded_ornament_urls = ListField(URLField())
+    uploaded_ornament_urls = ListField(StringField())
 
     # Generated image
     generated_image_url = StringField(required=True)
