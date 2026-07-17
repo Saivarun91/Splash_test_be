@@ -55,6 +55,8 @@ class User(Document):
     email_otp = StringField(max_length=6, null=True, blank=True)
     email_otp_expires_at = DateTimeField(null=True, blank=True)
     is_email_verified = BooleanField(default=False)
+    phone_number = StringField(required=False, unique=True, sparse=True)  # E.164, unique when set
+    is_phone_verified = BooleanField(default=False)
 
     # Use string reference to avoid circular import
     projects = ListField(ReferenceField("Project"), default=list)
@@ -102,6 +104,47 @@ class User(Document):
 
     def __str__(self):
         return self.email
+
+
+class PendingSignup(Document):
+    """Temporary signup record until email + phone OTPs are both verified."""
+
+    email = EmailField(required=True, unique=True)
+    password = StringField(required=True)  # hashed
+    full_name = StringField()
+    username = StringField()
+    phone_e164 = StringField(required=True)  # full E.164 number, e.g. +9198...
+    phone_country_code = StringField()  # e.g. +91
+    phone_national = StringField()  # national number without country code
+    signup_source = StringField()
+
+    email_otp = StringField(max_length=6, null=True, blank=True)
+    email_otp_expires_at = DateTimeField(null=True, blank=True)
+    email_otp_sent_at = DateTimeField(null=True, blank=True)
+    is_email_verified = BooleanField(default=False)
+
+    phone_otp = StringField(max_length=6, null=True, blank=True)
+    phone_otp_expires_at = DateTimeField(null=True, blank=True)
+    phone_otp_sent_at = DateTimeField(null=True, blank=True)
+    msg91_req_id = StringField(null=True, blank=True)  # MSG91 widget request id for retry/verify
+    is_phone_verified = BooleanField(default=False)
+
+    created_at = DateTimeField(default=datetime.datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.datetime.utcnow)
+
+    meta = {
+        "collection": "pending_signups",
+        "indexes": ["email", "phone_e164"],
+        "strict": False,
+        "allow_inheritance": False,
+    }
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.datetime.utcnow()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"PendingSignup<{self.email}>"
 
 
 # from mongoengine import Document, StringField, EmailField, BooleanField, DateTimeField, EnumField, ListField, ReferenceField

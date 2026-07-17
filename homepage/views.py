@@ -528,7 +528,7 @@ def get_default_page_content(slug):
                 'title': 'Your jewelry. Studio-quality visuals. No photographer needed.',
                 'subtitle': 'Upload a reference photo — or nothing at all. Splash understands jewelry and generates product shots, model imagery, and campaign visuals in minutes.',
                 'cta_primary_text': 'Get a demo',
-                'cta_primary_href': '/contact',
+                'cta_primary_href': 'https://calendly.com/mousumi-gosplash/30min',
                 'cta_secondary_text': 'Start creating for free',
                 'cta_secondary_href': '/signup',
                 'note': 'No credit card required · No prompts needed · First images on us',

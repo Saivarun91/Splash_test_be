@@ -37,6 +37,15 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+
+def _append_dress_direction(user_prompt, dress):
+    """Append separate dress analysis to the generation prompt when present."""
+    dress_text = (dress or "").strip()
+    if not dress_text:
+        return user_prompt
+    return f"{user_prompt} Dress/attire direction: {dress_text}".strip()
+
+
 # Check for Gemini SDK
 try:
     from imgbackend.ai_utils import genai, types
@@ -541,6 +550,7 @@ def generate_model_with_ornament_task(
     ornament_measurements,
     dimension,
     reference_analysis="",
+    dress="",
     variation_index=0,
     total_variations=1,
     model_tier="regular",
@@ -556,6 +566,7 @@ def generate_model_with_ornament_task(
         ornament_b64 = base64.b64encode(ornament_bytes).decode("utf-8")
 
         has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
+        has_dress = bool(dress and dress.strip())
 
         if normalize_model_tier(model_tier) == "regular" and not (
             getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
@@ -614,6 +625,7 @@ def generate_model_with_ornament_task(
         )
         if has_reference_analysis:
             user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
+        user_prompt = _append_dress_direction(user_prompt, dress)
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
@@ -669,6 +681,7 @@ def generate_model_with_ornament_task(
             dimension=dimension or "1:1",
             model_tier=normalize_model_tier(model_tier),
             reference_analysis=reference_analysis.strip() if has_reference_analysis else "",
+            dress=dress.strip() if has_dress else "",
         )
         ornament_doc.save()
         # print("local_generated_path =", repr(local_generated_path))
@@ -710,6 +723,7 @@ def generate_real_model_with_ornament_task(
     ornament_measurements,
     dimension,
     reference_analysis="",
+    dress="",
     variation_index=0,
     total_variations=1,
     model_tier="regular",
@@ -730,6 +744,7 @@ def generate_real_model_with_ornament_task(
         ornament_b64 = base64.b64encode(ornament_bytes).decode("utf-8")
 
         has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
+        has_dress = bool(dress and dress.strip())
 
         if normalize_model_tier(model_tier) == "regular" and not (
             getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")
@@ -792,6 +807,7 @@ def generate_real_model_with_ornament_task(
             user_prompt = f"{user_prompt} {prompt}"
         if has_reference_analysis:
             user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
+        user_prompt = _append_dress_direction(user_prompt, dress)
 
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
@@ -859,6 +875,7 @@ def generate_real_model_with_ornament_task(
             dimension=dimension or "1:1",
             model_tier=normalize_model_tier(model_tier),
             reference_analysis=reference_analysis.strip() if has_reference_analysis else "",
+            dress=dress.strip() if has_dress else "",
         )
         ornament_doc.save()
 
@@ -899,6 +916,7 @@ def generate_campaign_shot_advanced_task(
     prompt,
     dimension,
     reference_analysis="",
+    dress="",
     ornament_measurements='[]',
     variation_index=0,
     total_variations=1,
@@ -976,6 +994,7 @@ def generate_campaign_shot_advanced_task(
             model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
         has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
+        has_dress = bool(dress and dress.strip())
         parts = []
 
         # Model (optional)
@@ -1040,6 +1059,7 @@ def generate_campaign_shot_advanced_task(
                 f"{user_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
                 f"{reference_analysis.strip()} {REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
             ).strip()
+        user_prompt = _append_dress_direction(user_prompt, dress)
 
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
@@ -1096,6 +1116,7 @@ def generate_campaign_shot_advanced_task(
             dimension=dimension or "1:1",
             model_tier=normalize_model_tier(model_tier),
             reference_analysis=reference_analysis.strip() if has_reference_analysis else "",
+            dress=dress.strip() if has_dress else "",
         )
         ornament_doc.save()
 
@@ -1211,18 +1232,39 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             f"Generate the ultra high quality image in {dimension} aspect ratio (width:height)."
         )
 
-        # Combine the original prompt with the new prompt
+        # Keep original prompt for history; generation uses only the user's change request
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
-        combined_prompt = f"{original_prompt}. {new_prompt}"
+        user_change = (new_prompt or "").strip()
+        combined_prompt = (
+            f"{original_prompt}. {user_change}".strip(". ").strip()
+            if user_change
+            else (original_prompt or "")
+        )
         measurements = getattr(prev_doc, 'measurements', None) or ''
         measurements_text = f"measurements: {measurements}." if measurements else ""
+        dress_lock = (getattr(prev_doc, "dress", None) or "").strip()
+        dress_lock_text = (
+            f"DRESS/ATTIRE LOCK: {dress_lock} Keep this attire exactly unchanged "
+            "unless the user explicitly requests a clothing change."
+            if dress_lock
+            else (
+                "DRESS/ATTIRE LOCK: Keep the dress/outfit in the base generated image "
+                "exactly unchanged unless the user explicitly requests a clothing change."
+            )
+        )
         regeneration_instructions = build_regeneration_image_instructions(
             ornament_count=len(ornament_images),
+        )
+        change_text = (
+            f"USER REQUESTED CHANGE ONLY: {user_change}"
+            if user_change
+            else "USER REQUESTED CHANGE ONLY: Make no creative changes; preserve the base image."
         )
         full_prompt = " ".join(
             part for part in (
                 regeneration_instructions,
-                combined_prompt,
+                dress_lock_text,
+                change_text,
                 measurements_text,
                 dimension_text,
             ) if part
@@ -1232,6 +1274,23 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
         reference_paths = []
         contents = []
 
+        # 1) Base generated image first — primary visual lock for scene/model/dress
+        temp_ref_path = write_bytes_to_unique_path(
+            regen_dir, img_bytes, "regen_ref.jpg", suffix=f"ref_{image_id}"
+        )
+        reference_paths.append(temp_ref_path)
+        contents.extend([
+            {"inline_data": {"mime_type": "image/jpeg", "data": prev_img_b64}},
+            {
+                "text": (
+                    "BASE GENERATED IMAGE: Keep this image identical except for the "
+                    "user's requested change. Do not change dress, pose, model, "
+                    "background, or ornament unless explicitly requested."
+                )
+            },
+        ])
+
+        # 2) Original ornament image(s) — product lock only
         for idx, ornament_image in enumerate(ornament_images):
             ornament_b64 = base64.b64encode(ornament_image["bytes"]).decode("utf-8")
             temp_ornament_path = write_bytes_to_unique_path(
@@ -1244,24 +1303,16 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             contents.append(
                 {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}}
             )
-            if len(ornament_images) > 1:
-                contents.append(
-                    {
-                        "text": (
-                            f"Original uploaded ornament reference {idx + 1} of "
-                            f"{len(ornament_images)}."
-                        )
-                    }
-                )
+            contents.append(
+                {
+                    "text": (
+                        f"ORIGINAL ORNAMENT REFERENCE {idx + 1} of {len(ornament_images)}: "
+                        "Keep this ornament exactly identical in the output."
+                    )
+                }
+            )
 
-        temp_ref_path = write_bytes_to_unique_path(
-            regen_dir, img_bytes, "regen_ref.jpg", suffix=f"ref_{image_id}"
-        )
-        reference_paths.append(temp_ref_path)
-        contents.extend([
-            {"inline_data": {"mime_type": "image/jpeg", "data": prev_img_b64}},
-            {"text": full_prompt},
-        ])
+        contents.append({"text": full_prompt})
 
         generated_bytes = generate_image_bytes(
             model_tier,
@@ -1293,6 +1344,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
                 prev_doc, 'model_image_url') else None,
             uploaded_ornament_urls=prev_doc.uploaded_ornament_urls if hasattr(
                 prev_doc, 'uploaded_ornament_urls') else None,
+            reference_analysis=getattr(prev_doc, "reference_analysis", None) or "",
+            dress=getattr(prev_doc, "dress", None) or "",
             model_tier=normalize_model_tier(model_tier),
         )
         new_doc.save()

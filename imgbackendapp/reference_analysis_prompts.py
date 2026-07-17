@@ -26,6 +26,9 @@ REFERENCE_TYPE_ALIASES = {
     "bg": "background",
     "theme": "campaign",
     "style": "campaign",
+    "outfit": "dress",
+    "attire": "dress",
+    "clothing": "dress",
 }
 
 REFERENCE_ANALYSIS_PROMPTS = {
@@ -51,6 +54,17 @@ Focus on:
 - lighting setup and photographic aesthetic
 - color grading and tonal harmony
 - environment, props, and fashion/lifestyle context (without naming brands)
+- ATTIRE / DRESS (ONLY if a model or human is clearly wearing clothing):
+  - garment type (e.g. saree, lehenga, gown, kurta, blouse, suit, formal dress, casual wear)
+  - dress/outfit colors (dominant and secondary tones)
+  - fabric feel, silhouette, and styling details that help recreate the look (without naming brands)
+
+STRICT ATTIRE RULES:
+• Include attire details ONLY when clothing is clearly worn by a visible model/person
+• If no model/human is wearing a dress or outfit, OMIT attire entirely — do not invent or guess
+• Do NOT describe loose fabrics, draped textiles, background cloths, product textiles, or decorative cloths that are not worn as attire
+• Do NOT describe jewelry, ornaments, or accessories as dress/attire
+• When attire is present, weave garment type and colors naturally into the same paragraph
 
 {UNIVERSAL_SAFETY_RULES}
 {_OUTPUT_FORMAT_RULES}
@@ -121,7 +135,7 @@ Focus on:
 {_OUTPUT_FORMAT_RULES}
 """,
     "pose": f"""
-Analyze this reference image and write one optimized paragraph describing the POSE, body positioning, and (when present) the dress/outfit worn by the model for image generation.
+Analyze this reference image and write one optimized paragraph describing the POSE and body positioning for image generation.
 
 Focus on:
 - body stance, gesture, and posture
@@ -129,17 +143,26 @@ Focus on:
 - camera angle relative to the subject
 - hand/arm placement and overall silhouette
 - editorial or natural posing energy
-- DRESS / OUTFIT (ONLY if a person/model is clearly wearing a dress or outfit):
-  - what kind of garment it is (e.g. saree, lehenga, gown, kurta, blouse, suit, formal dress, casual wear)
-  - the dress/outfit colors (dominant and secondary tones)
-  - fabric feel and styling details that help recreate the look (without naming brands)
 
-STRICT DRESS RULES:
-• Include dress/outfit details ONLY when clothing is clearly worn by a visible model/person in the image
-• If no dress/outfit is worn by a model, OMIT all clothing description entirely — do not invent or guess
-• Do NOT describe loose fabrics, draped textiles, background cloths, product textiles, patterned designs, or decorative cloths that are not worn as attire
+Do NOT describe dress, outfit, clothing, fabric, or garment colors in this paragraph — attire is analyzed separately.
+
+{UNIVERSAL_SAFETY_RULES}
+{_OUTPUT_FORMAT_RULES}
+""",
+    "dress": f"""
+Analyze this reference image and write one optimized paragraph describing the DRESS / OUTFIT worn by a model or human for image generation.
+
+Focus on (ONLY when clothing is clearly worn by a visible model/person):
+- garment type (e.g. saree, lehenga, gown, kurta, blouse, suit, formal dress, casual wear)
+- dress/outfit colors (dominant and secondary tones)
+- fabric feel, silhouette, and styling details that help recreate the look (without naming brands)
+
+STRICT RULES:
+• Describe attire ONLY if a model or human in the image is clearly wearing that dress/outfit
+• If no model/human is wearing a dress or outfit, return an empty response — do not invent or guess
+• Do NOT describe loose fabrics, draped textiles, background cloths, product textiles, patterned designs, hanging garments, or decorative cloths that are not worn as attire
 • Do NOT describe jewelry, ornaments, or accessories as dress
-• When dress is present, weave garment type and colors naturally into the same single paragraph with the pose direction
+• Do NOT describe pose, face, identity, or background scene here
 
 {UNIVERSAL_SAFETY_RULES}
 {_OUTPUT_FORMAT_RULES}

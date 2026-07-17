@@ -33,28 +33,32 @@ REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE = (
 )
 
 REGENERATION_ORIGINAL_ORNAMENT_INSTRUCTION = (
-    "The first image is the original uploaded ornament and is the authoritative reference "
-    "for the product. Preserve it exactly without altering its design, proportions, "
-    "gemstones, metal finish, textures or fine details. This image must never influence "
-    "the background, lighting or composition."
+    "ORNAMENT LOCK: The ornament/product reference image(s) are the authoritative "
+    "source for jewelry only. Preserve the ornament EXACTLY — identical design, "
+    "shape, proportions, gemstones, metal finish, textures, and fine details. "
+    "Do NOT redesign, restyle, or replace the ornament."
 )
 
 REGENERATION_ORIGINAL_ORNAMENTS_INSTRUCTION = (
-    "The first images are the original uploaded ornaments and are the authoritative "
-    "references for the products. Preserve them exactly without altering their design, "
-    "proportions, gemstones, metal finish, textures or fine details. These images must "
-    "never influence the background, lighting or composition."
+    "ORNAMENT LOCK: The ornament/product reference image(s) are the authoritative "
+    "sources for jewelry only. Preserve EVERY ornament EXACTLY — identical design, "
+    "shape, proportions, gemstones, metal finish, textures, and fine details. "
+    "Do NOT redesign, restyle, or replace any ornament."
 )
 
 REGENERATION_PREVIOUS_GENERATED_INSTRUCTION = (
-    "The following image is the previously generated result. Use it only as a reference "
-    "for composition, lighting, camera angle, model pose, styling and overall scene. "
-    "Do not modify the ornament based on this image if it conflicts with the original ornament."
+    "BASE IMAGE LOCK: The previously generated image is the primary visual base. "
+    "Keep the model identity, face, body, pose, camera angle, framing, background, "
+    "lighting, atmosphere, styling, and DRESS/ATTIRE EXACTLY the same unless the "
+    "user explicitly asks to change that specific element. Do not invent a new scene."
 )
 
 REGENERATION_APPLY_MODIFICATIONS_INSTRUCTION = (
-    "Apply only the requested prompt modifications while keeping the ornament identical "
-    "to the original uploaded image."
+    "CHANGE RULE (MANDATORY): Apply ONLY the user's requested regeneration change. "
+    "Do NOT change anything else. Especially do NOT change the dress/outfit, colors of "
+    "clothing, pose, model appearance, background, lighting, or composition unless the "
+    "user explicitly requests that exact change. If the request does not mention dress "
+    "or attire, the dress/attire must remain identical to the base generated image."
 )
 
 REGENERATION_MODEL_IMAGE_INSTRUCTION = (
@@ -214,15 +218,15 @@ def resolve_regeneration_dimension(doc, generated_image_bytes=None):
 
 
 def build_regeneration_image_instructions(*, ornament_count=1, has_model_image=False):
-    """Prompt instructions describing how to use original vs generated images."""
+    """Prompt instructions: lock base image + ornament; apply only user change."""
     if ornament_count > 1:
         original_instruction = REGENERATION_ORIGINAL_ORNAMENTS_INSTRUCTION
     else:
         original_instruction = REGENERATION_ORIGINAL_ORNAMENT_INSTRUCTION
 
     instructions = (
-        f"{original_instruction} "
         f"{REGENERATION_PREVIOUS_GENERATED_INSTRUCTION} "
+        f"{original_instruction} "
         f"{REGENERATION_APPLY_MODIFICATIONS_INSTRUCTION}"
     )
     if has_model_image:

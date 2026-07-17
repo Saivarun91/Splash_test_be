@@ -53,6 +53,7 @@ class OrnamentMongo(Document):
     dimension = StringField()  # Aspect ratio used for generation, e.g. 1:1, 16:9
     model_tier = StringField()  # regular | premium
     reference_analysis = StringField()  # Optimized text from reference image analyzer
+    dress = StringField()  # Separate dress/outfit analysis from model reference
 
     # Single model image (only for campaign)
     model_image_url = StringField()

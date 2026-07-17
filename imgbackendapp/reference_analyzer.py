@@ -72,6 +72,23 @@ def _clean_analysis_output(text: str) -> str:
     return cleaned
 
 
+_EMPTY_DRESS_PATTERNS = re.compile(
+    r"^(none|n/?a|null|nil|no dress|no outfit|no clothing|not applicable|"
+    r"no attire|empty|nothing|no garment)[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_dress_output(text: str) -> str:
+    """Return dress analysis text, or empty when none / not worn."""
+    cleaned = _clean_analysis_output(text)
+    if not cleaned:
+        return ""
+    if _EMPTY_DRESS_PATTERNS.match(cleaned):
+        return ""
+    return cleaned
+
+
 def _call_gemini_vision(prompt: str, image_path: str) -> Optional[str]:
     """Call AI Vision with a local image file."""
     api_key = getattr(settings, "GEMINI_API_KEY", None) or getattr(
@@ -107,10 +124,10 @@ def analyze_reference_image(reference_image_path: str, reference_type: str = "cu
 
     Args:
         reference_image_path: Absolute or resolvable path to the temporary reference image.
-        reference_type: Analysis category (background, campaign, pose, etc.).
+        reference_type: Analysis category (background, campaign, pose, dress, etc.).
 
     Returns:
-        A single paragraph description, or an empty string if analysis fails.
+        A single paragraph description, or an empty string if analysis fails / no dress.
     """
     if not reference_image_path or not os.path.exists(reference_image_path):
         logger.warning(
@@ -125,14 +142,46 @@ def analyze_reference_image(reference_image_path: str, reference_type: str = "cu
     if not raw_result:
         return ""
 
-    cleaned = _clean_analysis_output(raw_result)
-    if not cleaned:
+    if prompt_key == "dress":
+        cleaned = _normalize_dress_output(raw_result)
+    else:
+        cleaned = _clean_analysis_output(raw_result)
+
+    if not cleaned and prompt_key != "dress":
         logger.warning(
             "Reference image analysis returned empty output for type=%s path=%s",
             prompt_key,
             reference_image_path,
         )
     return cleaned
+
+
+def analyze_pose_and_dress(reference_image_path: str) -> dict:
+    """
+    Run pose + dress analysis for model/campaign reference images.
+
+    Returns:
+        {"analysis_text": str, "dress": str}
+        dress is empty when no attire is worn by a model/human.
+    """
+    return {
+        "analysis_text": analyze_reference_image(reference_image_path, "pose"),
+        "dress": analyze_reference_image(reference_image_path, "dress"),
+    }
+
+
+def analyze_campaign_and_dress(reference_image_path: str) -> dict:
+    """
+    Run campaign style + dress analysis for theme/campaign reference images.
+
+    Returns:
+        {"analysis_text": str, "dress": str}
+    """
+    return {
+        "analysis_text": analyze_reference_image(reference_image_path, "campaign"),
+        "dress": analyze_reference_image(reference_image_path, "dress"),
+    }
+
 
 
 def safe_delete_reference_file(file_path: Optional[str]) -> None:

@@ -40,7 +40,10 @@ from .image_provider import parse_model_tier
 from .file_utils import save_uploaded_file
 from .reference_analyzer import (
     analyze_reference_image,
+    analyze_pose_and_dress,
+    analyze_campaign_and_dress,
     combine_reference_analyses,
+    normalize_reference_type,
     safe_delete_reference_file,
 )
 
@@ -72,6 +75,38 @@ def _analyze_uploaded_reference(uploaded_file, reference_type, existing_analysis
         safe_delete_reference_file(local_path)
 
 
+def _analyze_uploaded_pose_and_dress(
+    uploaded_file,
+    existing_analysis="",
+    existing_dress="",
+):
+    """
+    Analyze a model/pose reference for pose + dress.
+
+    Returns:
+        {"analysis_text": str, "dress": str}
+    """
+    result = {
+        "analysis_text": (existing_analysis or "").strip(),
+        "dress": (existing_dress or "").strip(),
+    }
+    if not uploaded_file:
+        return result
+
+    temp_dir = os.path.join(settings.MEDIA_ROOT, "temp_reference_analysis")
+    local_path = save_uploaded_file(uploaded_file, temp_dir)
+    try:
+        if result["analysis_text"] and result["dress"]:
+            return result
+        if result["analysis_text"] and not result["dress"]:
+            # Pose already analyzed by FE — still run dress analysis
+            result["dress"] = analyze_reference_image(local_path, "dress")
+            return result
+        return analyze_pose_and_dress(local_path)
+    finally:
+        safe_delete_reference_file(local_path)
+
+
 def _analyze_saved_reference_paths(file_paths, reference_type):
     """Analyze already-saved reference files, delete each, and return combined text."""
     analyses = []
@@ -87,6 +122,32 @@ def _analyze_saved_reference_paths(file_paths, reference_type):
     return combine_reference_analyses(analyses)
 
 
+def _analyze_saved_campaign_and_dress(file_paths):
+    """
+    Analyze campaign theme images for style + dress, delete each file.
+
+    Returns:
+        {"analysis_text": str, "dress": str}
+    """
+    analyses = []
+    dresses = []
+    for file_path in file_paths or []:
+        if not file_path:
+            continue
+        try:
+            result = analyze_campaign_and_dress(file_path)
+            if result.get("analysis_text"):
+                analyses.append(result["analysis_text"])
+            if result.get("dress"):
+                dresses.append(result["dress"])
+        finally:
+            safe_delete_reference_file(file_path)
+    return {
+        "analysis_text": combine_reference_analyses(analyses),
+        "dress": combine_reference_analyses(dresses),
+    }
+
+
 @api_view(['POST'])
 @csrf_exempt
 @authenticate
@@ -97,18 +158,36 @@ def analyze_reference_image_view(request):
 
     if not image:
         return JsonResponse(
-            {"success": False, "analysis_text": "", "error": "No image provided."},
+            {
+                "success": False,
+                "analysis_text": "",
+                "dress": "",
+                "error": "No image provided.",
+            },
             status=400,
         )
 
     temp_dir = os.path.join(settings.MEDIA_ROOT, "temp_reference_analysis")
     local_path = save_uploaded_file(image, temp_dir)
     try:
-        analysis_text = analyze_reference_image(local_path, context)
+        prompt_key = normalize_reference_type(context)
+        # Model/pose references also get a separate dress analysis
+        if prompt_key == "pose":
+            result = analyze_pose_and_dress(local_path)
+            analysis_text = result.get("analysis_text", "")
+            dress = result.get("dress", "")
+        elif prompt_key == "dress":
+            analysis_text = ""
+            dress = analyze_reference_image(local_path, "dress")
+        else:
+            analysis_text = analyze_reference_image(local_path, context)
+            dress = ""
+
         return JsonResponse(
             {
-                "success": bool(analysis_text),
+                "success": bool(analysis_text or dress),
                 "analysis_text": analysis_text,
+                "dress": dress,
             }
         )
     finally:
@@ -404,6 +483,7 @@ def generate_model_with_ornament(request):
         pose_img = request.FILES.get('pose_style')
         prompt = request.POST.get('prompt', '')
         reference_analysis = request.POST.get('reference_analysis', '').strip()
+        dress = request.POST.get('dress', '').strip()
         print(prompt)
         measurements = request.POST.get('measurements', '')
         ornament_type = request.POST.get('ornament_type', '')
@@ -420,11 +500,13 @@ def generate_model_with_ornament(request):
             settings.MEDIA_ROOT, "uploaded_ornaments")
         local_uploaded_path = save_uploaded_file(ornament_img, upload_dir)
 
-        reference_analysis = _analyze_uploaded_reference(
+        pose_result = _analyze_uploaded_pose_and_dress(
             pose_img,
-            "pose",
             existing_analysis=reference_analysis,
+            existing_dress=dress,
         )
+        reference_analysis = pose_result.get("analysis_text", "")
+        dress = pose_result.get("dress", "")
 
         # Call Celery task asynchronously
         task_kwargs = {
@@ -436,6 +518,7 @@ def generate_model_with_ornament(request):
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
             "reference_analysis": reference_analysis,
+            "dress": dress,
             "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
@@ -520,6 +603,7 @@ def generate_real_model_with_ornament(request):
         pose_img = request.FILES.get('pose_style')
         prompt = request.POST.get('prompt', '')
         reference_analysis = request.POST.get('reference_analysis', '').strip()
+        dress = request.POST.get('dress', '').strip()
         print("prompt from request : ", prompt)
         measurements = request.POST.get('measurements', '')
         ornament_type = request.POST.get('ornament_type', '')
@@ -538,11 +622,13 @@ def generate_real_model_with_ornament(request):
         local_model_path = save_uploaded_file(model_img, model_dir)
         local_ornament_path = save_uploaded_file(ornament_img, ornament_dir)
 
-        reference_analysis = _analyze_uploaded_reference(
+        pose_result = _analyze_uploaded_pose_and_dress(
             pose_img,
-            "pose",
             existing_analysis=reference_analysis,
+            existing_dress=dress,
         )
+        reference_analysis = pose_result.get("analysis_text", "")
+        dress = pose_result.get("dress", "")
 
         task_kwargs = {
             "model_image_path": local_model_path,
@@ -554,6 +640,7 @@ def generate_real_model_with_ornament(request):
             "ornament_measurements": ornament_measurements,
             "dimension": dimension,
             "reference_analysis": reference_analysis,
+            "dress": dress,
             "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
@@ -644,6 +731,7 @@ def generate_campaign_shot_advanced(request):
         prompt = request.POST.get('prompt')
         dimension = request.POST.get('dimension', '1:1').strip()
         reference_analysis = request.POST.get('reference_analysis', '').strip()
+        dress = request.POST.get('dress', '').strip()
 
         # === Validation ===
         if not ornaments:
@@ -668,20 +756,27 @@ def generate_campaign_shot_advanced(request):
         if model_img:
             model_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_models")
             model_image_path = save_uploaded_file(model_img, model_dir)
+            if not reference_analysis:
+                model_analysis = analyze_pose_and_dress(model_image_path)
+                reference_analysis = model_analysis.get("analysis_text", "")
+                if not dress:
+                    dress = model_analysis.get("dress", "")
+            elif not dress:
+                dress = analyze_reference_image(model_image_path, "dress")
 
-        # === Save theme images temporarily, analyze, and discard ===
+        # === Save theme images temporarily, analyze campaign style + dress, discard ===
         theme_dir = os.path.join(settings.MEDIA_ROOT, "uploaded_themes")
         theme_image_paths = []
         for theme in theme_images:
             theme_image_paths.append(save_uploaded_file(theme, theme_dir))
 
-        theme_reference_analysis = _analyze_saved_reference_paths(
-            theme_image_paths,
-            "campaign",
-        )
+        theme_result = _analyze_saved_campaign_and_dress(theme_image_paths)
+        theme_reference_analysis = theme_result.get("analysis_text", "")
+        theme_dress = theme_result.get("dress", "")
         reference_analysis = combine_reference_analyses(
             [theme_reference_analysis, reference_analysis]
         )
+        dress = combine_reference_analyses([dress, theme_dress])
 
         task_kwargs = {
             "user_id": user_id,
@@ -694,6 +789,7 @@ def generate_campaign_shot_advanced(request):
             "prompt": prompt,
             "dimension": dimension,
             "reference_analysis": reference_analysis,
+            "dress": dress,
             "model_tier": model_tier,
         }
         dispatch = dispatch_variation_tasks(
@@ -1152,6 +1248,8 @@ def get_user_images(request):
                 img_dict["uploaded_ornament_urls"] = img.uploaded_ornament_urls
             if hasattr(img, 'reference_analysis') and img.reference_analysis:
                 img_dict["reference_analysis"] = img.reference_analysis
+            if hasattr(img, 'dress') and img.dress:
+                img_dict["dress"] = img.dress
             if hasattr(img, 'dimension') and img.dimension:
                 img_dict["dimension"] = img.dimension
 

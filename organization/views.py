@@ -978,11 +978,19 @@ def get_organization_images(request, organization_id):
                 'project_id': None,
                 'collection_id': None,
                 'created_at': img.created_at.isoformat() if img.created_at else None,
+                'generated_image_path': img.generated_image_path,
+                'reference_analysis': img.reference_analysis or '',
+                'dress': getattr(img, 'dress', None) or '',
                 'metadata': {
                     'uploaded_image_url': img.uploaded_image_url,
+                    'uploaded_image_path': img.uploaded_image_path,
+                    'uploaded_ornament_urls': list(img.uploaded_ornament_urls or []),
                     'model_image_url': img.model_image_url,
+                    'generated_image_path': img.generated_image_path,
                     'parent_image_id': str(img.parent_image_id) if img.parent_image_id else None,
                     'model_tier': img.model_tier,
+                    'reference_analysis': img.reference_analysis or '',
+                    'dress': getattr(img, 'dress', None) or '',
                 },
                 'source': 'individual'  # Indicate this is an individual image
             })
