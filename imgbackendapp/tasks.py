@@ -11,7 +11,6 @@ from io import BytesIO
 from django.conf import settings
 from django.core.files.base import ContentFile
 from celery import shared_task
-from CREDITS.utils import get_image_model_name
 from PIL import Image
 import numpy as np
 import cv2
@@ -111,9 +110,9 @@ def generate_white_background_task(
                 raise Exception("AI not configured")
 
             client = genai.Client()
-            model_name = get_image_model_name(
-                default_model=settings.IMAGE_MODEL_NAME
-            )
+            # White-background only: always use Gemini 3.1 Flash Image.
+            # All other image flows keep the shared CreditSettings / IMAGE_MODEL_NAME model.
+            model_name = "gemini-3.1-flash-image"
 
             contents = [
                 {
