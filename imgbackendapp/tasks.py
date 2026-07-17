@@ -112,7 +112,7 @@ def generate_white_background_task(
             client = genai.Client()
             # White-background only: always use Gemini 3.1 Flash Image.
             # All other image flows keep the shared CreditSettings / IMAGE_MODEL_NAME model.
-            model_name = "gemini-3.1-flash-image"
+            model_name = "gemini-3-pro-image"
 
             contents = [
                 {
@@ -149,7 +149,7 @@ def generate_white_background_task(
             config = types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"],
                 image_config=types.ImageConfig(
-                    image_size="4K",
+                    #  image_size="4K",
                     aspect_ratio=aspect,
                 ),
             )
