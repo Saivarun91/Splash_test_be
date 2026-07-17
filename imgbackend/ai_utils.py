@@ -1,5 +1,5 @@
 """
-Compatibility layer for Gemini client usage across the backend.
+Compatibility layer for AI client usage across the backend.
 
 Exports `genai` and `types` so existing imports continue to work, while
 defaulting API key auth to environment variables from `.env`.

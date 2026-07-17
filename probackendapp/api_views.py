@@ -571,7 +571,7 @@ def api_project_setup_description(request, project_id):
 
 def analyze_uploaded_image(cloud_url, category):
     """
-    Analyze an uploaded image using Gemini Vision API based on its category.
+    Analyze an uploaded image using AI Vision API based on its category.
     Uses the utility function from utils.py for REST API calls.
     Returns a descriptive analysis paragraph.
     For theme images, also extracts ornament_type, angle_shot, and theme_description.
@@ -599,7 +599,7 @@ def analyze_uploaded_image(cloud_url, category):
         from dotenv import load_dotenv
         load_dotenv()
         if not (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
-            print("⚠️ Gemini API key not configured, skipping image analysis")
+            print("⚠️ AI is not configured, skipping image analysis")
             return {"analysis": "", "ornament_type": "", "angle_shot": "", "theme_description": ""}
 
         # Use the utility function to call Gemini API with image URL
@@ -620,7 +620,7 @@ def analyze_uploaded_image(cloud_url, category):
             else:
                 return {"analysis": analysis_text, "ornament_type": "", "angle_shot": "", "theme_description": ""}
         else:
-            print("⚠️ Gemini API returned no analysis result")
+            print("⚠️ AI returned no analysis result")
             return {"analysis": "", "ornament_type": "", "angle_shot": "", "theme_description": ""}
 
     except Exception as e:

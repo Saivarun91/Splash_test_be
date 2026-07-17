@@ -6,15 +6,15 @@ Used by imgbackendapp (individual model generation) and probackendapp (project b
 # Substrings in exception/error messages (lowercase) -> user-friendly message
 IMAGE_GENERATION_ERROR_MAP = [
     # API / configuration
-    ("GOOGLE_API_KEY not configured", "Image generation service is not configured. Please contact support."),
-    ("GEMINI/GOOGLE API key not configured", "Image generation service is not configured. Please contact support."),
-    ("OPENAI API key not configured", "Premium image generation is not configured. Please contact support or use Regular."),
-    ("Gemini SDK not available", "Image generation service is temporarily unavailable. Please try again later."),
-    ("api_key", "Image generation service configuration error. Please try again later."),
+    ("Image generation service is not configured. Please contact support."),
+    ("Image generation service is not configured. Please contact support."),
+    ("Premium image generation is not configured. Please contact support or use Regular."),
+    ("Image generation service is temporarily unavailable. Please try again later."),
+    ("Image generation service configuration error. Please try again later."),
     # Rate limits / quota
-    ("quota", "We've reached our generation limit for now. Please try again in a few minutes."),
-    ("rate limit", "Too many requests. Please wait a moment and try again."),
-    ("429", "Service is busy. Please wait a moment and try again."),
+    ("We've reached our generation limit for now. Please try again in a few minutes."),
+    ("Too many requests. Please wait a moment and try again."),
+    ("Service is busy. Please wait a moment and try again."),
     # Invalid input / content
     ("No image returned", "We couldn't create an image from your photos. Please try different images."),
     ("invalid", "Something about the image or request wasn't valid. Please check your uploads and try again."),

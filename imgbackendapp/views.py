@@ -56,7 +56,7 @@ def _analyze_uploaded_reference(uploaded_file, reference_type, existing_analysis
     """
     Save a temporary reference image, analyze it, delete the file, and return text.
 
-    If existing_analysis is provided, skip Gemini and only delete the temp file when
+    If existing_analysis is provided, skip AI and only delete the temp file when
     the caller saved one for re-analysis fallback.
     """
     if not uploaded_file:
@@ -1110,7 +1110,7 @@ def get_user_images(request):
         page = int(request.GET.get('page', 1))
         limit = int(request.GET.get('limit', 20))
 
-        # Build query
+        # Build query — gallery only lists completed generations (must have output)
         query = {"user_id": user_id}
         if image_type:
             query["type"] = image_type
@@ -1124,6 +1124,14 @@ def get_user_images(request):
         # Convert to list of dictionaries
         images_list = []
         for img in images:
+            # Skip records with no generated output (uploads / incomplete jobs)
+            has_generated = bool(
+                (img.generated_image_path and str(img.generated_image_path).strip())
+                or (img.generated_image_url and str(img.generated_image_url).strip())
+            )
+            if not has_generated:
+                continue
+
             img_dict = {
                 "id": str(img.id),
                 "prompt": img.prompt,

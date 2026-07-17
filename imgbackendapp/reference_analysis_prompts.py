@@ -121,7 +121,7 @@ Focus on:
 {_OUTPUT_FORMAT_RULES}
 """,
     "pose": f"""
-Analyze this reference image and write one optimized paragraph describing the POSE and body positioning for image generation.
+Analyze this reference image and write one optimized paragraph describing the POSE, body positioning, and (when present) the dress/outfit worn by the model for image generation.
 
 Focus on:
 - body stance, gesture, and posture
@@ -129,6 +129,17 @@ Focus on:
 - camera angle relative to the subject
 - hand/arm placement and overall silhouette
 - editorial or natural posing energy
+- DRESS / OUTFIT (ONLY if a person/model is clearly wearing a dress or outfit):
+  - what kind of garment it is (e.g. saree, lehenga, gown, kurta, blouse, suit, formal dress, casual wear)
+  - the dress/outfit colors (dominant and secondary tones)
+  - fabric feel and styling details that help recreate the look (without naming brands)
+
+STRICT DRESS RULES:
+• Include dress/outfit details ONLY when clothing is clearly worn by a visible model/person in the image
+• If no dress/outfit is worn by a model, OMIT all clothing description entirely — do not invent or guess
+• Do NOT describe loose fabrics, draped textiles, background cloths, product textiles, patterned designs, or decorative cloths that are not worn as attire
+• Do NOT describe jewelry, ornaments, or accessories as dress
+• When dress is present, weave garment type and colors naturally into the same single paragraph with the pose direction
 
 {UNIVERSAL_SAFETY_RULES}
 {_OUTPUT_FORMAT_RULES}

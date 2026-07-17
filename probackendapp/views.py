@@ -547,7 +547,7 @@ def generate_ai_images_background(collection_id, user_id):
     generated_images = []
 
     if not has_genai:
-        return {"success": False, "error": "Gemini SDK not available."}
+        return {"success": False, "error": "AI SDK not available."}
 
     client = genai.Client()
     model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
@@ -1075,7 +1075,7 @@ def generate_product_model_api(request, collection_id):
             return Response({"success": False, "error": "Missing data."})
 
         if not (getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")):
-            return Response({"success": False, "error": "GEMINI/GOOGLE API key not configured."})
+            return Response({"success": False, "error": "AI not configured."})
 
         # ✅ Initialize Gemini client
         client = genai.Client()
@@ -1119,7 +1119,7 @@ def generate_product_model_api(request, collection_id):
                 break
 
         if not generated_bytes:
-            return Response({"success": False, "error": "Gemini did not return an image."})
+            return Response({"success": False, "error": "AI did not return an image."})
 
         # Save locally
         output_dir = os.path.join(
@@ -1928,7 +1928,7 @@ Follow this specific style prompt: {prompt_text}"""
         )
 
         if not resp.candidates:
-            return {"success": False, "error": "No candidates returned from Gemini API."}
+            return {"success": False, "error": "No candidates returned from AI API."}
 
         candidate = resp.candidates[0]
         generated_bytes = None
@@ -1942,7 +1942,7 @@ Follow this specific style prompt: {prompt_text}"""
                     break
 
         if not generated_bytes:
-            return {"success": False, "error": "No image bytes returned from Gemini API."}
+            return {"success": False, "error": "No image bytes returned from AI API."}
 
         # Save locally
         output_dir = os.path.join(
@@ -2981,7 +2981,7 @@ Follow this specific style prompt: {prompt_text}"""
                     ]
 
                     if key == "campaign_image":
-                        log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] 🚀 Calling Gemini API for campaign image generation"
+                        log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] 🚀 Calling AI API for campaign image generation"
                         logger.info(log_msg)
                         print(log_msg)
                         log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] Model: {model_name}, Contents: {len(contents)} parts (model image, product image, prompt)"
@@ -3001,12 +3001,12 @@ Follow this specific style prompt: {prompt_text}"""
                             model=model_name, contents=contents, config=config
                         )
                         if key == "campaign_image":
-                            log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ✅ Gemini API call successful, processing response"
+                            log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ✅  AI API call successful, processing response"
                             logger.info(log_msg)
-                            print(log_msg)
+                            print(log_msg)  
                     except Exception as api_error:
                         if key == "campaign_image":
-                            log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ❌ ERROR calling Gemini API: {str(api_error)}"
+                            log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ❌ ERROR calling AI API: {str(api_error)}"
                             logger.error(log_msg)
                             print(log_msg)
                             traceback.print_exc()
@@ -3014,7 +3014,7 @@ Follow this specific style prompt: {prompt_text}"""
 
                     # Validate response and candidate
                     if not resp.candidates or len(resp.candidates) == 0:
-                        error_msg = f"⚠️ No candidates returned from Gemini API for {key} of {product.uploaded_image_url}"
+                        error_msg = f"⚠️ No candidates returned from AI API for {key} of {product.uploaded_image_url}"
                         if key == "campaign_image":
                             log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] ❌ CRITICAL ERROR: {error_msg}"
                             logger.error(log_msg)
@@ -3046,7 +3046,7 @@ Follow this specific style prompt: {prompt_text}"""
                              finish_reason == types.FinishReason.PROHIBITED_CONTENT)
                         )
                         if is_prohibited:
-                            error_msg = f"🚫 Content generation blocked by Gemini safety filters for {key} of {product.uploaded_image_url}"
+                            error_msg = f"🚫 Content generation blocked by AI safety filters for {key} of {product.uploaded_image_url}"
                             log_msg = f"[PRODUCT {product_idx}][{key.upper()}] ❌ SAFETY FILTER BLOCKED: {error_msg}"
                             logger.error(log_msg)
                             print(log_msg)
