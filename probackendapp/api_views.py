@@ -221,11 +221,13 @@ def api_project_detail(request, project_id):
                     'suggested_poses': item.suggested_poses or [],
                     'suggested_locations': item.suggested_locations or [],
                     'suggested_colors': item.suggested_colors or [],
+                    'suggested_outfits': getattr(item, 'suggested_outfits', None) or [],
                     'selected_themes': item.selected_themes or [],
                     'selected_backgrounds': item.selected_backgrounds or [],
                     'selected_poses': item.selected_poses or [],
                     'selected_locations': item.selected_locations or [],
                     'selected_colors': item.selected_colors or [],
+                    'selected_outfits': getattr(item, 'selected_outfits', None) or [],
                     'picked_colors': item.picked_colors or [],
                     'color_instructions': item.color_instructions or "",
                     'global_instructions': item.global_instructions or "",
@@ -234,6 +236,7 @@ def api_project_detail(request, project_id):
                     'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
                     'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
                     'uploaded_color_images': [img.to_mongo().to_dict() for img in item.uploaded_color_images],
+                    'uploaded_outfit_images': [img.to_mongo().to_dict() for img in (getattr(item, 'uploaded_outfit_images', None) or [])],
                     'final_moodboard_prompt': item.final_moodboard_prompt or "",
                     'generated_prompts': item.generated_prompts or {},
                     'generated_model_images': item.generated_model_images or [],
@@ -413,16 +416,19 @@ def api_collection_detail(request, collection_id):
                 'suggested_poses': item.suggested_poses or [],
                 'suggested_locations': item.suggested_locations or [],
                 'suggested_colors': item.suggested_colors or [],
+                'suggested_outfits': getattr(item, 'suggested_outfits', None) or [],
                 'selected_themes': item.selected_themes or [],
                 'selected_backgrounds': item.selected_backgrounds or [],
                 'selected_poses': item.selected_poses or [],
                 'selected_locations': item.selected_locations or [],
                 'selected_colors': item.selected_colors or [],
+                'selected_outfits': getattr(item, 'selected_outfits', None) or [],
                 'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images],
                 'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images],
                 'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images],
                 'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images],
                 'uploaded_color_images': [img.to_mongo().to_dict() for img in item.uploaded_color_images],
+                'uploaded_outfit_images': [img.to_mongo().to_dict() for img in (getattr(item, 'uploaded_outfit_images', None) or [])],
                 'final_moodboard_prompt': item.final_moodboard_prompt or "",
                 'generated_prompts': item.generated_prompts or {},
                 'generated_model_images': item.generated_model_images or [],
@@ -511,6 +517,7 @@ def api_project_setup_description(request, project_id):
             item.suggested_poses = suggestions.get("poses", [])
             item.suggested_locations = suggestions.get("locations", [])
             item.suggested_colors = suggestions.get("colors", [])
+            item.suggested_outfits = suggestions.get("outfits", [])
         else:
             # No description provided - clear suggestions (user will use uploaded images instead)
             item.suggested_themes = []
@@ -518,6 +525,7 @@ def api_project_setup_description(request, project_id):
             item.suggested_poses = []
             item.suggested_locations = []
             item.suggested_colors = []
+            item.suggested_outfits = []
 
         collection.save()
 
@@ -528,16 +536,19 @@ def api_project_setup_description(request, project_id):
             'suggested_poses': item.suggested_poses or [],
             'suggested_locations': item.suggested_locations or [],
             'suggested_colors': item.suggested_colors or [],
+            'suggested_outfits': getattr(item, 'suggested_outfits', None) or [],
             'selected_themes': item.selected_themes or [],
             'selected_backgrounds': item.selected_backgrounds or [],
             'selected_poses': item.selected_poses or [],
             'selected_locations': item.selected_locations or [],
             'selected_colors': item.selected_colors or [],
+            'selected_outfits': getattr(item, 'selected_outfits', None) or [],
             'uploaded_theme_images': [img.to_mongo().to_dict() for img in item.uploaded_theme_images] if item.uploaded_theme_images else [],
             'uploaded_background_images': [img.to_mongo().to_dict() for img in item.uploaded_background_images] if item.uploaded_background_images else [],
             'uploaded_pose_images': [img.to_mongo().to_dict() for img in item.uploaded_pose_images] if item.uploaded_pose_images else [],
             'uploaded_location_images': [img.to_mongo().to_dict() for img in item.uploaded_location_images] if item.uploaded_location_images else [],
             'uploaded_color_images': [img.to_mongo().to_dict() for img in item.uploaded_color_images] if item.uploaded_color_images else [],
+            'uploaded_outfit_images': [img.to_mongo().to_dict() for img in (getattr(item, 'uploaded_outfit_images', None) or [])],
             'generated_prompts': item.generated_prompts or {},
             'generated_model_images': item.generated_model_images or [],
             'picked_colors': item.picked_colors or [],
@@ -569,17 +580,17 @@ def api_project_setup_description(request, project_id):
         return Response({'error': str(e)}, status=500)
 
 
-def analyze_uploaded_image(cloud_url, category):
+def analyze_uploaded_image(cloud_url, category, local_path=None):
     """
     Analyze an uploaded image using AI Vision API based on its category.
-    Uses the utility function from utils.py for REST API calls.
+    Prefers local_path (more reliable) and falls back to cloud_url.
     Returns a descriptive analysis paragraph.
     For theme images, also extracts ornament_type, angle_shot, and theme_description.
     """
     try:
         from .analysisprompt import (
             theme_prompt, background_prompt, pose_prompt,
-            location_prompt, color_prompt
+            location_prompt, color_prompt, outfit_prompt
         )
         from .utils import call_gemini_api
 
@@ -589,7 +600,8 @@ def analyze_uploaded_image(cloud_url, category):
             'background': background_prompt,
             'pose': pose_prompt,
             'location': location_prompt,
-            'color': color_prompt
+            'color': color_prompt,
+            'outfit': outfit_prompt,
         }
 
         analysis_prompt = category_prompts.get(category, theme_prompt)
@@ -602,13 +614,25 @@ def analyze_uploaded_image(cloud_url, category):
             print("⚠️ AI is not configured, skipping image analysis")
             return {"analysis": "", "ornament_type": "", "angle_shot": "", "theme_description": ""}
 
-        # Use the utility function to call Gemini API with image URL
-        if not cloud_url:
-            print("⚠️ No cloud URL provided for image analysis")
+        has_local = bool(local_path and os.path.exists(local_path))
+        if not has_local and not cloud_url:
+            print("⚠️ No local path or cloud URL provided for image analysis")
             return {"analysis": "", "ornament_type": "", "angle_shot": "", "theme_description": ""}
 
-        print(f"DEBUG: Analyzing {category} image from URL: {cloud_url}")
-        analysis_result = call_gemini_api(analysis_prompt, image_url=cloud_url)
+        print(
+            f"DEBUG: Analyzing {category} image "
+            f"(local={local_path if has_local else 'N/A'}, url={cloud_url or 'N/A'})"
+        )
+        analysis_result = call_gemini_api(
+            analysis_prompt,
+            image_path=local_path if has_local else None,
+            image_url=None if has_local else cloud_url,
+        )
+
+        # If local analysis failed and cloud URL exists, retry via URL
+        if not analysis_result and has_local and cloud_url:
+            print(f"DEBUG: Local analysis failed for {category}, retrying via cloud URL")
+            analysis_result = call_gemini_api(analysis_prompt, image_url=cloud_url)
 
         if analysis_result:
             print("DEBUG: Analysis completed successfully")
@@ -941,13 +965,14 @@ def api_upload_workflow_image(request, project_id, collection_id):
             'backgrounds': 'background',
             'poses': 'pose',
             'locations': 'location',
-            'colors': 'color'
+            'colors': 'color',
+            'outfits': 'outfit',
         }
 
         # Convert plural to singular if needed
         normalized_category = category_mapping.get(category, category)
 
-        if normalized_category not in ['theme', 'background', 'pose', 'location', 'color']:
+        if normalized_category not in ['theme', 'background', 'pose', 'location', 'color', 'outfit']:
             print(
                 f"DEBUG: Invalid category: {category} (normalized: {normalized_category})")
             return Response({'error': 'Invalid category'}, status=400)
@@ -981,9 +1006,11 @@ def api_upload_workflow_image(request, project_id, collection_id):
             )
             cloud_url = upload_result.get("secure_url")
 
-            # Analyze the image based on its category using cloud URL
+            # Analyze the image based on its category (prefer local file)
             print(f"DEBUG: Analyzing {category} image: {filename}")
-            analysis_result = analyze_uploaded_image(cloud_url, category)
+            analysis_result = analyze_uploaded_image(
+                cloud_url, category, local_path=absolute_path
+            )
 
             # Handle both old format (string) and new format (dict)
             if isinstance(analysis_result, dict):
@@ -1130,11 +1157,12 @@ def api_remove_workflow_image(request, project_id, collection_id):
             'backgrounds': 'background',
             'poses': 'pose',
             'locations': 'location',
-            'colors': 'color'
+            'colors': 'color',
+            'outfits': 'outfit',
         }
         normalized_category = category_mapping.get(category, category)
 
-        if normalized_category not in ['theme', 'background', 'pose', 'location', 'color']:
+        if normalized_category not in ['theme', 'background', 'pose', 'location', 'color', 'outfit']:
             return Response({'error': 'Invalid category'}, status=400)
 
         category = normalized_category
@@ -1192,14 +1220,19 @@ def api_remove_workflow_image(request, project_id, collection_id):
 def api_project_setup_select(request, project_id, collection_id):
     """API wrapper for project setup select - saves user selections and generates prompts"""
     try:
-        from .utils import call_gemini_api, parse_gemini_response
+        from .utils import (
+            call_gemini_api,
+            parse_gemini_response,
+            normalize_analysis_text,
+        )
+        from imgbackendapp.file_utils import resolve_media_path
 
         # Handle both JSON and FormData requests
         if request.content_type and 'multipart/form-data' in request.content_type:
             # Handle FormData (with image uploads)
             data = json.loads(request.POST.get('selections', '{}'))
             uploaded_files = {}
-            for category in ['theme', 'background', 'pose', 'location', 'color']:
+            for category in ['theme', 'background', 'pose', 'location', 'color', 'outfit']:
                 files = request.FILES.getlist(f'uploaded_{category}_images')
                 if files:
                     uploaded_files[category] = files
@@ -1226,6 +1259,7 @@ def api_project_setup_select(request, project_id, collection_id):
         item.selected_poses = data.get('poses', [])
         item.selected_locations = data.get('locations', [])
         item.selected_colors = data.get('colors', [])
+        item.selected_outfits = data.get('outfits', [])
 
         # Update new color picker fields
         item.picked_colors = data.get('pickedColors', [])
@@ -1245,14 +1279,15 @@ def api_project_setup_select(request, project_id, collection_id):
             'background': [],
             'pose': [],
             'location': [],
-            'color': []
+            'color': [],
+            'outfit': [],
         }
         has_uploaded_images = False
         categories_with_uploads = []
 
         # Check each category for uploaded images and collect their stored analysis
         # Use master analysis if multiple images exist, otherwise use individual analysis
-        for category in ['theme', 'background', 'pose', 'location', 'color']:
+        for category in ['theme', 'background', 'pose', 'location', 'color', 'outfit']:
             category_field = f"uploaded_{category}_images"
             if hasattr(item, category_field):
                 uploaded_imgs = getattr(item, category_field)
@@ -1298,23 +1333,59 @@ def api_project_setup_select(request, project_id, collection_id):
                     else:
                         # Use individual analysis for each image (single image or no master analysis yet)
                         for img in uploaded_imgs:
-                            # Use stored analysis if available, otherwise provide generic instruction
-                            if hasattr(img, 'analysis') and img.analysis and img.analysis.strip():
+                            raw_analysis = getattr(img, 'analysis', None) or ""
+                            clean_analysis = normalize_analysis_text(raw_analysis, category)
+
+                            # Re-analyze if stored analysis is missing/placeholder
+                            if not clean_analysis:
+                                local_path = None
+                                stored = getattr(img, 'local_path', None)
+                                if stored:
+                                    try:
+                                        resolved = resolve_media_path(stored)
+                                        if resolved and os.path.exists(resolved):
+                                            local_path = resolved
+                                    except Exception:
+                                        local_path = None
+                                print(
+                                    f"DEBUG: Re-analyzing empty {category} image "
+                                    f"{getattr(img, 'original_filename', 'unknown')}"
+                                )
+                                reanalysis = analyze_uploaded_image(
+                                    getattr(img, 'cloud_url', None),
+                                    category,
+                                    local_path=local_path,
+                                )
+                                if isinstance(reanalysis, dict):
+                                    if category == 'theme':
+                                        raw_analysis = reanalysis.get('analysis') or ""
+                                        if reanalysis.get('theme_description'):
+                                            img.theme_description = reanalysis.get('theme_description')
+                                        if reanalysis.get('ornament_type'):
+                                            img.ornament_type = reanalysis.get('ornament_type')
+                                        if reanalysis.get('angle_shot'):
+                                            img.angle_shot = reanalysis.get('angle_shot')
+                                    else:
+                                        raw_analysis = reanalysis.get('analysis') or ""
+                                    if raw_analysis:
+                                        img.analysis = raw_analysis
+                                    clean_analysis = normalize_analysis_text(raw_analysis, category)
+
+                            if clean_analysis:
                                 category_analysis[category].append({
                                     'filename': img.original_filename,
-                                    'analysis': img.analysis
+                                    'analysis': clean_analysis
                                 })
                             else:
-                                # Fallback if analysis is not available
-                                category_analysis[category].append({
-                                    'filename': img.original_filename,
-                                    'analysis': "analyze lighting, style, subject composition, camera angle, and color mood from this reference image."
-                                })
+                                print(
+                                    f"⚠️ Still no usable analysis for {category} "
+                                    f"image {getattr(img, 'original_filename', 'unknown')}"
+                                )
 
         # Generate master analysis for categories with multiple images (only if not already present)
         # For each category with more than one image, generate a master analysis for each image
         # that combines all analyses from that category into a comprehensive paragraph
-        for category in ['theme', 'background', 'pose', 'location', 'color']:
+        for category in ['theme', 'background', 'pose', 'location', 'color', 'outfit']:
             category_field = f"uploaded_{category}_images"
             if hasattr(item, category_field):
                 uploaded_imgs = getattr(item, category_field)
@@ -1517,7 +1588,8 @@ Individual analyses:
                         # Use individual analysis for each image (single image or no master analysis)
                         analysis_text += f"\n{cat.capitalize()} Images ({len(category_analysis[cat])} uploaded):\n"
                         for img_data in category_analysis[cat]:
-                            analysis_text += f"- {img_data['filename']}: {img_data['analysis']}\n"
+                            cleaned = normalize_analysis_text(img_data['analysis'], cat)
+                            analysis_text += f"- {img_data['filename']}: {cleaned or img_data['analysis']}\n"
             return analysis_text
 
         # Build analysis strings for each prompt type
@@ -1525,9 +1597,9 @@ Individual analyses:
         background_replace_analysis = build_analysis_string(
             ['theme', 'background'])
         model_image_analysis = build_analysis_string(
-            ['theme', 'background', 'pose', 'color'])
+            ['theme', 'background', 'pose', 'color', 'outfit'])
         campaign_image_analysis = build_analysis_string(
-            ['theme', 'background', 'pose', 'location', 'color'])
+            ['theme', 'background', 'pose', 'location', 'color', 'outfit'])
 
         # Prepare color information for model_image (if no color images uploaded)
         # These will be used in the prompt to show color priority
@@ -1548,7 +1620,7 @@ Individual analyses:
         # Build full uploaded images analysis for general context (used in the prompt)
         # Use master analysis if multiple images exist, otherwise use individual analysis
         uploaded_images_analysis = ""
-        for category in ['theme', 'background', 'pose', 'location', 'color']:
+        for category in ['theme', 'background', 'pose', 'location', 'color', 'outfit']:
             if category_analysis[category]:
                 category_field = f"uploaded_{category}_images"
                 uploaded_imgs = getattr(item, category_field, []) if hasattr(
@@ -1582,6 +1654,7 @@ Individual analyses:
         final_poses = []
         final_locations = []
         final_colors = []
+        final_outfits = []
 
         # Only use selected/suggested items for categories that DON'T have uploaded images
         if 'theme' not in categories_with_uploads:
@@ -1608,6 +1681,11 @@ Individual analyses:
                 final_colors = item.selected_colors if item.selected_colors else (
                     item.suggested_colors[:3] if item.suggested_colors else [])
 
+        if 'outfit' not in categories_with_uploads:
+            selected_outfits = getattr(item, 'selected_outfits', None) or []
+            suggested_outfits = getattr(item, 'suggested_outfits', None) or []
+            final_outfits = selected_outfits if selected_outfits else (
+                suggested_outfits[:3] if suggested_outfits else [])
         # Handle picked colors, color instructions, and global instructions
         picked_colors_info = ""
         if item.picked_colors:
@@ -1642,6 +1720,18 @@ Individual analyses:
         # Create detailed prompt based on whether images were uploaded
         from .prompt_initializer import get_prompt_from_db
 
+        target_audience_text = (collection.target_audience or "").strip() or "Not specified"
+        campaign_season_text = (collection.campaign_season or "").strip() or "Not specified"
+        audience_season_block = f"""
+TARGET AUDIENCE (MANDATORY — apply to EVERY prompt):
+{target_audience_text}
+
+CAMPAIGN SEASON (MANDATORY — apply to EVERY prompt):
+{campaign_season_text}
+
+Audience & season must shape mood, styling, cultural cues, color temperature, and presentation for both AI moodboard selections and uploaded reference images.
+"""
+
         if has_uploaded_images:
             # Use a more appropriate message when description is empty
             collection_desc_text = collection.description.strip() if collection.description and collection.description.strip(
@@ -1650,7 +1740,7 @@ Individual analyses:
             default_prompt = """You are a professional creative AI assistant specializing in product photography and marketing. You have been provided with a collection description and user-uploaded reference images that should be analyzed in detail to create highly specific and targeted image generation prompts.
 
 COLLECTION DESCRIPTION: {collection_description}
-
+{audience_season_block}
 ALL USER-UPLOADED REFERENCE IMAGES (for context):
 {uploaded_images_analysis}
 
@@ -1659,7 +1749,8 @@ Themes: {themes}
 Backgrounds: {backgrounds}
 Poses: {poses}
 Locations: {locations}
-Colors: {colors}{picked_colors_info}{global_instructions_info}
+Colors: {colors}
+Outfits: {outfits}{picked_colors_info}{global_instructions_info}
 
 RULES FOR PROMPT CREATION:
 1. CRITICAL: MUST take ALL analyses into consideration. Every detail from every uploaded image analysis must be incorporated into the relevant prompts.
@@ -1669,9 +1760,10 @@ RULES FOR PROMPT CREATION:
 5. Be specific — describe lighting, materials, perspective, model type, emotion, background details, and ALL elements from the analyses.
 6. Keep prompts actionable and detailed for AI image generation systems.
 7. COLOR PRIORITY: If picked colors are provided, use them as the primary color scheme. If only selected suggestions are provided, use those instead.
-8. MODEL ATTIRE: For MODEL_IMAGE and CAMPAIGN_IMAGE, the model's attire MUST be changed according to the theme analysis. Extract specific clothing details, fabric types, colors, patterns, and styling elements from theme analysis.
+8. MODEL ATTIRE / OUTFIT (MANDATORY): For MODEL_IMAGE and CAMPAIGN_IMAGE, dress the model in the selected/analyzed OUTFIT. Prefer outfit image analysis when available; otherwise use selected outfit suggestions. Include garment type, silhouette, fabric, colors, patterns, and styling. Theme analysis may refine mood, but outfit direction is the wardrobe source of truth.
 9. MODEL CONSISTENCY (CRITICAL): For MODEL_IMAGE and CAMPAIGN_IMAGE, the model MUST look EXACTLY the same across ALL generated images. Maintain EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age - maintain exact same age look), EXACT same skin characteristics (skin texture, tone, undertones, complexion, facial maturity), EXACT same hair (color, texture, style, length, hairline), and EXACT same body proportions (height, build, body shape, muscle definition) across ALL images.
 10. MODEL ACCURACY: For MODEL_IMAGE and CAMPAIGN_IMAGE, ensure the model is 100% accurate - realistic human features, accurate facial proportions, natural body proportions, authentic skin texture, and lifelike appearance. No distortions, no unrealistic features, no AI artifacts.
+11. TARGET AUDIENCE & SEASON (MANDATORY): Every prompt MUST be tailored for the given target audience and campaign season — even when using uploaded moodboard images.
 {global_instruction_rule}
 
 IMPORTANT - USE SPECIFIC ANALYSIS FOR EACH PROMPT TYPE:
@@ -1689,10 +1781,10 @@ IMPORTANT - USE SPECIFIC ANALYSIS FOR EACH PROMPT TYPE:
    - Analysis to use: {background_replace_analysis}
 
 3. MODEL_IMAGE:
-   - CRITICAL: MUST take ALL analyses into consideration (theme, background, pose, and color image analysis)
+   - CRITICAL: MUST take ALL analyses into consideration (theme, background, pose, color, and outfit image analysis)
    - For colors: prioritize uploaded color images if available, otherwise use picked colors, otherwise use selected colors
    - Incorporate poses, expressions, styling, and color palettes from uploaded images
-   - MANDATORY: Change the attire of the model according to the theme analysis. The model's clothing, style, and overall appearance MUST match the theme and background aesthetic from the uploaded images. Extract specific clothing details, fabric types, colors, and styling elements from the theme analysis.
+   - MANDATORY OUTFIT: Dress the model using outfit image analysis when available, otherwise selected outfit suggestions ({outfits}). Include garment type, silhouette, fabric, colors, patterns, and styling details. Theme may refine mood, but outfit is the wardrobe source of truth.
    - MODEL CONSISTENCY REQUIREMENT (CRITICAL): The model must look EXACTLY the same across ALL generated images with:
      * EXACT same facial structure: jawline, cheekbones, chin, forehead, facial proportions, face width, face length
      * EXACT same eye structure: eye shape, eye size, eye spacing, eyelid shape, eyebrow shape and position
@@ -1707,9 +1799,9 @@ IMPORTANT - USE SPECIFIC ANALYSIS FOR EACH PROMPT TYPE:
    - Color priority: Uploaded color images > Picked colors ({picked_colors_for_model}) > Selected colors ({selected_colors_for_model})
 
 4. CAMPAIGN_IMAGE:
-   - CRITICAL: MUST take ALL category analyses into consideration (theme, background, pose, location, color)
+   - CRITICAL: MUST take ALL category analyses into consideration (theme, background, pose, location, color, outfit)
    - Incorporate comprehensive visual elements from ALL uploaded reference images - every detail matters
-   - MANDATORY: Change the attire of the model according to the theme analysis. The model's clothing, style, and overall appearance MUST match the theme aesthetic from the uploaded images. Extract specific clothing details, fabric types, colors, and styling elements from the theme analysis.
+   - MANDATORY OUTFIT: Dress the model using outfit image analysis when available, otherwise selected outfit suggestions ({outfits}). Include garment type, silhouette, fabric, colors, patterns, and styling details. Theme may refine mood, but outfit is the wardrobe source of truth.
    - MODEL CONSISTENCY REQUIREMENT (CRITICAL): The model must look EXACTLY the same across ALL generated images with:
      * EXACT same facial structure: jawline, cheekbones, chin, forehead, facial proportions, face width, face length
      * EXACT same eye structure: eye shape, eye size, eye spacing, eyelid shape, eyebrow shape and position
@@ -1727,14 +1819,17 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 {{
     "white_background": "Detailed prompt for white background product photography (DO NOT use uploaded image analysis)",
     "background_replace": "Detailed prompt using ONLY theme and background analysis. Incorporate visual elements, style, and aesthetic from theme and background images.",
-    "model_image": "Detailed prompt using ALL analyses (theme, background, pose, and color). MUST change model attire to match theme analysis exactly. CRITICAL: Model must look EXACTLY the same with EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age), EXACT same skin characteristics, EXACT same hair, and EXACT same body proportions across ALL images. Model must be 100% accurate with realistic features, accurate facial proportions, natural body proportions, and lifelike appearance. Include specific clothing details, fabric types, colors, and styling from theme analysis.",
-    "campaign_image": "Detailed prompt using ALL category analyses (theme, background, pose, location, color). MUST change model attire to match theme analysis exactly. CRITICAL: Model must look EXACTLY the same with EXACT same facial structure (jawline, cheekbones, chin, forehead, facial proportions), EXACT same eye structure (eye shape, size, spacing, eyelid, eyebrow), EXACT same nose structure, EXACT same mouth structure, EXACT same age appearance (do NOT change age), EXACT same skin characteristics, EXACT same hair, and EXACT same body proportions across ALL images. Model must be 100% accurate with realistic features, accurate facial proportions, natural body proportions, and lifelike appearance. Include specific clothing details, fabric types, colors, and styling from theme analysis. Create a cohesive campaign shot capturing mood, composition, and style from all references."
+    "model_image": "Detailed prompt using ALL analyses (theme, background, pose, color, outfit). MUST dress the model in the specified OUTFIT (garment type, silhouette, fabric, colors, styling). CRITICAL: Model must look EXACTLY the same with EXACT same facial structure, eye structure, nose, mouth, age appearance, skin, hair, and body proportions across ALL images. Model must be 100% accurate with realistic features.",
+    "campaign_image": "Detailed prompt using ALL category analyses (theme, background, pose, location, color, outfit). MUST dress the model in the specified OUTFIT (garment type, silhouette, fabric, colors, styling). CRITICAL: Model consistency and accuracy requirements apply. Create a cohesive campaign shot capturing mood, composition, and style from all references."
 }}"""
 
             gemini_prompt = get_prompt_from_db(
                 'generation_prompt_with_images',
                 default_prompt,
                 collection_description=collection_desc_text,
+                audience_season_block=audience_season_block,
+                target_audience=target_audience_text,
+                campaign_season=campaign_season_text,
                 uploaded_images_analysis=uploaded_images_analysis,
                 background_replace_analysis=background_replace_analysis or 'None',
                 model_image_analysis=model_image_analysis or 'None',
@@ -1746,6 +1841,7 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
                 poses=', '.join(final_poses) or 'None',
                 locations=', '.join(final_locations) or 'None',
                 colors=', '.join(final_colors) or 'None',
+                outfits=', '.join(final_outfits) or 'None',
                 picked_colors_info=picked_colors_info,
                 global_instructions_info=global_instructions_info,
                 global_instruction_rule=global_instruction_rule
@@ -1754,23 +1850,31 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
             default_prompt = """You are a professional creative AI assistant. Analyze the collection description and user selections carefully and generate structured image generation prompts.
 
 Collection Description: {collection_description}
+{audience_season_block}
 Selected Themes: {themes}
 Selected Backgrounds: {backgrounds}
 Selected Poses: {poses}
 Selected Locations: {locations}
-Selected Colors: {colors}{picked_colors_info}{global_instructions_info}
+Selected Colors: {colors}
+Selected Outfits: {outfits}{picked_colors_info}{global_instructions_info}
 
 {instructions}
 
 {rules}
 {global_instruction_rule}
 
+OUTFIT REQUIREMENT (MANDATORY for model_image and campaign_image):
+Dress the model in the Selected Outfits above. Include garment type, silhouette, fabric, colors, patterns, and styling details in those prompts.
+
+AUDIENCE & SEASON REQUIREMENT (MANDATORY for ALL prompts):
+Tailor mood, styling, and presentation for Target Audience "{target_audience}" and Campaign Season "{campaign_season}".
+
 Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 {{
     "white_background": "Prompt for white background images of the product, sharp, clean, isolated.",
     "background_replace": "Prompt for images with themed backgrounds while keeping the product identical.",
-    "model_image": "Prompt to generate realistic model wearing/holding the product. Model must be 100% accurate with realistic human features, accurate facial proportions, natural body proportions, authentic skin texture, and lifelike appearance. Match selected poses and expressions, photo should be focused mainly on the product.",
-    "campaign_image": "Prompt for campaign/promotional shots with models and products in themed backgrounds, stylish composition. Model must be 100% accurate with realistic human features, accurate facial proportions, natural body proportions, authentic skin texture, and lifelike appearance."
+    "model_image": "Prompt to generate realistic model wearing/holding the product, dressed in the selected outfit(s). Model must be 100% accurate with realistic human features. Match selected poses and expressions, photo should be focused mainly on the product.",
+    "campaign_image": "Prompt for campaign/promotional shots with models and products in themed backgrounds, dressed in the selected outfit(s), stylish composition. Model must be 100% accurate with realistic human features."
 }}"""
 
             # Use a more appropriate message when description is empty
@@ -1781,26 +1885,66 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
                 'generation_prompt_simple',
                 default_prompt,
                 collection_description=collection_desc_text,
+                audience_season_block=audience_season_block,
+                target_audience=target_audience_text,
+                campaign_season=campaign_season_text,
                 themes=', '.join(final_themes) or 'None',
                 backgrounds=', '.join(final_backgrounds) or 'None',
                 poses=', '.join(final_poses) or 'None',
                 locations=', '.join(final_locations) or 'None',
                 colors=', '.join(final_colors) or 'None',
+                outfits=', '.join(final_outfits) or 'None',
                 picked_colors_info=picked_colors_info,
                 global_instructions_info=global_instructions_info,
                 global_instruction_rule=global_instruction_rule
             )
+
+        # Always inject outfit direction so older DB prompt templates still use outfits
+        outfit_analysis_text = build_analysis_string(['outfit']).strip()
+        outfit_direction = ', '.join(final_outfits) if final_outfits else 'None'
+        if outfit_analysis_text or (outfit_direction and outfit_direction != 'None'):
+            gemini_prompt = (
+                f"{gemini_prompt}\n\n"
+                "MANDATORY OUTFIT / ATTIRE DIRECTION FOR model_image AND campaign_image:\n"
+                f"- Selected outfit suggestions: {outfit_direction}\n"
+                f"- Outfit image analysis (priority when present):\n{outfit_analysis_text or 'None'}\n"
+                "Dress the model using this outfit direction. Include garment type, silhouette, fabric, colors, patterns, and styling. "
+                "Do NOT leave attire generic when outfit direction is provided."
+            )
+
+        # Always inject audience + season (covers older DB templates missing placeholders)
+        gemini_prompt = (
+            f"{gemini_prompt}\n\n"
+            "MANDATORY TARGET AUDIENCE & CAMPAIGN SEASON (apply to ALL 4 prompts):\n"
+            f"- Target audience: {target_audience_text}\n"
+            f"- Campaign season: {campaign_season_text}\n"
+            "Whether using uploaded moodboard images or AI-selected chips, every prompt must remain "
+            "relevant to this audience and season (mood, cultural cues, styling, and presentation)."
+        )
 
         # Debug information
         print(
             f"DEBUG: Categories with uploaded images: {categories_with_uploads}")
         print(f"DEBUG: Has uploaded images: {has_uploaded_images}")
         print(
-            f"DEBUG: Final selections - Themes: {final_themes}, Backgrounds: {final_backgrounds}, Poses: {final_poses}, Locations: {final_locations}, Colors: {final_colors}")
+            f"DEBUG: Final selections - Themes: {final_themes}, Backgrounds: {final_backgrounds}, Poses: {final_poses}, Locations: {final_locations}, Colors: {final_colors}, Outfits: {final_outfits}")
 
-        # Call Gemini API
-        print(f"DEBUG: Gemini prompt: {gemini_prompt}")
-        ai_json_text = call_gemini_api(gemini_prompt)
+        # Moodboard images are analyzed earlier (on upload / re-analyze). Prompt generation
+        # uses ONLY those text analyses — never re-send raw moodboard images to the AI.
+        text_only_prompt = (
+            f"{gemini_prompt}\n\n"
+            "CRITICAL TEXT-ANALYSIS GROUNDING:\n"
+            "Uploaded moodboard images have already been analyzed into the text analyses above. "
+            "Write all 4 prompts using ONLY those analyses + selected chips. "
+            "Do NOT invent generic studio looks when analysis text is provided. "
+            "For model_image and campaign_image, wardrobe must match OUTFIT analysis/suggestions when present."
+        )
+        print(
+            "DEBUG: Generating prompts from moodboard TEXT analyses only "
+            "(no raw moodboard images sent)"
+        )
+        print(f"DEBUG: Gemini prompt length: {len(text_only_prompt)}")
+        ai_json_text = call_gemini_api(text_only_prompt)
         ai_response = parse_gemini_response(ai_json_text)
 
         # Fallback if parsing failed
@@ -1820,11 +1964,11 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
             if key not in ai_response or not ai_response[key]:
                 ai_response[key] = f"Generated prompt for {key.replace('_', ' ')} based on your collection theme"
 
-        # Save prompts in item
+        # Save prompts in item (reassign to ensure nested analysis updates persist)
         item.final_moodboard_prompt = gemini_prompt
         item.moodboard_explanation = ai_json_text
         item.generated_prompts = ai_response
-
+        collection.items[0] = item
         collection.save()
 
         print("✅ Prompts generated and saved successfully")
@@ -1838,6 +1982,7 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
                 'poses': item.selected_poses,
                 'locations': item.selected_locations,
                 'colors': item.selected_colors,
+                'outfits': getattr(item, 'selected_outfits', None) or [],
                 'pickedColors': item.picked_colors,
                 'colorInstructions': item.color_instructions,
                 'globalInstructions': item.global_instructions,
@@ -1991,7 +2136,9 @@ def api_generate_all_product_model_images(request, collection_id):
                         'plainBg': product.generation_selections.get('plainBg', False),
                         'bgReplace': product.generation_selections.get('bgReplace', False),
                         'model': product.generation_selections.get('model', False),
-                        'campaign': product.generation_selections.get('campaign', False)
+                        'campaign': product.generation_selections.get('campaign', False),
+                        'modelTiers': product.generation_selections.get('modelTiers') or {},
+                        'aspectRatios': product.generation_selections.get('aspectRatios') or {},
                     }
             if stored_selections:
                 image_type_selections = stored_selections
@@ -2005,6 +2152,14 @@ def api_generate_all_product_model_images(request, collection_id):
             'model': 'model_image',
             'campaign': 'campaign_image'
         }
+        allowed_aspect_ratios = {
+            "1:1", "4:5", "5:4", "3:4", "4:3", "9:16", "16:9", "2:3", "3:2", "21:9"
+        }
+
+        def resolve_aspect_ratio_for_product(selections_dict, frontend_key):
+            raw = (selections_dict or {}).get('aspectRatios') or {}
+            ratio = str(raw.get(frontend_key) or "1:1").strip()
+            return ratio if ratio in allowed_aspect_ratios else "1:1"
 
         # Get available prompt keys from generated_prompts
         available_prompt_keys = list((item.generated_prompts or {}).keys())
@@ -2044,13 +2199,34 @@ def api_generate_all_product_model_images(request, collection_id):
             logger.info(
                 f"Cancelled old job {old_job.job_id} for collection {collection_id}")
 
-        # Clear existing generated images from all products before starting new batch
-        # This ensures only images from the current batch are shown
-        for product in item.product_images:
+        # Clear existing generated images and persist latest aspect-ratio selections
+        # so Celery workers always see the user's chosen dimensions.
+        for idx, product in enumerate(item.product_images):
             if hasattr(product, 'generated_images'):
                 product.generated_images = []
 
-        # Save the collection to persist the cleared images
+            product_idx_str = str(idx)
+            req_sel = (image_type_selections or {}).get(product_idx_str) or {}
+            if req_sel:
+                current = dict(getattr(product, 'generation_selections', None) or {})
+                raw_aspect = req_sel.get('aspectRatios') or current.get('aspectRatios') or {}
+                aspect_ratios = {}
+                for key in ('plainBg', 'bgReplace', 'model', 'campaign'):
+                    ratio = str((raw_aspect.get(key) if isinstance(raw_aspect, dict) else None) or '1:1').strip()
+                    aspect_ratios[key] = ratio if ratio in allowed_aspect_ratios else '1:1'
+                current.update({
+                    'plainBg': bool(req_sel.get('plainBg', current.get('plainBg', False))),
+                    'bgReplace': bool(req_sel.get('bgReplace', current.get('bgReplace', False))),
+                    'model': bool(req_sel.get('model', current.get('model', False))),
+                    'campaign': bool(req_sel.get('campaign', current.get('campaign', False))),
+                    'modelTiers': req_sel.get('modelTiers') or current.get('modelTiers') or {},
+                    'aspectRatios': aspect_ratios,
+                })
+                product.generation_selections = current
+                item.product_images[idx] = product
+
+        # Save the collection to persist the cleared images + aspect ratios
+        collection.items[0] = item
         collection.save()
 
         # Determine how many images will be generated
@@ -2121,14 +2297,25 @@ def api_generate_all_product_model_images(request, collection_id):
                 # No selections provided: generate all types for all products (backward compatibility)
                 product_selected_keys = selected_keys
 
-            # Create tasks only for selected keys
+            # Create tasks only for selected keys (pass per-type aspect ratio explicitly)
+            reverse_key_mapping = {v: k for k, v in key_mapping.items()}
+            product_req_sel = (image_type_selections or {}).get(product_idx_str) or {}
+            if not product_req_sel:
+                product_req_sel = getattr(item.product_images[idx], 'generation_selections', None) or {}
+
             for key in product_selected_keys:
+                frontend_key = reverse_key_mapping.get(key, '')
+                task_aspect = resolve_aspect_ratio_for_product(product_req_sel, frontend_key)
+                print(
+                    f"[GENERATE] product={idx} type={key} aspect_ratio={task_aspect}"
+                )
                 task_sig = generate_single_image_task.s(
                     job_id,
                     str(collection_id),
                     user_id,
                     idx,
                     key,
+                    task_aspect,
                 )
                 # Set queue for this task
                 task_sig.set(queue=queue_name)
@@ -3626,13 +3813,23 @@ def api_update_product_generation_selections(request, collection_id):
                 if not isinstance(selections, dict):
                     continue
 
-                # Update generation_selections
+                # Update generation_selections (include per-type aspect ratios)
+                allowed_ratios = {
+                    "1:1", "4:5", "5:4", "3:4", "4:3", "9:16", "16:9", "2:3", "3:2", "21:9"
+                }
+                raw_aspect = selections.get("aspectRatios") or {}
+                aspect_ratios = {}
+                for key in ("plainBg", "bgReplace", "model", "campaign"):
+                    ratio = str((raw_aspect.get(key) if isinstance(raw_aspect, dict) else None) or "1:1").strip()
+                    aspect_ratios[key] = ratio if ratio in allowed_ratios else "1:1"
+
                 product.generation_selections = {
                     "plainBg": bool(selections.get("plainBg", False)),
                     "bgReplace": bool(selections.get("bgReplace", False)),
                     "model": bool(selections.get("model", False)),
                     "campaign": bool(selections.get("campaign", False)),
                     "modelTiers": selections.get("modelTiers") or {},
+                    "aspectRatios": aspect_ratios,
                 }
 
                 # Mark the product as modified

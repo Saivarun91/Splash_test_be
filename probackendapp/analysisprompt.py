@@ -1,29 +1,32 @@
 theme_prompt = """
-Analyze this image and return a JSON object with the following structure:
+Analyze THIS uploaded moodboard THEME reference image carefully with vision, then return a JSON object with the following structure:
 
 {
-  "type": "the specific type of ornament in the format 'subcategory(main_category)' where subcategory includes all modifiers and main_category is the MOST HIGHLIGHTED/PROMINENT ornament in the image. Examples: 'long necklace(necklace)', 'multi-layered pearl and gold necklace(necklace)', 'jhumka-style earrings(earrings)', 'stud earrings(earrings)', 'chunky bracelet(bracelet)', 'diamond ring(ring)'. IMPORTANT: Identify which ornament is the MAIN/MOST HIGHLIGHTED ornament in the image (necklace, earrings, bracelet, ring, anklet, brooch, etc.) - this becomes the main_category in parentheses. Other ornaments present in the image can be mentioned in the description but should NOT be in the type field. If no ornament is present, return empty string.",
-  "description": "one professional creative-direction paragraph defining the THEME including: artistic style, overall mood, core creative concept, and camera angle/shot angle when describing ornaments (e.g., 'photographed from an overhead 90-degree angle', 'captured in a flat-lay top-down view', 'shot from a slight diagonal angle above', etc.). You can mention other ornaments present in the image in the description, but the type field should only contain the MOST HIGHLIGHTED ornament. The description should be written in design-brief direction style, using confident descriptive present-tense language. Do NOT use third-person narration. Do NOT say 'this image', 'it shows', 'the image captures', etc."
+  "type": "If jewelry/ornament is clearly visible: 'subcategory(main_category)' e.g. 'long necklace(necklace)', 'jhumka-style earrings(earrings)', 'diamond ring(ring)'. If NO jewelry/ornament is visible, return an empty string.",
+  "description": "one detailed creative-direction paragraph grounded ONLY in what is visible: artistic style, mood, lighting quality/direction, color atmosphere, composition/framing, textures, props, and camera angle. Write as a design brief in confident present tense. Do NOT say 'this image', 'it shows', or 'the image captures'."
 }
 
 STRICT RULES:
-• CRITICAL: The type must be in the format 'subcategory(main_category)' where main_category is the SINGLE MOST PROMINENT/HIGHLIGHTED ornament in the image (e.g., if necklace is most highlighted, use 'long necklace(necklace)' even if earrings are also present)
-• If multiple ornaments are present, identify which one is the MAIN/MOST HIGHLIGHTED and use only that in the type field
-• Other ornaments can be mentioned in the description but should NOT appear in the type field
+• You MUST visually inspect the uploaded image and ground every detail in what is actually visible
+• PRIORITY: capture the visual theme/mood accurately even when no jewelry is present
+• type is optional — only fill it when jewelry is clearly the subject; otherwise use ""
+• If jewelry is present, include camera angle/shot angle in the description
 • The description must be a flowing paragraph (not bullet points or lists)
-• If ornaments are present, the description must include the camera angle/shot angle
-• The description should focus on artistic style, mood, and creative concept
+• Do NOT invent jewelry, props, or styling that are not visible
 • Return ONLY valid JSON, no other text
 """
 
 
 background_prompt = """
-Write one professional scene-layout paragraph defining the BACKGROUND using:
-- background elements
-- physical objects
-- spatial placement and arrangement
+Visually analyze THIS uploaded background/backdrop reference image, then write one professional scene-layout paragraph defining the BACKGROUND using what you actually see:
+- background elements, textures, and surfaces
+- physical objects and props
+- spatial placement, depth, and arrangement
+- lighting direction, softness, and contrast that shapes the backdrop
 
 STRICT RULES:
+• You MUST observe the uploaded image and describe only what is visible there
+• Do NOT invent a generic studio background unrelated to the image
 • Do NOT use third-person narration
 • Do NOT say "this image", "the image shows"
 • Describe the scene as a fixed visual setup
@@ -35,13 +38,15 @@ Return only one clean paragraph.
 
 
 pose_prompt = """
-Write one professional pose-direction paragraph defining the POSE using:
-- body position
-- gesture and stance
-- camera angle and subject orientation
+Visually analyze THIS uploaded pose reference image, then write one professional pose-direction paragraph defining the POSE using what you actually see:
+- body position and posture
+- gesture, hand placement, and stance
+- head/face orientation and expression if visible
+- camera angle and subject orientation relative to the camera
 
 STRICT RULES:
-• Do NOT observe the image
+• You MUST observe the uploaded image and mirror the pose that is visible
+• Do NOT invent a generic fashion pose unrelated to the image
 • Do NOT use third-person narration
 • Write as a direct posing instruction
 • No lists, no JSON, no bullet points
@@ -51,13 +56,15 @@ Return only one clean paragraph.
 
 
 location_prompt = """
-Write one professional environment-direction paragraph defining the LOCATION using:
-- type of place
-- lighting conditions
-- overall atmosphere
+Visually analyze THIS uploaded location/environment reference image, then write one professional environment-direction paragraph defining the LOCATION using what you actually see:
+- type of place / setting
+- architectural or natural elements
+- lighting conditions and time-of-day feel
+- overall atmosphere and mood
 
 STRICT RULES:
-• Do NOT reference any image
+• You MUST observe the uploaded image and describe the real environment visible there
+• Do NOT invent a generic location unrelated to the image
 • Do NOT use third-person narration
 • Describe the environment as a real scene setup
 • No lists, no JSON, no bullet points
@@ -67,15 +74,37 @@ Return only one clean paragraph.
 
 
 color_prompt = """
-Write one professional color-direction paragraph defining:
-- dominant color palette
+Visually analyze THIS uploaded color-palette / color-mood reference image, then write one professional color-direction paragraph defining what you actually see:
+- dominant color palette (name specific hues when possible)
 - secondary supporting tones
-- overall tonal mood created by these colors
+- contrast, saturation, and overall tonal mood created by these colors
 
 STRICT RULES:
-• Do NOT reference any image
+• You MUST observe the uploaded image and extract colors from what is visible
+• Do NOT invent a generic palette unrelated to the image
 • Do NOT use third-person narration
 • Describe the palette as a visual design specification
+• No lists, no JSON, no bullet points
+
+Return only one clean paragraph.
+"""
+
+
+outfit_prompt = """
+Visually analyze THIS uploaded outfit / attire reference image, then write one professional styling-direction paragraph defining the OUTFIT using what you actually see:
+- garment type (e.g., saree, lehenga, anarkali, blazer, gown, kurta, shirt)
+- silhouette, cut, neckline, sleeves, and length
+- fabrics and textures
+- outfit colors, patterns, embroidery, and detailing
+- overall styling mood suitable for jewelry / fashion campaign photography
+
+STRICT RULES:
+• You MUST observe the uploaded image and describe the outfit that is visible
+• Do NOT invent a generic outfit unrelated to the image
+• Focus on clothing/attire only — do not describe jewelry as the outfit
+• Do NOT use third-person narration
+• Do NOT say "this image", "the image shows"
+• Write as a direct wardrobe / styling instruction
 • No lists, no JSON, no bullet points
 
 Return only one clean paragraph.

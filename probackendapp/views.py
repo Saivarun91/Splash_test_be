@@ -111,6 +111,7 @@ def project_setup_description(request, project_id):
         item.suggested_poses = suggestions.get("poses", [])
         item.suggested_locations = suggestions.get("locations", [])
         item.suggested_colors = suggestions.get("colors", [])
+        item.suggested_outfits = suggestions.get("outfits", [])
 
         collection.save()
 
@@ -289,16 +290,17 @@ def project_setup_select(request, project_id, collection_id):
         item.selected_poses = getlist("poses") or []
         item.selected_locations = getlist("locations") or []
         item.selected_colors = getlist("colors") or []
+        item.selected_outfits = getlist("outfits") or []
 
         # Save uploaded images for each category
-        for category in ["theme", "background", "pose", "location", "color"]:
+        for category in ["theme", "background", "pose", "location", "color", "outfit"]:
             files = request.FILES.getlist(f"uploaded_{category}_images")
             if files:
                 getattr(item, f"uploaded_{category}_images").extend(files)
 
         # Prepare uploaded images info for Gemini prompt
         uploaded_images_info = ""
-        for cat in ["theme", "background", "pose", "location", "color"]:
+        for cat in ["theme", "background", "pose", "location", "color", "outfit"]:
             imgs = getattr(item, f"uploaded_{cat}_images")
             if imgs:
                 uploaded_images_info += f"{cat.capitalize()} references: {', '.join([str(f) for f in imgs])}\n"
@@ -315,14 +317,17 @@ Selected Backgrounds: {', '.join(item.selected_backgrounds) or 'None'}
 Selected Poses: {', '.join(item.selected_poses) or 'None'}
 Selected Locations: {', '.join(item.selected_locations) or 'None'}
 Selected Colors: {', '.join(item.selected_colors) or 'None'}
+Selected Outfits: {', '.join(item.selected_outfits) or 'None'}
 Uploaded Image References: {uploaded_images_info if uploaded_images_info else 'None'}
+
+OUTFIT REQUIREMENT: For model_image and campaign_image, dress the model using Selected Outfits.
 
 Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 {{
     "white_background": "Prompt for white background images of the ornament, sharp, clean, isolated.",
     "background_replace": "Prompt for images with themed backgrounds while keeping the ornament identical.",
-    "model_image": "Prompt to generate realistic model wearing the ornament. Model face and body must be accurate. Match selected poses and expressions, photo should focused mainly on the ornament.",
-    "campaign_image": "Prompt for campaign/promotional shots with models wearing ornaments in themed backgrounds, stylish composition."
+    "model_image": "Prompt to generate realistic model wearing the ornament, dressed in the selected outfit(s). Model face and body must be accurate. Match selected poses and expressions, photo should focused mainly on the ornament.",
+    "campaign_image": "Prompt for campaign/promotional shots with models wearing ornaments in themed backgrounds, dressed in the selected outfit(s), stylish composition."
 }}
 """
 
@@ -403,11 +408,13 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
         "poses": merge_unique(item.selected_poses, item.suggested_poses),
         "locations": merge_unique(item.selected_locations, item.suggested_locations),
         "colors": merge_unique(item.selected_colors, item.suggested_colors),
+        "outfits": merge_unique(getattr(item, 'selected_outfits', None), getattr(item, 'suggested_outfits', None)),
         "themes_categorized": categorize_options(item.selected_themes, item.suggested_themes),
         "backgrounds_categorized": categorize_options(item.selected_backgrounds, item.suggested_backgrounds),
         "poses_categorized": categorize_options(item.selected_poses, item.suggested_poses),
         "locations_categorized": categorize_options(item.selected_locations, item.suggested_locations),
         "colors_categorized": categorize_options(item.selected_colors, item.suggested_colors),
+        "outfits_categorized": categorize_options(getattr(item, 'selected_outfits', None), getattr(item, 'suggested_outfits', None)),
         "ai_response": ai_response,
         "detailed_prompt_text": detailed_prompt_text,
         "generate_ai_url": f"/probackendapp/generate_ai_images/{collection.id}/",
@@ -1606,7 +1613,7 @@ def _check_ornament_type_match(product_ornament_type, master_analysis_text):
     return False
 
 
-def generate_single_product_model_image_background(collection_id, user_id, product_index, prompt_key, job_id=None):
+def generate_single_product_model_image_background(collection_id, user_id, product_index, prompt_key, job_id=None, aspect_ratio=None):
     """
     Generate a single image for a specific product index and prompt key.
     This is the core worker logic used by Celery so that each task
@@ -1650,6 +1657,25 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
         selections = getattr(product, "generation_selections", None) or {}
         model_tier = resolve_product_generation_tier_for_prompt_key(selections, prompt_key)
         credit_amount = get_tier_credit_cost(model_tier, "generation")
+
+        ALLOWED_ASPECT_RATIOS = {
+            "1:1", "4:5", "5:4", "3:4", "4:3", "9:16", "16:9", "2:3", "3:2", "21:9"
+        }
+        prompt_key_to_selection = {
+            "white_background": "plainBg",
+            "background_replace": "bgReplace",
+            "model_image": "model",
+            "campaign_image": "campaign",
+        }
+        # Prefer aspect_ratio passed from the enqueue request (user selection),
+        # then fall back to stored generation_selections.
+        if aspect_ratio:
+            resolved_aspect = str(aspect_ratio).strip()
+        else:
+            aspect_ratios = selections.get("aspectRatios") or {}
+            selection_key = prompt_key_to_selection.get(prompt_key, "")
+            resolved_aspect = str(aspect_ratios.get(selection_key) or "1:1").strip()
+        aspect_ratio = resolved_aspect if resolved_aspect in ALLOWED_ASPECT_RATIOS else "1:1"
 
         organization = get_user_organization(user)
         project_ref = collection.project if hasattr(collection, 'project') else None
@@ -1721,44 +1747,27 @@ Ensure balanced, soft studio lighting with natural shadows and realistic reflect
 Highlight product clarity and detail. 
 Follow this specific style prompt: {prompt_text}"""
 
-        default_bg_replace = """Use the provided ornament product image as the hero subject of a professional product photography shot. 
-Do NOT redraw, reinterpret, or change the ornament in any way. Do NOT modify the ornament's shape, texture, color, size, material, reflections, orientation, or proportions. The ornament must appear exactly as in the original product image.
+        default_bg_replace = """MOODBOARD-LOCKED BACKGROUND REPLACE:
 
-CAMERA ANGLE AND PERSPECTIVE (CRITICAL): Follow the EXACT camera angle and perspective described in the style reference below. If the style reference specifies a camera angle (e.g., "elevated diagonal perspective", "overhead 90-degree angle", "flat-lay top-down view"), you MUST use that EXACT angle. Do NOT default to a flat-lay view unless explicitly specified in the style reference.
+Use the PRODUCT image as the hero subject. Keep the product 100% identical (shape, color, metal, stones, proportions).
 
-The ornament must stay clearly visible, well-framed, and the dominant focal point of the composition.
+MOODBOARD TEXT DIRECTION IS THE ONLY SCENE SOURCE:
+- Match THEME and BACKGROUND direction from the style prompt STRICTLY (surfaces, props, lighting, color mood, composition, camera angle).
+- Do NOT invent a generic studio scene when moodboard direction is provided.
+- Do NOT copy styling from any model photo.
+- Do NOT expect moodboard photos as inputs — follow the written style prompt only.
 
-Surround the ornament with carefully chosen supporting elements and objects that enhance its appeal, such as coordinated fabrics, jewelry props, trays, soft decor pieces, or festive details, while keeping the scene clean and premium. 
-All added elements must support the ornament, not compete with it.
+CAMERA / SCENE:
+Follow the style prompt for angle, placement, lighting, materials, and props exactly.
 
-Place the ornament on a realistic premium surface such as silk fabric, velvet, marble, or textured stone, maintaining full physical contact between the ornament and the surface with grounded shadows directly beneath it (unless the style reference specifies a different placement or arrangement).
-
-Create a studio-quality product photography environment with:
-- soft diffused lighting (adjust based on style reference)
-- gentle warm highlights
-- clean, natural shadow falloff
-- high surface and material realism
-- crisp focus on the ornament and slightly softer focus on surrounding elements
-
-Background and props may add mood and storytelling but must remain visually secondary to the ornament. 
-The ornament must always remain the sharpest, brightest, and most visually dominant element in the frame.
-
-MASTER ANALYSIS FOLLOWING (CRITICAL): If the style prompt below is a comprehensive master theme analysis, you MUST follow it EXACTLY without missing a single detail. The master analysis contains specific information about:
-- Exact camera angle and perspective (e.g., "elevated diagonal perspective", "photographed from an overhead 90-degree angle", "flat-lay top-down view") - FOLLOW THIS EXACTLY
-- Exact placement and positioning of ornaments (e.g., "rests diagonally", "gracefully drapes", "positioned elegantly beside", "commands attention") - FOLLOW THIS EXACTLY
-- Precise lighting conditions (e.g., "soft, warm ambient lighting", "shallow depth of field", "soft diffused top lighting") - FOLLOW THIS EXACTLY
-- Specific surface materials and textures (e.g., "light beige, rectangular jewelry box", "soft, neutral surface", "silk fabric, velvet, marble") - FOLLOW THIS EXACTLY
-- Exact artistic style and mood (e.g., "sophisticated minimalism", "opulent heritage", "serene luxury") - FOLLOW THIS EXACTLY
-- All supporting elements and props mentioned (e.g., flowers, decorative pieces, fabrics, vintage treasure chest, ceremonial fabric) - FOLLOW THIS EXACTLY
-- Follow EVERY detail from the master analysis exactly as described - do not generalize or simplify any aspect.
-
-The style reference below contains the EXACT description including camera angle, placement, lighting, materials, and all visual elements. Follow it PRECISELY:
+Style / moodboard direction:
 {prompt_text}
 """
 
-        default_model = """CRITICAL MODEL PRESERVATION REQUIREMENTS - MANDATORY:
+        default_model = """CRITICAL MODEL PRESERVATION REQUIREMENTS - MANDATORY (REAL MODEL = 100% SAME PERSON):
 
-Use the uploaded model image as the absolute identity reference. The generated model MUST look EXACTLY the same as the uploaded model with ZERO changes to:
+Use the uploaded/selected model image as the absolute IDENTITY reference.
+The generated model MUST look EXACTLY the same as the uploaded model with ZERO changes to identity.
 
 FACIAL STRUCTURE (MANDATORY - EXACT MATCH):
 - Exact facial bone structure: jawline, cheekbones, chin shape, forehead shape
@@ -1780,33 +1789,28 @@ ADDITIONAL PRESERVATION REQUIREMENTS:
 - Exact body proportions: height, build, body shape, muscle definition, and physical characteristics
 - Exact facial expressions style and natural features
 - Exact distinctive characteristics and unique features
-- Do NOT beautify, stylize, enhance, or alter the model in ANY way
-- The model's identity must remain 100% identical to the original uploaded model image
+- Do NOT beautify, stylize, enhance, or alter the model identity in ANY way
+- The model's identity must remain 100% identical to the original uploaded/selected model image
+
+STYLING SOURCE (MOODBOARD TEXT PROMPT — NOT MODEL PHOTO CLOTHES/SCENE):
+- IGNORE clothing/outfit, pose, background, location, and props from the model photo
+- Outfit/attire MUST follow the OUTFIT direction in the style prompt
+- Theme, background, pose, and colors MUST follow the style prompt
+- No moodboard photos are provided — execute the written style prompt faithfully
 
 PRODUCT PRESERVATION:
-Place ONLY the given uploaded product (ornament/jewelry) on the model. The product must remain 100% identical to the original product image with NO changes in design, shape, stone layout, metal finish, color, texture, reflections, or micro detailing. Do NOT reinterpret, redraw, enhance, or modify the product in any way.
-
-INTEGRATION:
-Ensure natural and physically accurate product fitting on the model with correct scale, proportion, weight placement, and gravity behavior. Match the original lighting interaction between the product and the model's skin for seamless realism.
+Place ONLY the given uploaded product (ornament/jewelry) on the model. The product must remain 100% identical.
 
 QUALITY STANDARDS:
-The final image must appear as a high-end professional fashion product photography shoot with:
-- soft studio lighting
-- natural shadow falloff
-- balanced highlights
-- clean depth separation
-- sharp focus on the product and model
+High-end professional fashion product photography with soft studio lighting, natural shadow falloff, and sharp focus on product and model.
 
-STYLE REFERENCE:
-Follow the pose, framing, and environmental styling ONLY as described in the style reference below, without changing the product or the model identity.
-
-Use this style reference strictly for framing, mood, and environment (NOT for modifying the product or model):
+STYLE / MOODBOARD DIRECTION:
 {prompt_text}
 """
 
-        default_campaign = """CRITICAL MODEL PRESERVATION REQUIREMENTS - MANDATORY:
+        default_campaign = """CRITICAL MODEL PRESERVATION REQUIREMENTS - MANDATORY (REAL MODEL = 100% SAME PERSON):
 
-Create a professional campaign-style image where the uploaded model MUST look EXACTLY the same as the uploaded model image with ZERO changes to:
+Create a professional campaign-style image where the uploaded/selected model MUST look EXACTLY the same with ZERO identity changes.
 
 FACIAL STRUCTURE (MANDATORY - EXACT MATCH):
 - Exact facial bone structure: jawline, cheekbones, chin shape, forehead shape
@@ -1817,29 +1821,29 @@ FACIAL STRUCTURE (MANDATORY - EXACT MATCH):
 - Exact facial features positioning: distance between features, feature alignment
 
 AGE PRESERVATION (MANDATORY - EXACT MATCH):
-- Exact age appearance: maintain the exact same age look as the uploaded model
-- Exact skin characteristics: skin texture, skin tone, skin undertones, complexion
-- Exact facial maturity: maintain the same level of facial maturity and age markers
-- Do NOT make the model look younger or older - maintain EXACT age appearance
+- Exact age appearance and facial maturity
+- Exact skin characteristics: texture, tone, undertones, complexion
+- Do NOT make the model look younger or older
 
 ADDITIONAL PRESERVATION REQUIREMENTS:
-- Exact skin tone, skin texture, complexion, undertones, and skin characteristics
-- Exact hair: hair color, hair texture, hair style, hair length, hairline, and any highlights or natural variations
-- Exact body proportions: height, build, body shape, muscle definition, and physical characteristics
-- Exact facial expressions style and natural features
-- Exact distinctive characteristics and unique features
-- Do NOT beautify, stylize, enhance, or alter the model in ANY way
-- The model's identity must remain 100% identical to the original uploaded model image
+- Exact hair identity, body proportions, distinctive features
+- Do NOT beautify or alter model identity
+- The model's identity must remain 100% identical to the uploaded/selected model image
+
+STYLING SOURCE (MOODBOARD TEXT PROMPT — NOT MODEL PHOTO CLOTHES/SCENE):
+- IGNORE clothing/outfit, pose, background, location, and props from the model photo
+- Outfit, theme, background, pose, location, and color MUST follow the style prompt
+- No moodboard photos are provided — execute the written style prompt faithfully
 
 PRODUCT PRESERVATION:
-The model is wearing ONLY the given product, keeping the product exactly as it appears in the original product image — no changes in color, shape, or design.
+The model is wearing ONLY the given product, keeping the product exactly as in the original product image.
 
-STYLING:
-Use a lifestyle or editorial-style background that enhances the brand aesthetic while maintaining focus on the product. 
-Ensure cinematic yet natural studio lighting, soft shadows, and high-end magazine-quality realism.
+QUALITY:
+Cinematic yet natural lighting, soft shadows, high-end magazine-quality realism.
 
-STYLE REFERENCE:
-Follow this specific style prompt: {prompt_text}"""
+STYLE / MOODBOARD DIRECTION:
+{prompt_text}
+"""
 
         prompt_templates = {
             "white_background": get_prompt_from_db("white_background_template", default_white_bg),
@@ -1905,20 +1909,141 @@ Follow this specific style prompt: {prompt_text}"""
         custom_prompt = prompt_text
         template = prompt_templates.get(prompt_key, "")
         if template:
-            custom_prompt = template.format(prompt_text=prompt_text)
+            try:
+                custom_prompt = template.format(prompt_text=prompt_text)
+            except Exception:
+                custom_prompt = f"{template}\n\nStyle prompt:\n{prompt_text}"
 
-        contents = [
-            {"inline_data": {"mime_type": "image/jpeg", "data": model_b64}},
-            {"inline_data": {"mime_type": "image/jpeg", "data": product_b64}},
-            {"text": custom_prompt},
-        ]
+        # Moodboard uploads are NEVER sent to image generation.
+        # They are analyzed on Moodboard save → text prompts/analyses only drive styling here.
+        from .utils import normalize_analysis_text
+
+        moodboard_categories_by_key = {
+            "white_background": [],
+            "background_replace": ["theme", "background"],
+            "model_image": ["outfit", "theme", "background", "pose", "color"],
+            "campaign_image": ["outfit", "theme", "background", "pose", "location", "color"],
+        }
+
+        # Text moodboard analyses as explicit styling lock (chips + uploads)
+        moodboard_text_bits = []
+        master_analyses = getattr(item, "master_analyses", None) or {}
+        for cat in moodboard_categories_by_key.get(prompt_key, []):
+            master_text = (master_analyses.get(cat) or "").strip()
+            if master_text:
+                moodboard_text_bits.append(
+                    f"- {cat.upper()}: {normalize_analysis_text(master_text, cat) or master_text}"
+                )
+                continue
+            images = getattr(item, f"uploaded_{cat}_images", None) or []
+            # Include up to 2 analyses per category for richer text direction
+            for img in images[:2]:
+                analysis = normalize_analysis_text(getattr(img, "analysis", "") or "", cat)
+                if analysis:
+                    moodboard_text_bits.append(f"- {cat.upper()}: {analysis}")
+
+        # Selected chip fallbacks when no upload analysis exists for a category
+        chip_map = {
+            "theme": getattr(item, "selected_themes", None) or [],
+            "background": getattr(item, "selected_backgrounds", None) or [],
+            "pose": getattr(item, "selected_poses", None) or [],
+            "location": getattr(item, "selected_locations", None) or [],
+            "color": getattr(item, "selected_colors", None) or getattr(item, "picked_colors", None) or [],
+            "outfit": getattr(item, "selected_outfits", None) or [],
+        }
+        for cat in moodboard_categories_by_key.get(prompt_key, []):
+            if any(bit.startswith(f"- {cat.upper()}:") for bit in moodboard_text_bits):
+                continue
+            chips = chip_map.get(cat) or []
+            if chips:
+                moodboard_text_bits.append(f"- {cat.upper()} (selected): {', '.join(chips[:5])}")
+
+        moodboard_lock = ""
+        if prompt_key in ("model_image", "campaign_image", "background_replace"):
+            moodboard_lock = (
+                "\n\n=== MOODBOARD TEXT LOCK (HIGHEST PRIORITY FOR STYLING) ===\n"
+                "No moodboard photos are attached. Follow the WRITTEN moodboard direction "
+                "and style prompt STRICTLY for scene/styling.\n"
+            )
+            if prompt_key in ("model_image", "campaign_image"):
+                moodboard_lock += (
+                    "=== REAL MODEL IDENTITY LOCK (MANDATORY) ===\n"
+                    "The generated person MUST be 100% the same as the uploaded/selected model image: "
+                    "exact face structure, eyes, nose, mouth, age, skin, hair identity, and body proportions. "
+                    "Do NOT beautify, rejuvenate, or change identity.\n"
+                    "From the model photo: IGNORE clothing, pose, background, location, and props only.\n"
+                    "OUTFIT / THEME / BACKGROUND / POSE / LOCATION must come from the moodboard "
+                    "TEXT direction below and the style prompt — not from the model photo wardrobe/scene.\n"
+                )
+            if prompt_key == "background_replace":
+                moodboard_lock += (
+                    "BACKGROUND REPLACE RULE: rebuild the entire scene from moodboard "
+                    "THEME + BACKGROUND text direction. Do not invent a generic studio look.\n"
+                )
+            if moodboard_text_bits:
+                moodboard_lock += (
+                    "Moodboard analysis direction (execute every detail):\n"
+                    + "\n".join(moodboard_text_bits)
+                    + "\n"
+                )
+
+        contents = []
+
+        # Product first for all types — only product (+ model when needed) images are sent
+        contents.append({
+            "text": "PRODUCT IMAGE (preserve jewelry/product exactly — do not redesign):"
+        })
+        contents.append({"inline_data": {"mime_type": "image/jpeg", "data": product_b64}})
+
+        # Model identity for model/campaign generations — face/body must be 100% same
+        if prompt_key in ("model_image", "campaign_image"):
+            contents.append({
+                "text": (
+                    "MODEL IMAGE (REAL MODEL IDENTITY — 100% SAME PERSON): "
+                    "Preserve exact face, age, skin, hair identity, and body proportions from this photo. "
+                    "Do NOT change who the person is. "
+                    "IGNORE only clothing, pose, background, location, and props from this model image — "
+                    "those must follow the moodboard TEXT direction and style prompt."
+                )
+            })
+            contents.append({"inline_data": {"mime_type": "image/jpeg", "data": model_b64}})
+
+        target_audience = (getattr(collection, "target_audience", "") or "").strip()
+        campaign_season = (getattr(collection, "campaign_season", "") or "").strip()
+        audience_season_suffix = (
+            "\n\nMANDATORY TARGET AUDIENCE & CAMPAIGN SEASON:\n"
+            f"- Target audience: {target_audience or 'Not specified'}\n"
+            f"- Campaign season: {campaign_season or 'Not specified'}\n"
+            "Style, mood, cultural cues, and presentation MUST appeal to this audience "
+            "and fit this season. Do not ignore this even when following moodboard text direction.\n"
+            f"Generate the image in {aspect_ratio} aspect ratio (width:height)."
+        )
+        contents.append({
+            "text": f"{custom_prompt}{moodboard_lock}{audience_season_suffix}"
+        })
+        logger.info(
+            f"[JOB {job_id}] Generating {prompt_key} with TEXT moodboard direction only "
+            f"({len(moodboard_text_bits)} analysis bits; no moodboard images attached)"
+        )
+        print(
+            f"[JOB {job_id}] Generating {prompt_key} with TEXT moodboard direction only "
+            f"({len(moodboard_text_bits)} analysis bits; no moodboard images attached)"
+        )
 
         config = types.GenerateContentConfig(
             response_modalities=["TEXT", "IMAGE"],
             image_config=types.ImageConfig(
                 image_size="4K",
-                aspect_ratio="1:1"
+                aspect_ratio=aspect_ratio,
             )
+        )
+
+        logger.info(
+            f"[JOB {job_id}] Generating {prompt_key} with aspect_ratio={aspect_ratio}, "
+            f"audience={target_audience or 'N/A'}, season={campaign_season or 'N/A'}"
+        )
+        print(
+            f"[JOB {job_id}] Generating {prompt_key} with aspect_ratio={aspect_ratio}"
         )
 
         resp = client.models.generate_content(

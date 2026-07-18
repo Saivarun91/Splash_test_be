@@ -12,7 +12,7 @@ from .models import ImageGenerationHistory
 from common.error_reporter import report_handled_exception
 
 @shared_task(bind=True, acks_late=True)
-def generate_single_image_task(self, job_id, collection_id, user_id, product_index, prompt_key):
+def generate_single_image_task(self, job_id, collection_id, user_id, product_index, prompt_key, aspect_ratio="1:1"):
     """
     Generate a single image with atomic lock acquisition to prevent duplicates.
     
@@ -33,6 +33,7 @@ def generate_single_image_task(self, job_id, collection_id, user_id, product_ind
                 "job_id": job_id,
                 "product_index": product_index,
                 "prompt_key": prompt_key,
+                "aspect_ratio": aspect_ratio or "1:1",
                 "status": "started",
             },
             created_at=datetime.utcnow(),
@@ -48,6 +49,7 @@ def generate_single_image_task(self, job_id, collection_id, user_id, product_ind
             product_index=product_index,
             prompt_key=prompt_key,
             job_id=job_id,
+            aspect_ratio=aspect_ratio or "1:1",
         )
         
     except (NotUniqueError, OperationError) as e:

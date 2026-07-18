@@ -127,7 +127,7 @@ class UploadedImage(EmbeddedDocument):
     uploaded_by = StringField(required=True)  # User ID who uploaded
     uploaded_at = DateTimeField(default=datetime.now(timezone.utc))
     file_size = IntField()
-    # 'theme', 'background', 'pose', 'location', 'color'
+    # 'theme', 'background', 'pose', 'location', 'color', 'outfit'
     category = StringField(required=True)
     analysis = StringField(default="")   # ✅ Clean descriptive paragraph
     # For theme images: store ornament type and angle shot separately
@@ -150,12 +150,14 @@ class CollectionItem(EmbeddedDocument):
     suggested_poses = ListField(StringField(), default=list)
     suggested_locations = ListField(StringField(), default=list)
     suggested_colors = ListField(StringField(), default=list)
+    suggested_outfits = ListField(StringField(), default=list)
 
     selected_themes = ListField(StringField(), default=list)
     selected_backgrounds = ListField(StringField(), default=list)
     selected_poses = ListField(StringField(), default=list)
     selected_locations = ListField(StringField(), default=list)
     selected_colors = ListField(StringField(), default=list)
+    selected_outfits = ListField(StringField(), default=list)
 
     # New fields for color picker functionality
     # Store hex color codes
@@ -176,6 +178,8 @@ class CollectionItem(EmbeddedDocument):
         EmbeddedDocumentField(UploadedImage), default=list)
     uploaded_color_images = ListField(
         EmbeddedDocumentField(UploadedImage), default=list)
+    uploaded_outfit_images = ListField(
+        EmbeddedDocumentField(UploadedImage), default=list)
 
     final_moodboard_prompt = StringField()
     moodboard_explanation = StringField()
@@ -185,7 +189,7 @@ class CollectionItem(EmbeddedDocument):
     # Stores the single selected model (type: 'ai' or 'real', local, cloud)
     selected_model = DictField()
     product_images = ListField(EmbeddedDocumentField(ProductImage))
-    # Store master analyses for each category (theme, background, pose, location, color)
+    # Store master analyses for each category (theme, background, pose, location, color, outfit)
     master_analyses = DictField(default=dict)
 
     meta = {

@@ -3,6 +3,8 @@ import requests
 import json
 import re
 import hashlib
+import base64
+import mimetypes
 from dotenv import load_dotenv
 from imgbackend.ai_utils import genai
 
@@ -10,35 +12,88 @@ load_dotenv()
 GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-pro")
 
 
-def call_gemini_api(prompt: str, image_url: str = None):
+def _guess_mime_type(path_or_url: str, fallback: str = "image/jpeg") -> str:
+    mime_type, _ = mimetypes.guess_type(path_or_url or "")
+    if mime_type and mime_type.startswith("image/"):
+        return mime_type
+    return fallback
+
+
+def _load_image_as_inline(image_path: str = None, image_url: str = None, image_bytes: bytes = None, mime_type: str = None):
+    """Load one image into Gemini inline_data format. Prefers local path, then bytes, then URL."""
+    data = None
+    resolved_mime = mime_type
+
+    if image_path and os.path.exists(image_path):
+        with open(image_path, "rb") as f:
+            data = f.read()
+        resolved_mime = resolved_mime or _guess_mime_type(image_path)
+    elif image_bytes:
+        data = image_bytes
+        resolved_mime = resolved_mime or "image/jpeg"
+    elif image_url:
+        img_response = requests.get(image_url, timeout=30)
+        img_response.raise_for_status()
+        data = img_response.content
+        header_mime = img_response.headers.get("content-type", "image/jpeg").split(";")[0]
+        resolved_mime = resolved_mime or (
+            header_mime if header_mime.startswith("image/") else _guess_mime_type(image_url)
+        )
+
+    if not data:
+        return None
+
+    return {
+        "inline_data": {
+            "mime_type": resolved_mime or "image/jpeg",
+            "data": base64.b64encode(data).decode("utf-8"),
+        }
+    }
+
+
+def call_gemini_api(prompt: str, image_url: str = None, image_path: str = None, image_parts: list = None):
     """
-    Call Gemini API with optional image URL for vision analysis.
+    Call Gemini API with optional vision inputs.
 
     Args:
         prompt: Text prompt for the API
-        image_url: Optional image URL for vision analysis
+        image_url: Optional single image URL
+        image_path: Optional local filesystem path (preferred over URL)
+        image_parts: Optional list of dicts:
+            {"label": "...", "path": "...", "url": "...", "bytes": b"...", "mime_type": "..."}
 
     Returns:
         API response text or None on error
     """
-    import base64
-
     try:
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+        contents = [prompt]
 
-        if image_url:
-            img_response = requests.get(image_url, timeout=30)
-            img_response.raise_for_status()
-            img_base64 = base64.b64encode(img_response.content).decode("utf-8")
-            mime_type = img_response.headers.get("content-type", "image/jpeg").split(";")[0]
-            if not mime_type.startswith("image/"):
-                mime_type = "image/jpeg"
-
-            contents = [
-                prompt,
-                {"inline_data": {"mime_type": mime_type, "data": img_base64}},
-            ]
+        # Multi-image path used for moodboard prompt generation
+        if image_parts:
+            for part in image_parts:
+                if not part:
+                    continue
+                label = (part.get("label") or "").strip()
+                inline = _load_image_as_inline(
+                    image_path=part.get("path"),
+                    image_url=part.get("url"),
+                    image_bytes=part.get("bytes"),
+                    mime_type=part.get("mime_type"),
+                )
+                if not inline:
+                    print(f"⚠️ Skipping unreadable moodboard image part: {label or part}")
+                    continue
+                if label:
+                    contents.append(f"REFERENCE IMAGE — {label}:")
+                contents.append(inline)
         else:
+            inline = _load_image_as_inline(image_path=image_path, image_url=image_url)
+            if inline:
+                contents.append(inline)
+
+        # Text-only if no images attached successfully
+        if len(contents) == 1:
             contents = prompt
 
         response = client.models.generate_content(
@@ -49,6 +104,76 @@ def call_gemini_api(prompt: str, image_url: str = None):
     except Exception as e:
         print("Gemini API error:", e)
         return None
+
+
+def normalize_analysis_text(analysis_text: str, category: str = "") -> str:
+    """
+    Convert stored analysis into clean prompt-ready text.
+    Theme analyses are often JSON {"type","description"} — extract description.
+    """
+    if not analysis_text or not str(analysis_text).strip():
+        return ""
+
+    text = str(analysis_text).strip()
+    placeholder = "analyze lighting, style, subject composition"
+    if placeholder in text.lower():
+        return ""
+
+    if category == "theme" or text.startswith("{") or '"description"' in text:
+        try:
+            cleaned = re.sub(r'^```(?:json)?|```$', '', text, flags=re.IGNORECASE).strip()
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                description = (parsed.get("description") or "").strip()
+                ornament_type = (parsed.get("type") or "").strip()
+                if description and ornament_type:
+                    return f"{description} (ornament focus: {ornament_type})"
+                return description or ornament_type or text
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    return text
+
+
+def collect_moodboard_image_parts(item, categories=None, max_per_category=1, max_total=8):
+    """
+    Collect local/cloud moodboard images for multimodal Gemini calls.
+    Returns list of {"label","path","url"} parts.
+    """
+    from imgbackendapp.file_utils import resolve_media_path
+
+    categories = categories or ['theme', 'background', 'pose', 'location', 'color', 'outfit']
+    parts = []
+
+    for category in categories:
+        if len(parts) >= max_total:
+            break
+        images = getattr(item, f"uploaded_{category}_images", None) or []
+        added = 0
+        for img in images:
+            if added >= max_per_category or len(parts) >= max_total:
+                break
+            local_path = None
+            stored = getattr(img, "local_path", None)
+            if stored:
+                try:
+                    resolved = resolve_media_path(stored)
+                    if resolved and os.path.exists(resolved):
+                        local_path = resolved
+                except Exception:
+                    local_path = None
+            cloud_url = getattr(img, "cloud_url", None)
+            if not local_path and not cloud_url:
+                continue
+            filename = getattr(img, "original_filename", None) or category
+            parts.append({
+                "label": f"{category.upper()} reference ({filename})",
+                "path": local_path,
+                "url": cloud_url,
+            })
+            added += 1
+
+    return parts
 
 
 def parse_gemini_response(raw_response):
@@ -102,13 +227,15 @@ Instructions:
 2. Consider the overall tone, cultural context, and emotional appeal suited for the audience and season.
 3. Make sure the ideas are cohesive and realistic to implement in a fashion/product photography or advertising context.
 4. Each category must contain short, descriptive, and clear prompts suitable for use with AI image generation tools.
+5. Outfits must describe complete wearable attire for models (garment type, silhouette, fabric, color, styling) that complements jewelry photography for this collection.
 
-Generate JSON containing 5 types:
+Generate JSON containing 6 types:
 - Themes
 - Backgrounds/Backdrops
 - Poses
 - Locations
 - Color palettes
+- Outfits
 
 Limit 10 prompts per category."""
 
@@ -121,6 +248,12 @@ Limit 10 prompts per category."""
         campaign_season=campaign_season if campaign_season else "Not specified"
     )
 
+    # Ensure older DB prompt templates still request outfits
+    if prompt and "Outfits" not in prompt:
+        prompt = prompt.rstrip() + """
+
+Also generate an "Outfits" array with up to 10 short, descriptive outfit/attire directions suitable for model and campaign photography for this collection (garment type, silhouette, fabric, color, styling). Include "Outfits" in the JSON response."""
+
     response_text = call_gemini_api(prompt)
     parsed = parse_gemini_response(response_text)
 
@@ -129,10 +262,34 @@ Limit 10 prompts per category."""
         "Backgrounds/Backdrops": "backgrounds",
         "Poses": "poses",
         "Locations": "locations",
-        "Color palettes": "colors"
+        "Color palettes": "colors",
+        "Outfits": "outfits",
     }
-    suggestions = {norm_key: parsed.get(api_key, [])[:10] for api_key, norm_key in key_map.items(
-    )} if parsed else {k: [] for k in key_map.values()}
+
+    # Accept common alternate keys Gemini may return
+    alternate_keys = {
+        "outfits": ["Outfits", "Outfit", "outfit", "outfits", "Attire", "attire", "Clothing", "clothing"],
+        "themes": ["Themes", "themes", "Theme"],
+        "backgrounds": ["Backgrounds/Backdrops", "Backgrounds", "backgrounds", "Backdrops"],
+        "poses": ["Poses", "poses", "Pose"],
+        "locations": ["Locations", "locations", "Location"],
+        "colors": ["Color palettes", "Colors", "colors", "Color Palettes", "Colour palettes"],
+    }
+
+    suggestions = {}
+    if parsed:
+        for api_key, norm_key in key_map.items():
+            values = parsed.get(api_key)
+            if not values:
+                for alt in alternate_keys.get(norm_key, []):
+                    if parsed.get(alt):
+                        values = parsed.get(alt)
+                        break
+            if isinstance(values, str):
+                values = [values]
+            suggestions[norm_key] = (values or [])[:10]
+    else:
+        suggestions = {k: [] for k in key_map.values()}
     return suggestions
 
 

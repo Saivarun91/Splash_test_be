@@ -20,7 +20,7 @@ def initialize_default_prompts():
         {
             "prompt_key": "suggestion_prompt_base",
             "title": "Suggestion Generation Base Prompt",
-            "description": "Base prompt for generating visual suggestions (themes, backgrounds, poses, locations, colors) from collection description",
+            "description": "Base prompt for generating visual suggestions (themes, backgrounds, poses, locations, colors, outfits) from collection description",
             "prompt_content": """You are a highly skilled AI creative director and visual concept designer.
 Your job is to generate structured, high-quality visual prompt suggestions for an AI image generation system.
 
@@ -44,13 +44,15 @@ Instructions:
 2. Consider the overall tone, cultural context, and emotional appeal suited for the audience and season.
 3. Make sure the ideas are cohesive and realistic to implement in a fashion/product photography or advertising context.
 4. Each category must contain short, descriptive, and clear prompts suitable for use with AI image generation tools.
+5. Outfits must describe complete wearable attire for models (garment type, silhouette, fabric, color, styling) that complements jewelry photography for this collection.
 
-Generate JSON containing 5 types:
+Generate JSON containing 6 types:
 - Themes
 - Backgrounds/Backdrops
 - Poses
 - Locations
 - Color palettes
+- Outfits
 
 Limit 10 prompts per category.""",
             "category": "suggestion",
@@ -73,7 +75,8 @@ Themes: {themes}
 Backgrounds: {backgrounds}
 Poses: {poses}
 Locations: {locations}
-Colors: {colors}{picked_colors_info}{global_instructions_info}
+Colors: {colors}
+Outfits: {outfits}{picked_colors_info}{global_instructions_info}
 
 {instructions}
 
@@ -115,7 +118,8 @@ Selected Themes: {themes}
 Selected Backgrounds: {backgrounds}
 Selected Poses: {poses}
 Selected Locations: {locations}
-Selected Colors: {colors}{picked_colors_info}{global_instructions_info}
+Selected Colors: {colors}
+Selected Outfits: {outfits}{picked_colors_info}{global_instructions_info}
 
 {instructions}
 
@@ -126,22 +130,24 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 {{
     "white_background": "Prompt for white background images of the product, sharp, clean, isolated.",
     "background_replace": "Prompt for images with themed backgrounds while keeping the product identical.",
-    "model_image": "Prompt to generate realistic model wearing/holding the product. Model face and body must be accurate. Match selected poses and expressions, photo should be focused mainly on the product.",
-    "campaign_image": "Prompt for campaign/promotional shots with models and products in themed backgrounds, stylish composition."
+    "model_image": "Prompt to generate realistic model wearing/holding the product, dressed in the selected outfit(s). Model face and body must be accurate. Match selected poses and expressions, photo should be focused mainly on the product.",
+    "campaign_image": "Prompt for campaign/promotional shots with models and products in themed backgrounds, dressed in the selected outfit(s), stylish composition."
 }}""",
             "instructions": """# INSTRUCTIONS:
 # 1. Analyze the collection description and user selections carefully
 # 2. Create prompts that are specific, detailed, and actionable for AI image generation
-# 3. Ensure prompts match the selected themes, backgrounds, poses, locations, and colors
+# 3. Ensure prompts match the selected themes, backgrounds, poses, locations, colors, and outfits
 # 4. Maintain consistency across all four prompt types
-# 5. Focus on product clarity and professional photography standards""",
+# 5. Focus on product clarity and professional photography standards
+# 6. For model_image and campaign_image, dress the model using Selected Outfits""",
             "rules": """RULES FOR PROMPT CREATION:
-1. Use the selected themes, backgrounds, poses, locations, and colors as primary guidance
+1. Use the selected themes, backgrounds, poses, locations, colors, and outfits as primary guidance
 2. Be specific — describe lighting, materials, perspective, model type, emotion, and background details
 3. Keep prompts actionable and detailed for AI image generation systems
 4. COLOR PRIORITY: If picked colors are provided, use them as the primary color scheme. If only selected suggestions are provided, use those instead
 5. Ensure all prompts maintain brand consistency and professional quality
-6. Model images must have accurate facial features and body proportions""",
+6. Model images must have accurate facial features and body proportions
+7. OUTFIT PRIORITY: For model_image and campaign_image, attire must follow Selected Outfits (garment type, silhouette, fabric, colors, styling)""",
             "category": "generation",
             "prompt_type": "generation_prompt",
             "is_active": True,
@@ -781,6 +787,20 @@ Campaign instructions: {user_prompt}""",
             # Update existing prompt template if it's missing instructions/rules placeholders
             # This preserves user's instructions and rules but updates the template structure
             needs_update = False
+
+            # Force-refresh suggestion / generation templates that predate outfit support
+            if prompt_key == 'suggestion_prompt_base' and 'Outfits' not in (existing.prompt_content or ''):
+                existing.prompt_content = prompt_data["prompt_content"]
+                existing.description = prompt_data.get("description", existing.description)
+                needs_update = True
+            if prompt_key in ['generation_prompt_with_images', 'generation_prompt_simple']:
+                if '{outfits}' not in (existing.prompt_content or '') or 'Outfits' not in (existing.prompt_content or ''):
+                    existing.prompt_content = prompt_data["prompt_content"]
+                    if prompt_data.get("instructions"):
+                        existing.instructions = prompt_data.get("instructions", "")
+                    if prompt_data.get("rules"):
+                        existing.rules = prompt_data.get("rules", "")
+                    needs_update = True
 
             # Check if prompt_content needs placeholders added
             if prompt_key in ['generation_prompt_with_images', 'generation_prompt_simple']:
