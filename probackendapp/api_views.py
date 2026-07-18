@@ -2119,6 +2119,7 @@ def api_generate_all_product_model_images(request, collection_id):
             )
 
         item = collection.items[0]
+        has_selected_model = bool(getattr(item, "selected_model", None))
 
         # Parse request body for image type selections
         try:
@@ -2143,6 +2144,42 @@ def api_generate_all_product_model_images(request, collection_id):
             if stored_selections:
                 image_type_selections = stored_selections
 
+        # Without a model, model/campaign types cannot be generated
+        if image_type_selections and not has_selected_model:
+            cleaned = {}
+            requested_model_types = False
+            for idx_str, sel in image_type_selections.items():
+                if not isinstance(sel, dict):
+                    continue
+                if sel.get("model") or sel.get("campaign"):
+                    requested_model_types = True
+                cleaned[idx_str] = {
+                    **sel,
+                    "model": False,
+                    "campaign": False,
+                }
+            image_type_selections = cleaned
+            has_product_only = any(
+                (sel.get("plainBg") or sel.get("bgReplace"))
+                for sel in image_type_selections.values()
+                if isinstance(sel, dict)
+            )
+            if not has_product_only:
+                return Response(
+                    {
+                        "success": False,
+                        "error": (
+                            "Model Image and Campaign Image require a model. "
+                            "Please go to the Models tab and select a model, "
+                            "or select Plain BG / BG Replace only."
+                        ),
+                    },
+                    status=400,
+                )
+            if requested_model_types:
+                # Keep going with product-only types; FE should normally disable model/campaign
+                pass
+
         # Map frontend keys to backend keys
         # Frontend: plainBg, bgReplace, model, campaign
         # Backend: white_background, background_replace, model_image, campaign_image
@@ -2164,9 +2201,16 @@ def api_generate_all_product_model_images(request, collection_id):
         # Get available prompt keys from generated_prompts
         available_prompt_keys = list((item.generated_prompts or {}).keys())
 
-        # If no selections provided, generate all types for all products (backward compatibility)
+        # If no selections provided, generate all types for all products (backward compatibility).
+        # Without a model, only product-only types are allowed.
         if not image_type_selections:
-            selected_keys = available_prompt_keys
+            if has_selected_model:
+                selected_keys = available_prompt_keys
+            else:
+                selected_keys = [
+                    k for k in available_prompt_keys
+                    if k in ("white_background", "background_replace")
+                ]
         else:
             # Build set of selected keys based on selections
             selected_keys_set = set()
@@ -2595,21 +2639,30 @@ def api_get_all_models(request, collection_id):
 @api_view(['POST'])
 @csrf_exempt
 def api_select_model(request, collection_id):
-    """Select a single model (AI or Real)"""
+    """Select a single model (AI or Real). Pass clear=true to unselect."""
     try:
         data = json.loads(request.body)
         model_type = data.get("type")  # 'ai' or 'real'
         # The model object with local/cloud paths
         model_data = data.get("model")
-
-        if not model_type or not model_data:
-            return Response({"success": False, "error": "Invalid model data"})
+        clear_selection = bool(data.get("clear"))
 
         collection = Collection.objects.get(id=collection_id)
         if not collection.items:
             return Response({"success": False, "error": "No items found in collection."})
 
         item = collection.items[0]
+
+        if clear_selection or (not model_type and not model_data):
+            item.selected_model = None
+            collection.save()
+            return Response({
+                "success": True,
+                "selected_model": None,
+            })
+
+        if not model_type or not model_data:
+            return Response({"success": False, "error": "Invalid model data"})
 
         # Save selected model
         item.selected_model = {

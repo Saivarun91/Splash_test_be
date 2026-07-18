@@ -1707,16 +1707,25 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
         if not credit_result['success']:
             return {"success": False, "error": credit_result['message']}
 
-        if not hasattr(item, "selected_model") or not item.selected_model:
-            return {"success": False, "error": "No model selected. Please select a model first."}
+        needs_model = prompt_key in ("model_image", "campaign_image")
+        model_b64 = None
 
-        selected_model = item.selected_model
-        model_absolute_path = resolve_media_path(selected_model.get("local"))
-        model_cloud_url = selected_model.get("cloud")
+        if needs_model:
+            if not hasattr(item, "selected_model") or not item.selected_model:
+                return {
+                    "success": False,
+                    "error": "No model selected. Please go to the Models tab and select a model first.",
+                }
 
-        # Check if model local path exists, if not try to download from cloud URL
-        if not model_absolute_path or not os.path.exists(model_absolute_path):
-            return {"success": False, "error": "Selected model image not found on server."}
+            selected_model = item.selected_model
+            model_absolute_path = resolve_media_path(selected_model.get("local"))
+
+            if not model_absolute_path or not os.path.exists(model_absolute_path):
+                return {"success": False, "error": "Selected model image not found on server."}
+
+            with open(model_absolute_path, "rb") as f:
+                model_bytes = f.read()
+            model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
         if not hasattr(item, "generated_prompts") or not item.generated_prompts:
             return {"success": False, "error": "No generated prompts found."}
@@ -1727,11 +1736,6 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
 
         if prompt_key not in item.generated_prompts:
             return {"success": False, "error": f"Prompt key '{prompt_key}' not found."}
-
-        # Read model image once
-        with open(model_absolute_path, "rb") as f:
-            model_bytes = f.read()
-        model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
         client = genai.Client()
         model_name = get_image_model_name(default_model=settings.IMAGE_MODEL_NAME)
