@@ -149,7 +149,6 @@ def generate_white_background_task(
             config = types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"],
                 image_config=types.ImageConfig(
-                    #  image_size="4K",
                     aspect_ratio=aspect,
                 ),
             )
@@ -1319,6 +1318,8 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             gemini_contents=contents,
             reference_paths=reference_paths,
             dimension=dimension,
+            # White BG regenerations should not request 4K
+            image_size=None if prev_doc.type == "white_background" else "4K",
         )
         local_regen_path = write_bytes_to_unique_path(
             regen_dir, generated_bytes, "regen.jpg", suffix=image_id

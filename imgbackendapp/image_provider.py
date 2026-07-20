@@ -286,7 +286,12 @@ def generate_with_openai(
                 logger.warning("Failed closing AI reference file handle")
 
 
-def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
+def generate_with_gemini(
+    contents,
+    dimension: str = "1:1",
+    *,
+    image_size: Optional[str] = "4K",
+) -> bytes:
     from CREDITS.utils import get_image_model_name
 
     api_key = getattr(settings, "GEMINI_API_KEY", None) or getattr(
@@ -312,6 +317,10 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
             aspect,
         )
 
+    image_config_kwargs = {"aspect_ratio": aspect}
+    if image_size:
+        image_config_kwargs["image_size"] = image_size
+
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=model_name,
@@ -319,10 +328,7 @@ def generate_with_gemini(contents, dimension: str = "1:1") -> bytes:
         config=types.GenerateContentConfig(
             response_modalities=["IMAGE"],
             safety_settings=GEMINI_SAFETY_SETTINGS,
-            image_config=types.ImageConfig(
-                image_size="4K",
-                aspect_ratio=aspect,
-            ),
+            image_config=types.ImageConfig(**image_config_kwargs),
         ),
     )
 
@@ -378,6 +384,7 @@ def generate_image_bytes(
     gemini_contents=None,
     reference_paths: Optional[Sequence[str]] = None,
     dimension: str = "1:1",
+    image_size: Optional[str] = "4K",
 ) -> bytes:
     tier = normalize_model_tier(model_tier)
     # Premium/OpenAI path remains in place but is unreachable while tier normalization
@@ -396,8 +403,13 @@ def generate_image_bytes(
 
     prepared_contents = _append_clothing_rules_to_contents(gemini_contents)
     logger.info(
-        "Using AI for image generation dimension=%s prompt_chars=%s",
+        "Using AI for image generation dimension=%s prompt_chars=%s image_size=%s",
         dimension,
         len(enriched_prompt),
+        image_size or "default",
     )
-    return generate_with_gemini(prepared_contents, dimension)
+    return generate_with_gemini(
+        prepared_contents,
+        dimension,
+        image_size=image_size,
+    )

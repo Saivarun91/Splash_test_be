@@ -582,7 +582,7 @@ def generate_ai_images_background(collection_id, user_id):
         expr = expression_hint[i % len(expression_hint)]
         prompt_text = (
             "Generate exactly one photorealistic studio portrait. "
-            "REQUIRED: (1) The person must be an Indian woman ai model(age 18-25 years), Indian facial features and Indian white skin tone only. "
+            "REQUIRED: (1) The person must be an Indian woman ai model, Indian facial features and Indian white skin tone only. "
             "(2) Background must be only a single solid color: pure white or very light grey, nothing else. No room, no fabric, no patterns, no objects. "
             "model should not wear any jewelry but should have a minimal makeup on the face"
             "model should have the smiling expression"
@@ -1677,6 +1677,30 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
             resolved_aspect = str(aspect_ratios.get(selection_key) or "1:1").strip()
         aspect_ratio = resolved_aspect if resolved_aspect in ALLOWED_ASPECT_RATIOS else "1:1"
 
+        # Validate model requirement BEFORE charging credits
+        needs_model = prompt_key in ("model_image", "campaign_image")
+        model_b64 = None
+        # Always define for metadata save — white_background / background_replace do not require a model
+        raw_selected = getattr(item, "selected_model", None)
+        selected_model = raw_selected if isinstance(raw_selected, dict) else {}
+        has_usable_model = bool(selected_model.get("local") or selected_model.get("cloud"))
+
+        if needs_model:
+            if not has_usable_model:
+                return {
+                    "success": False,
+                    "error": "No model selected. Please go to the Models tab and select a model first.",
+                }
+
+            model_absolute_path = resolve_media_path(selected_model.get("local"))
+
+            if not model_absolute_path or not os.path.exists(model_absolute_path):
+                return {"success": False, "error": "Selected model image not found on server."}
+
+            with open(model_absolute_path, "rb") as f:
+                model_bytes = f.read()
+            model_b64 = base64.b64encode(model_bytes).decode("utf-8")
+
         organization = get_user_organization(user)
         project_ref = collection.project if hasattr(collection, 'project') else None
         credit_metadata = {
@@ -1706,26 +1730,6 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
 
         if not credit_result['success']:
             return {"success": False, "error": credit_result['message']}
-
-        needs_model = prompt_key in ("model_image", "campaign_image")
-        model_b64 = None
-
-        if needs_model:
-            if not hasattr(item, "selected_model") or not item.selected_model:
-                return {
-                    "success": False,
-                    "error": "No model selected. Please go to the Models tab and select a model first.",
-                }
-
-            selected_model = item.selected_model
-            model_absolute_path = resolve_media_path(selected_model.get("local"))
-
-            if not model_absolute_path or not os.path.exists(model_absolute_path):
-                return {"success": False, "error": "Selected model image not found on server."}
-
-            with open(model_absolute_path, "rb") as f:
-                model_bytes = f.read()
-            model_b64 = base64.b64encode(model_bytes).decode("utf-8")
 
         if not hasattr(item, "generated_prompts") or not item.generated_prompts:
             return {"success": False, "error": "No generated prompts found."}
@@ -2034,12 +2038,13 @@ STYLE / MOODBOARD DIRECTION:
             f"({len(moodboard_text_bits)} analysis bits; no moodboard images attached)"
         )
 
+        image_config_kwargs = {"aspect_ratio": aspect_ratio}
+        if prompt_key != "white_background":
+            image_config_kwargs["image_size"] = "4K"
+
         config = types.GenerateContentConfig(
             response_modalities=["TEXT", "IMAGE"],
-            image_config=types.ImageConfig(
-                image_size="4K",
-                aspect_ratio=aspect_ratio,
-            )
+            image_config=types.ImageConfig(**image_config_kwargs),
         )
 
         logger.info(
@@ -2254,11 +2259,13 @@ def generate_all_product_model_images_background(collection_id, user_id):
         collection = Collection.objects.get(id=collection_id)
         item = collection.items[0]  # Assuming single-item collection setup
 
-        # Get the selected model from the collection
-        if not hasattr(item, 'selected_model') or not item.selected_model:
+        # Get the selected model from the collection (must have a usable path)
+        selected_model = getattr(item, 'selected_model', None) or {}
+        if not isinstance(selected_model, dict) or not (
+            selected_model.get("local") or selected_model.get("cloud")
+        ):
             return {"success": False, "error": "No model selected. Please select a model first."}
 
-        selected_model = item.selected_model
         model_absolute_path = resolve_media_path(selected_model.get("local"))
         model_cloud_url = selected_model.get("cloud")
 
@@ -3117,12 +3124,13 @@ Follow this specific style prompt: {prompt_text}"""
                         logger.info(log_msg)
                         print(log_msg)
 
+                    image_config_kwargs = {"aspect_ratio": "1:1"}
+                    if key != "white_background":
+                        image_config_kwargs["image_size"] = "4K"
+
                     config = types.GenerateContentConfig(
                         response_modalities=["TEXT", "IMAGE"],
-                        image_config=types.ImageConfig(
-                            image_size="4K",
-                            aspect_ratio="1:1"
-                        )
+                        image_config=types.ImageConfig(**image_config_kwargs),
                     )
 
                     try:
@@ -3625,12 +3633,13 @@ def regenerate_product_model_image(request, collection_id):
             {"text": custom_prompt}
         ]
 
+        image_config_kwargs = {"aspect_ratio": "1:1"}
+        if original_type != "white_background":
+            image_config_kwargs["image_size"] = "4K"
+
         config = types.GenerateContentConfig(
             response_modalities=["TEXT", "IMAGE"],
-            image_config=types.ImageConfig(
-                image_size="4K",
-                aspect_ratio="1:1"
-            )
+            image_config=types.ImageConfig(**image_config_kwargs),
         )
 
         resp = client.models.generate_content(

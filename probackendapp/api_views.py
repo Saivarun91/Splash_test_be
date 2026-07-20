@@ -42,6 +42,16 @@ import jwt
 
 logger = logging.getLogger(__name__)
 
+
+def _usable_selected_model(selected_model):
+    """Return selected_model only if it has a usable local/cloud path; else None."""
+    if not isinstance(selected_model, dict):
+        return None
+    if selected_model.get("local") or selected_model.get("cloud"):
+        return selected_model
+    return None
+
+
 # -------------------------
 # Project API Views
 # -------------------------
@@ -242,7 +252,9 @@ def api_project_detail(request, project_id):
                     'generated_model_images': item.generated_model_images or [],
                     'moodboard_explanation': item.moodboard_explanation or "",
                     'uploaded_model_images': item.uploaded_model_images or [],
-                    'selected_model': item.selected_model if hasattr(item, 'selected_model') else None,
+                    'selected_model': _usable_selected_model(
+                        item.selected_model if hasattr(item, 'selected_model') else None
+                    ),
                     'product_images': []
                 }
 
@@ -437,7 +449,9 @@ def api_collection_detail(request, collection_id):
                 "global_instructions": item.global_instructions or "",
                 'moodboard_explanation': item.moodboard_explanation or "",
                 'uploaded_model_images': item.uploaded_model_images or [],
-                'selected_model': item.selected_model if hasattr(item, 'selected_model') else None,
+                'selected_model': _usable_selected_model(
+                        item.selected_model if hasattr(item, 'selected_model') else None
+                    ),
                 'product_images': []
             }
 
@@ -555,7 +569,9 @@ def api_project_setup_description(request, project_id):
             'global_instructions': item.global_instructions or "",
             'moodboard_explanation': item.moodboard_explanation or "",
             'uploaded_model_images': item.uploaded_model_images or [],
-            'selected_model': item.selected_model if hasattr(item, 'selected_model') else None,
+            'selected_model': _usable_selected_model(
+                        item.selected_model if hasattr(item, 'selected_model') else None
+                    ),
         }
 
         collection_data = {
@@ -2119,7 +2135,9 @@ def api_generate_all_product_model_images(request, collection_id):
             )
 
         item = collection.items[0]
-        has_selected_model = bool(getattr(item, "selected_model", None))
+        has_selected_model = _usable_selected_model(
+            getattr(item, "selected_model", None)
+        ) is not None
 
         # Parse request body for image type selections
         try:
@@ -2227,8 +2245,7 @@ def api_generate_all_product_model_images(request, collection_id):
                 except (ValueError, TypeError):
                     continue
 
-            selected_keys = list(
-                selected_keys_set) if selected_keys_set else available_prompt_keys
+            selected_keys = list(selected_keys_set)
 
         # Cancel any other running jobs for this collection to prevent mixing batches
         # This ensures only the latest batch's images are shown
@@ -2620,8 +2637,9 @@ def api_get_all_models(request, collection_id):
 
         ai_models = item.generated_model_images or []
         real_models = item.uploaded_model_images or []
-        selected_model = item.selected_model if hasattr(
-            item, 'selected_model') else None
+        selected_model = _usable_selected_model(
+            item.selected_model if hasattr(item, 'selected_model') else None
+        )
 
         return Response({
             "success": True,
