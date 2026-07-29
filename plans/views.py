@@ -5,6 +5,7 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
 import json
+import urllib.request
 from mongoengine.errors import DoesNotExist, NotUniqueError, ValidationError
 from .models import Plan
 from .pricing_helpers import (
@@ -36,6 +37,63 @@ def _get_tax_config_dict():
     }
 
 
+def _client_ip(request):
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.META.get("HTTP_X_REAL_IP")
+    if real_ip:
+        return real_ip.strip()
+    return (request.META.get("REMOTE_ADDR") or "").strip()
+
+
+def _country_from_headers(request):
+    for key in (
+        "HTTP_CF_IPCOUNTRY",
+        "HTTP_X_VERCEL_IP_COUNTRY",
+        "HTTP_X_COUNTRY_CODE",
+        "HTTP_CLOUDFRONT_VIEWER_COUNTRY",
+    ):
+        code = (request.META.get(key) or "").strip().upper()
+        if code and code not in ("XX", "T1", "UNKNOWN"):
+            return code
+    return None
+
+
+def _is_private_ip(ip):
+    if not ip:
+        return True
+    value = ip.strip().lower()
+    if value in ("127.0.0.1", "::1", "localhost"):
+        return True
+    if value.startswith("10.") or value.startswith("192.168.") or value.startswith("fc") or value.startswith("fd"):
+        return True
+    if value.startswith("172."):
+        try:
+            second = int(value.split(".")[1])
+            if 16 <= second <= 31:
+                return True
+        except (IndexError, ValueError):
+            pass
+    return False
+
+
+def _country_from_ip_lookup(ip):
+    """Resolve country for an IP. Private/local IPs use the server's public egress IP."""
+    try:
+        if _is_private_ip(ip):
+            url = "http://ip-api.com/json/?fields=status,countryCode"
+        else:
+            url = f"http://ip-api.com/json/{ip}?fields=status,countryCode"
+        with urllib.request.urlopen(url, timeout=2.5) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if payload.get("status") == "success" and payload.get("countryCode"):
+            return str(payload["countryCode"]).upper()
+    except Exception:
+        return None
+    return None
+
+
 # =====================
 # Public pricing cards (Starter / Growth / Custom)
 # =====================
@@ -63,6 +121,49 @@ def list_pricing_plans(request):
         }, status=200)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@csrf_exempt
+def detect_pricing_geo(request):
+    """Detect visitor country for pricing currency defaults (India → INR, else USD)."""
+    try:
+        country = _country_from_headers(request)
+        source = "header" if country else None
+        ip = _client_ip(request)
+        if not country:
+            country = _country_from_ip_lookup(ip)
+            source = "ip" if country else None
+
+        if not country:
+            return JsonResponse({
+                'success': True,
+                'country_code': None,
+                'currency': 'USD',
+                'is_india': False,
+                'fallback': True,
+                'ip': ip or None,
+            }, status=200)
+
+        is_india = country == "IN"
+        return JsonResponse({
+            'success': True,
+            'country_code': country,
+            'currency': 'INR' if is_india else 'USD',
+            'is_india': is_india,
+            'fallback': False,
+            'source': source,
+            'ip': ip or None,
+        }, status=200)
+    except Exception as e:
+        return JsonResponse({
+            'success': True,
+            'country_code': None,
+            'currency': 'USD',
+            'is_india': False,
+            'fallback': True,
+            'error': str(e),
+        }, status=200)
 
 
 @api_view(['POST'])

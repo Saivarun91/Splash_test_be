@@ -7,6 +7,7 @@ class Plan(Document):
     description = StringField()
     price = FloatField(required=True, default=0.0)
     original_price = FloatField(default=None)  # For discounted plans
+    price_usd = FloatField(default=None)  # USD display/checkout price (INR stays in `price`)
     currency = StringField(choices=['USD', 'INR'], default='USD')  # Currency for the plan
     billing_cycle = StringField(choices=['monthly', 'yearly'], default='monthly')
     credits_per_month = IntField(default=1000)

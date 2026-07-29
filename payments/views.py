@@ -138,6 +138,7 @@ def create_razorpay_order(request):
         credits = int(data.get('credits', 0))
         plan_id = data.get('plan_id')  # Optional - for plan subscriptions
         plan_slug = data.get('plan_slug')
+        requested_currency = str(data.get('currency') or '').upper().strip()
 
         # Optional billing details provided from frontend "billing details" step
         billing_name = data.get('billing_name')
@@ -154,18 +155,46 @@ def create_razorpay_order(request):
         billing_pin = data.get('billing_pin')
         billing_state = data.get('billing_state')
         
-        if amount <= 0:
-            return JsonResponse({'error': 'amount is required and must be greater than 0'}, status=400)
-        
-        # If plan_id is provided, get plan details
+        # If plan_id / plan_slug is provided, get plan details and authoritative amount
         plan = None
         if plan_id:
             plan = Plan.objects(id=plan_id).first()
             if not plan:
                 return JsonResponse({'error': 'Plan not found'}, status=404)
+        elif plan_slug:
+            plan = Plan.objects(slug=plan_slug).first()
+            if not plan:
+                # Fallback for older docs that stored slug only in custom_settings
+                for candidate in Plan.objects():
+                    cs = candidate.custom_settings or {}
+                    slug = (getattr(candidate, 'slug', None) or cs.get('slug') or '').lower()
+                    if slug == str(plan_slug).lower():
+                        plan = candidate
+                        break
+            if not plan:
+                return JsonResponse({'error': 'Plan not found'}, status=404)
+            plan_id = str(plan.id)
+
+        currency = 'INR'
+        if requested_currency in ('USD', 'INR'):
+            currency = requested_currency
+        elif plan and getattr(plan, 'currency', None) == 'USD':
+            currency = 'USD'
+
+        if plan:
+            if currency == 'USD':
+                usd_price = getattr(plan, 'price_usd', None)
+                if usd_price in (None, ''):
+                    return JsonResponse({'error': 'USD price is not configured for this plan'}, status=400)
+                amount = float(usd_price)
+            else:
+                amount = float(plan.price or 0)
             # Use plan's credits if credits not specified
             if credits <= 0:
                 credits = plan.credits_per_month
+
+        if amount <= 0:
+            return JsonResponse({'error': 'amount is required and must be greater than 0'}, status=400)
         
         if credits <= 0:
             return JsonResponse({'error': 'credits are required'}, status=400)
@@ -186,15 +215,27 @@ def create_razorpay_order(request):
             # Single user payment
             is_single_user = True
         
-        # Calculate tax from billing location (India / Telangana rules)
-        tax_info = calculate_billing_tax(
-            amount,
-            billing_country=billing_country,
-            billing_state=billing_state,
-            billing_address=billing_address or ' '.join(filter(None, [
-                billing_address_line1, billing_address_line2, billing_city, billing_pin, billing_country
-            ])),
-        )
+        # GST only for INR — USD charges base amount with no tax
+        if currency == 'USD':
+            tax_info = {
+                'tax_rate': 0.0,
+                'tax_amount': 0.0,
+                'cgst_rate': 0.0,
+                'sgst_rate': 0.0,
+                'cgst_amount': 0.0,
+                'sgst_amount': 0.0,
+                'total_amount': round(float(amount), 2),
+                'is_telangana': False,
+            }
+        else:
+            tax_info = calculate_billing_tax(
+                amount,
+                billing_country=billing_country,
+                billing_state=billing_state,
+                billing_address=billing_address or ' '.join(filter(None, [
+                    billing_address_line1, billing_address_line2, billing_city, billing_pin, billing_country
+                ])),
+            )
         tax_rate = tax_info['tax_rate']
         tax_amount = tax_info['tax_amount']
         total_amount = tax_info['total_amount']
@@ -220,7 +261,8 @@ def create_razorpay_order(request):
         
         order_notes = {
             'user_id': str(request.user.id),
-            'credits': credits
+            'credits': credits,
+            'currency': currency,
         }
         
         if organization:
@@ -231,15 +273,11 @@ def create_razorpay_order(request):
         
         if plan_id:
             order_notes['plan_id'] = str(plan_id)
-            order_notes['plan_name'] = plan.name
-        
-        currency = 'INR'
-        if plan and getattr(plan, 'currency', None) == 'USD':
-            currency = 'USD'
+            order_notes['plan_name'] = plan.name if plan else None
 
         order_data = {
-            # Razorpay expects final amount including GST, in paise
-            'amount': int(total_amount * 100),
+            # Razorpay expects final amount including GST, in smallest currency unit
+            'amount': int(round(total_amount * 100)),
             'currency': currency,
             'receipt': receipt_id,
             'notes': order_notes
@@ -281,7 +319,8 @@ def create_razorpay_order(request):
             metadata=json.dumps({
                 'razorpay_order': razorpay_order,
                 'created_by': str(request.user.id),
-                'plan_id': str(plan_id) if plan_id else None
+                'plan_id': str(plan_id) if plan_id else None,
+                'currency': currency,
             })
         )
         payment_transaction.save()

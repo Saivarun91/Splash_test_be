@@ -33,6 +33,7 @@ DEFAULT_PRICING_PLANS = [
         "name": "Starter",
         "description": "Perfect for small jewelry brands & startups.",
         "price": 4999.0,
+        "price_usd": 59.0,
         "currency": "INR",
         "billing_cycle": "monthly",
         "credits_per_month": 100,
@@ -55,6 +56,7 @@ DEFAULT_PRICING_PLANS = [
         "name": "Growth",
         "description": "Ideal for growing jewelry brands.",
         "price": 13999.0,
+        "price_usd": 169.0,
         "currency": "INR",
         "billing_cycle": "monthly",
         "credits_per_month": 300,
@@ -105,6 +107,11 @@ DEFAULT_FOOTER_NOTE = "Secure payments. Cancel or change plans anytime."
 
 PRICING_SIGNUP_CREDITS = 10
 DEFAULT_FREE_SIGNUP_CREDITS = 10
+
+DEFAULT_PRICE_USD_BY_SLUG = {
+    "starter": 59.0,
+    "growth": 169.0,
+}
 
 
 def _plan_slug(plan):
@@ -180,6 +187,7 @@ def serialize_pricing_plan(plan):
         "name": plan.name,
         "description": plan.description or "",
         "price": plan.price if plan.price else None,
+        "priceUsd": getattr(plan, "price_usd", None),
         "priceDisplay": price_display,
         "currency": getattr(plan, "currency", "INR") or "INR",
         "billingCycle": cycle_short,
@@ -217,6 +225,7 @@ def _create_pricing_plan_from_defaults(data):
         name=data["name"],
         description=data.get("description", ""),
         price=float(data.get("price", 0)),
+        price_usd=float(data["price_usd"]) if data.get("price_usd") not in (None, "") else None,
         currency=data.get("currency", "INR"),
         billing_cycle=data.get("billing_cycle", "monthly"),
         credits_per_month=int(data.get("credits_per_month", 0)),
@@ -256,14 +265,20 @@ def ensure_pricing_plans():
             created.append(_create_pricing_plan_from_defaults(data))
 
     for plan in get_pricing_plans_queryset(active_only=False):
-        if _plan_slug(plan) != "free":
-            continue
-        current_icon = getattr(plan, "icon", None) or (plan.custom_settings or {}).get("icon")
-        if current_icon in (None, "", "diamond"):
-            plan.icon = "sparkles"
+        slug = _plan_slug(plan)
+        changed = False
+        if slug == "free":
+            current_icon = getattr(plan, "icon", None) or (plan.custom_settings or {}).get("icon")
+            if current_icon in (None, "", "diamond"):
+                plan.icon = "sparkles"
+                changed = True
+        default_usd = DEFAULT_PRICE_USD_BY_SLUG.get(slug)
+        if default_usd is not None and getattr(plan, "price_usd", None) in (None,):
+            plan.price_usd = float(default_usd)
+            changed = True
+        if changed:
             plan.updated_at = datetime.utcnow()
             plan.save()
-        break
 
     return created
 
@@ -279,6 +294,9 @@ def apply_pricing_payload(plan, data, user=None):
         plan.description = data["description"]
     if "price" in data:
         plan.price = float(data["price"] or 0)
+    if "price_usd" in data:
+        raw_usd = data["price_usd"]
+        plan.price_usd = float(raw_usd) if raw_usd not in (None, "") else None
     if "price_display" in data:
         plan.price_display = data["price_display"] or None
     if "currency" in data:

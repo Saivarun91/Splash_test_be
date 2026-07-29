@@ -476,7 +476,7 @@ Common errors:
 TOKEN="your_jwt_token_here"
 
 # Upload ornament
-curl -X POST http://localhost:8000/imgbackendapp/ \
+curl -X POST /imgbackendapp/ \
   -H "Authorization: Bearer $TOKEN" \
   -F "image=@/path/to/image.jpg" \
   -F "prompt=Make it elegant"
