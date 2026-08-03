@@ -642,6 +642,7 @@ def get_default_page_content(slug):
                         {'label': 'Instagram', 'href': 'https://www.instagram.com/splash_ai_studios/'},
                         {'label': 'About', 'href': '/about'},
                         {'label': "FAQ's", 'href': '/faqs'},
+                        {'label': 'Blogs', 'href': '/blog'},
                     ],
                     [
                         {'label': 'Contact', 'href': '/contact'},
@@ -658,6 +659,7 @@ def get_default_page_content(slug):
                     {'label': 'Instagram', 'href': 'https://www.instagram.com/splash_ai_studios/'},
                     {'label': 'About', 'href': '/about'},
                     {'label': "FAQ's", 'href': '/faqs'},
+                    {'label': 'Blogs', 'href': '/blog'},
                     {'label': 'Contact', 'href': '/contact'},
                     {'label': 'Vision & Mission', 'href': '/vision-mision'},
                     {'label': 'Pricing', 'href': '/pricing'},
