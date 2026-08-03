@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 from mongoengine.errors import DoesNotExist, ValidationError
-from .models import BeforeAfterImage, PageContent, BlogPost, PublicGalleryImage
+from .models import BeforeAfterImage, PageContent, PublicGalleryImage
 from users.models import User, Role
 from common.middleware import authenticate
 from datetime import datetime
@@ -637,11 +637,33 @@ def get_default_page_content(slug):
             'footer': {
                 'logo_url': '/images/SplashLogoPNG.png',
                 'copyright': '© 2025 Splash AI Studio',
+                'link_rows': [
+                    [
+                        {'label': 'Instagram', 'href': 'https://www.instagram.com/splash_ai_studios/'},
+                        {'label': 'About', 'href': '/about'},
+                        {'label': "FAQ's", 'href': '/faqs'},
+                    ],
+                    [
+                        {'label': 'Contact', 'href': '/contact'},
+                        {'label': 'Vision & Mission', 'href': '/vision-mision'},
+                        {'label': 'Pricing', 'href': '/pricing'},
+                    ],
+                    [
+                        {'label': 'Privacy', 'href': '/privacy'},
+                        {'label': 'Terms', 'href': '/terms'},
+                        {'label': 'Security', 'href': '/security'},
+                    ],
+                ],
                 'links': [
                     {'label': 'Instagram', 'href': 'https://www.instagram.com/splash_ai_studios/'},
+                    {'label': 'About', 'href': '/about'},
+                    {'label': "FAQ's", 'href': '/faqs'},
+                    {'label': 'Contact', 'href': '/contact'},
+                    {'label': 'Vision & Mission', 'href': '/vision-mision'},
+                    {'label': 'Pricing', 'href': '/pricing'},
                     {'label': 'Privacy', 'href': '/privacy'},
                     {'label': 'Terms', 'href': '/terms'},
-                    {'label': 'Contact', 'href': '/contact'},
+                    {'label': 'Security', 'href': '/security'},
                 ],
             },
             'product_chapters': [],
@@ -792,224 +814,6 @@ def update_page_content(request, slug):
             doc = PageContent(page_slug=slug, content=content)
             doc.save()
         return JsonResponse({'success': True, 'content': doc.content}, status=200)
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-# =====================
-# Blog: List (Public)
-# =====================
-@api_view(['GET'])
-@csrf_exempt
-def get_blog_posts(request):
-    """Public: List published blog posts."""
-    try:
-        posts = BlogPost.objects(is_published='true').order_by('order', '-created_at')
-        data = []
-        for p in posts:
-            data.append({
-                'slug': p.slug,
-                'title': p.title,
-                'excerpt': p.excerpt or '',
-                'date': p.date or '',
-                'author': p.author or 'Splash Team',
-                'category': p.category or '',
-                'read_time': p.read_time or '5 min read',
-                'image': p.image_url or '',
-            })
-        return JsonResponse({'success': True, 'posts': data}, status=200)
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-# =====================
-# Blog: Single Post (Public)
-# =====================
-@api_view(['GET'])
-@csrf_exempt
-def get_blog_post(request, slug):
-    """Public: Get single blog post by slug."""
-    try:
-        post = BlogPost.objects(slug=slug, is_published='true').first()
-        if not post:
-            return JsonResponse({'success': False, 'error': 'Post not found'}, status=404)
-        return JsonResponse({
-            'success': True,
-            'post': {
-                'slug': post.slug,
-                'title': post.title,
-                'excerpt': post.excerpt or '',
-                'body': post.body or '',
-                'date': post.date or '',
-                'author': post.author or 'Splash Team',
-                'category': post.category or '',
-                'read_time': post.read_time or '5 min read',
-                'image': post.image_url or '',
-            }
-        }, status=200)
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-# =====================
-# Blog: List All (Admin)
-# =====================
-@api_view(['GET'])
-@csrf_exempt
-@authenticate
-def get_all_blog_posts(request):
-    """Admin: List all blog posts."""
-    if not is_admin(request.user):
-        return JsonResponse({'error': 'Only admin can access this endpoint'}, status=403)
-    try:
-        posts = BlogPost.objects().order_by('order', '-created_at')
-        data = []
-        for p in posts:
-            data.append({
-                'id': str(p.id),
-                'slug': p.slug,
-                'title': p.title,
-                'excerpt': p.excerpt or '',
-                'body': p.body or '',
-                'date': p.date or '',
-                'author': p.author or 'Splash Team',
-                'category': p.category or '',
-                'read_time': p.read_time or '5 min read',
-                'image_url': p.image_url or '',
-                'order': p.order,
-                'is_published': p.is_published,
-                'created_at': p.created_at.isoformat() if p.created_at else None,
-                'updated_at': p.updated_at.isoformat() if p.updated_at else None,
-            })
-        return JsonResponse({'success': True, 'posts': data}, status=200)
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-# =====================
-# Blog: Create (Admin)
-# =====================
-@api_view(['POST'])
-@csrf_exempt
-@authenticate
-def create_blog_post(request):
-    if not is_admin(request.user):
-        return JsonResponse({'error': 'Only admin can create posts'}, status=403)
-    try:
-        data = json.loads(request.body)
-        slug = data.get('slug') or (data.get('title', '') or '').lower().replace(' ', '-')
-        import re
-        slug = re.sub(r'[^a-z0-9-]', '', slug)
-        if not slug:
-            slug = 'post-' + datetime.utcnow().strftime('%Y%m%d%H%M')
-        if BlogPost.objects(slug=slug).first():
-            return JsonResponse({'success': False, 'error': 'A post with this slug already exists'}, status=400)
-        post = BlogPost(
-            slug=slug,
-            title=data.get('title', ''),
-            excerpt=data.get('excerpt', ''),
-            body=data.get('body', ''),
-            date=data.get('date', ''),
-            author=data.get('author', 'Splash Team'),
-            category=data.get('category', ''),
-            read_time=data.get('read_time', '5 min read'),
-            image_url=data.get('image_url', ''),
-            order=int(data.get('order', 0)),
-            is_published='true' if data.get('is_published', True) else 'false',
-        )
-        post.save()
-        return JsonResponse({
-            'success': True,
-            'post': {
-                'id': str(post.id),
-                'slug': post.slug,
-                'title': post.title,
-                'excerpt': post.excerpt,
-                'body': post.body,
-                'date': post.date,
-                'author': post.author,
-                'category': post.category,
-                'read_time': post.read_time,
-                'image_url': post.image_url,
-                'order': post.order,
-                'is_published': post.is_published,
-            }
-        }, status=200)
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-# =====================
-# Blog: Update (Admin)
-# =====================
-@api_view(['PUT'])
-@csrf_exempt
-@authenticate
-def update_blog_post(request, slug):
-    if not is_admin(request.user):
-        return JsonResponse({'error': 'Only admin can update posts'}, status=403)
-    try:
-        post = BlogPost.objects(slug=slug).first()
-        if not post:
-            return JsonResponse({'success': False, 'error': 'Post not found'}, status=404)
-        data = json.loads(request.body)
-        if 'title' in data:
-            post.title = data['title']
-        if 'excerpt' in data:
-            post.excerpt = data['excerpt']
-        if 'body' in data:
-            post.body = data['body']
-        if 'date' in data:
-            post.date = data['date']
-        if 'author' in data:
-            post.author = data['author']
-        if 'category' in data:
-            post.category = data['category']
-        if 'read_time' in data:
-            post.read_time = data['read_time']
-        if 'image_url' in data:
-            post.image_url = data['image_url']
-        if 'order' in data:
-            post.order = int(data['order'])
-        if 'is_published' in data:
-            post.is_published = 'true' if data['is_published'] else 'false'
-        post.save()
-        return JsonResponse({
-            'success': True,
-            'post': {
-                'id': str(post.id),
-                'slug': post.slug,
-                'title': post.title,
-                'excerpt': post.excerpt,
-                'body': post.body,
-                'date': post.date,
-                'author': post.author,
-                'category': post.category,
-                'read_time': post.read_time,
-                'image_url': post.image_url,
-                'order': post.order,
-                'is_published': post.is_published,
-            }
-        }, status=200)
-    except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-# =====================
-# Blog: Delete (Admin)
-# =====================
-@api_view(['DELETE'])
-@csrf_exempt
-@authenticate
-def delete_blog_post(request, slug):
-    if not is_admin(request.user):
-        return JsonResponse({'error': 'Only admin can delete posts'}, status=403)
-    try:
-        post = BlogPost.objects(slug=slug).first()
-        if not post:
-            return JsonResponse({'success': False, 'error': 'Post not found'}, status=404)
-        post.delete()
-        return JsonResponse({'success': True, 'message': 'Post deleted'}, status=200)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 

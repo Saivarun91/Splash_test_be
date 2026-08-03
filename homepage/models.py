@@ -1,4 +1,16 @@
-from mongoengine import Document, StringField, DateTimeField, URLField, IntField, ReferenceField, DictField, ListField
+from mongoengine import (
+    Document,
+    EmbeddedDocument,
+    StringField,
+    DateTimeField,
+    URLField,
+    IntField,
+    ReferenceField,
+    DictField,
+    ListField,
+    BooleanField,
+    EmbeddedDocumentField,
+)
 from datetime import datetime
 
 
@@ -25,26 +37,59 @@ class PageContent(Document):
         return f"PageContent({self.page_slug})"
 
 
-class BlogPost(Document):
-    """Blog post for /blog listing and detail pages."""
-    slug = StringField(required=True, unique=True)
+class IdCounter(Document):
+    """Auto-increment counters for numeric public IDs (blog, faq)."""
+    name = StringField(required=True, unique=True)
+    seq = IntField(default=0)
+
+    meta = {
+        "collection": "id_counters",
+        "indexes": ["name"],
+        "strict": False,
+    }
+
+    @classmethod
+    def next_id(cls, name: str) -> int:
+        counter = cls.objects(name=name).modify(
+            upsert=True,
+            new=True,
+            set_on_insert__name=name,
+            inc__seq=1,
+        )
+        return int(counter.seq)
+
+
+class BlogFAQ(EmbeddedDocument):
+    id = IntField()
+    question = StringField(default="")
+    answer = StringField(default="")
+
+
+class Blog(Document):
+    """
+    Admin-managed blog post.
+    Public site lists posts with status="Published" via /api/homepage/blog/.
+    """
+    blog_id = IntField(required=True, unique=True)
     title = StringField(required=True)
-    excerpt = StringField()
-    body = StringField()  # HTML or markdown content for post detail
-    date = StringField()  # e.g. "October 16, 2025"
-    author = StringField(default="Splash Team")
-    category = StringField()
-    read_time = StringField(default="5 min read")
-    image_url = StringField()
-    order = IntField(default=0)
-    is_published = StringField(default='true')  # 'true' / 'false'
+    slug = StringField(required=True, unique=True)
+    author = StringField(default="")
+    short_content = StringField(default="")
+    full_content = StringField(default="")  # HTML (Description)
+    picture = StringField(default="")
+    status = StringField(default="Published")  # Published / Draft / Unpublished
+    is_trending = BooleanField(default=False)
+    mete_title = StringField(default="")  # legacy spelling — keep for API parity
+    meta_description = StringField(default="")
+    meta_keyword = StringField(default="")
+    faqs = ListField(EmbeddedDocumentField(BlogFAQ), default=list)
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)
 
     meta = {
-        "collection": "blog_posts",
-        "indexes": ["slug", "is_published", "order"],
-        "ordering": ["order", "-created_at"],
+        "collection": "blogs",
+        "indexes": ["blog_id", "slug", "status", "title", "author"],
+        "ordering": ["-created_at"],
         "strict": False,
     }
 
@@ -54,6 +99,10 @@ class BlogPost(Document):
 
     def __str__(self):
         return self.title
+
+
+# Backward-compatible alias so any leftover imports of BlogPost resolve to Blog.
+BlogPost = Blog
 
 
 class PublicGalleryImage(Document):

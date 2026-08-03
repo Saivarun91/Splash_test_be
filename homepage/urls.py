@@ -3,6 +3,7 @@ URL configuration for homepage app
 """
 from django.urls import path
 from . import views
+from . import blog_admin_views
 
 urlpatterns = [
     # Public: Get all active before/after images (for frontend display)
@@ -34,15 +35,6 @@ urlpatterns = [
     path('content/<str:slug>/admin/', views.get_page_content_admin, name='get_page_content_admin'),
     path('content/<str:slug>/admin/update/', views.update_page_content, name='update_page_content'),
     
-    # Blog (admin - must be before blog/<slug>)
-    path('blog/admin/all/', views.get_all_blog_posts, name='get_all_blog_posts'),
-    path('blog/admin/create/', views.create_blog_post, name='create_blog_post'),
-    path('blog/admin/<str:slug>/update/', views.update_blog_post, name='update_blog_post'),
-    path('blog/admin/<str:slug>/delete/', views.delete_blog_post, name='delete_blog_post'),
-    # Blog (public)
-    path('blog/', views.get_blog_posts, name='get_blog_posts'),
-    path('blog/<str:slug>/', views.get_blog_post, name='get_blog_post'),
-    
     # Public gallery CMS
     path('public-gallery/', views.get_public_gallery_images, name='get_public_gallery_images'),
     path('public-gallery/showcase/', views.get_homepage_showcase_images, name='get_homepage_showcase_images'),
@@ -55,4 +47,8 @@ urlpatterns = [
 
     # Admin: Upload content image (hero, showcase, etc.)
     path('upload-image/', views.upload_content_image, name='upload_content_image'),
+
+    # Public blogs (Published only)
+    path('blog/', blog_admin_views.public_blog_list, name='public_blog_list'),
+    path('blog/<slug:slug>/', blog_admin_views.public_blog_detail, name='public_blog_detail'),
 ]

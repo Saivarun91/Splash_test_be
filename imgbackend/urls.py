@@ -3,8 +3,16 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from organization import admin_views
+from homepage import blog_admin_views
 
 urlpatterns = [
+    # Blog admin APIs (must be registered before Django's /admin/ site)
+    path('admin/blog/listing', blog_admin_views.blog_listing, name='admin_blog_listing'),
+    path('admin/blog/add', blog_admin_views.blog_add, name='admin_blog_add'),
+    path('admin/blog/details/<int:blog_id>', blog_admin_views.blog_details, name='admin_blog_details'),
+    path('admin/blog/update/<int:blog_id>', blog_admin_views.blog_update, name='admin_blog_update'),
+    path('admin/blog/delete/<int:blog_id>', blog_admin_views.blog_delete, name='admin_blog_delete'),
+    path('admin/blog/download/<int:blog_id>', blog_admin_views.blog_download, name='admin_blog_download'),
     path('admin/', admin.site.urls),
     # replace 'myapp' with your app name
     path('image/', include('imgbackendapp.urls'), name='upload_ornament'),
