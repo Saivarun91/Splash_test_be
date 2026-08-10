@@ -46,6 +46,7 @@ from .reference_analyzer import (
     normalize_reference_type,
     safe_delete_reference_file,
 )
+from CREDITS.ai_generation import block_if_ai_generation_disabled
 
 # Check for Gemini SDK
 try:
@@ -153,6 +154,10 @@ def _analyze_saved_campaign_and_dress(file_paths):
 @authenticate
 def analyze_reference_image_view(request):
     """Analyze a reference image and return optimized text for image generation."""
+    blocked = block_if_ai_generation_disabled()
+    if blocked:
+        return blocked
+
     image = request.FILES.get('image')
     context = request.POST.get('context', 'background')
 
@@ -202,6 +207,10 @@ def upload_ornament(request):
     Upload ornament image and start white background generation.
     Uses MongoDB workflow (no Django ORM).
     """
+    blocked = block_if_ai_generation_disabled()
+    if blocked:
+        return blocked
+
     user = request.user
     user_id = str(user.id)
 
@@ -224,7 +233,7 @@ def upload_ornament(request):
                 status=400,
             )
 
-        bg_color = request.POST.get("background_color", "white").strip()
+        bg_color = request.POST.get("background_color", "white").strip() or "white"
         extra_prompt = request.POST.get("prompt", "").strip()
         dimension = request.POST.get("dimension", "1:1").strip()
 
@@ -304,6 +313,10 @@ def upload_ornament(request):
 @csrf_exempt
 @authenticate
 def change_background(request):
+    blocked = block_if_ai_generation_disabled()
+    if blocked:
+        return blocked
+
     # Get user from authentication middleware
     user = request.user
     user_id = str(user.id)
@@ -438,6 +451,10 @@ def change_background(request):
 @csrf_exempt
 @authenticate
 def generate_model_with_ornament(request):
+    blocked = block_if_ai_generation_disabled()
+    if blocked:
+        return blocked
+
     # Get user from authentication middleware
     user = request.user
     user_id = str(user.id)
@@ -558,6 +575,10 @@ def generate_real_model_with_ornament(request):
     Generate an AI image of a real uploaded model wearing the uploaded ornament.
     Ensures output is realistic, jewelry-focused, and high-quality.
     """
+    blocked = block_if_ai_generation_disabled()
+    if blocked:
+        return blocked
+
     # Get user from authentication middleware
     user = request.user
     user_id = str(user.id)
@@ -669,6 +690,10 @@ def generate_real_model_with_ornament(request):
 @csrf_exempt
 @authenticate
 def generate_campaign_shot_advanced(request):
+    blocked = block_if_ai_generation_disabled()
+    if blocked:
+        return blocked
+
     # Get user from authentication middleware
     user = request.user
     user_id = str(user.id)
@@ -1045,6 +1070,9 @@ def regenerate_image(request):
     Works for all image types. Combines the original prompt with the new prompt.
     Stores the regenerated image in the same collection with parent_image_id reference.
     """
+    blocked = block_if_ai_generation_disabled()
+    if blocked:
+        return blocked
 
     # Get user from authentication middleware
     user = request.user

@@ -20,12 +20,55 @@ from .models import Ornament
 from bson import ObjectId
 from common.error_reporter import report_handled_exception
 from common.user_friendly_errors import get_user_friendly_message
+
+
+def _is_non_retryable_generation_error(exc):
+    """Config / setup failures should fail fast — do not burn Celery retries."""
+    msg = str(exc or "").lower()
+    return (
+        "ai not configured" in msg
+        or "api key" in msg
+        or "not configured" in msg
+    )
+
+
+def _should_retry_generation_error(self, e):
+    return (
+        not _is_non_retryable_generation_error(e)
+        and self.request.retries < self.max_retries
+    )
+
+
+def _fail_generation_task(self, e, user_id):
+    """Report, optionally retry, otherwise return a failed result payload."""
+    traceback.print_exc()
+    report_handled_exception(
+        e,
+        request=self.request,
+        context={"user_id": user_id},
+    )
+    if _should_retry_generation_error(self, e):
+        raise self.retry(
+            exc=e,
+            countdown=60 * (self.request.retries + 1),
+        )
+    return {
+        "success": False,
+        "error": str(e),
+        "user_friendly_message": get_user_friendly_message(e),
+    }
 from .generation_utils import (
     build_variation_instruction,
     build_regeneration_image_instructions,
     load_image_bytes_from_source,
+    MULTI_PRODUCT_BACKGROUND_CHANGE_DEFAULT,
+    MULTI_PRODUCT_BACKGROUND_CHANGE_RULES,
     REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE,
     REFERENCE_DESCRIPTION_USAGE_INSTRUCTION,
+    THEMED_NO_HUMAN_RULE,
+    THEMED_ORNAMENT_PLACEMENT_RULE,
+    THEMED_REFERENCE_PLACEMENT_INSTRUCTION,
+    THEMED_NO_REFERENCE_PLACEMENT_FALLBACK,
     resolve_original_ornament_sources,
     resolve_regeneration_dimension,
 )
@@ -291,24 +334,7 @@ def generate_white_background_task(
         }
 
     except Exception as e:
-        traceback.print_exc()
-
-        report_handled_exception(
-            e,
-            request=self.request,
-            context={"user_id": user_id},
-        )
-
-        if self.request.retries < self.max_retries:
-            raise self.retry(
-                exc=e,
-                countdown=60 * (self.request.retries + 1),
-            )
-
-        return {
-            "success": False,
-            "error": str(e),
-        }
+        return _fail_generation_task(self, e, user_id)
 
 @shared_task(bind=True, max_retries=3)
 def change_background_task(
@@ -363,7 +389,33 @@ def change_background_task(
         if has_reference_analysis:
             user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
 
-        if has_reference_analysis:
+        multiple_products = len(product_b64_list) > 1
+
+        if multiple_products:
+            # Avoid singular "one ornament / 50-70% of frame" DB rules for multi-product
+            if has_reference_analysis:
+                scene_prompt = (
+                    "Place ALL uploaded products together in ONE cohesive composition. "
+                    "Use the following scene description for background/environment only. "
+                    f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
+                )
+                final_prompt = (
+                    f"{user_prompt} {scene_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
+                    f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
+                ).strip()
+            elif bg_color:
+                final_prompt = (
+                    f"{user_prompt} Place ALL uploaded products together in ONE cohesive "
+                    f"composition on a clean solid {bg_color} background. "
+                    "Include every product; do not omit any. Preserve each product exactly."
+                ).strip()
+            else:
+                final_prompt = (
+                    f"{user_prompt} Place ALL uploaded products together in ONE cohesive "
+                    "themed composition with a new complementary background. "
+                    "Include every product; do not omit any. Preserve each product exactly."
+                ).strip()
+        elif has_reference_analysis:
             bg_prompt = get_prompt_from_db(
                 "images_background_change_with_image",
                 (
@@ -399,18 +451,27 @@ def change_background_task(
             f"{final_prompt}{dimension_text}"
             f"{build_variation_instruction(variation_index, total_variations)}"
         )
-        base_prompt = get_prompt_from_db(
-            "images_background_change_base",
-            "{final_prompt}",
-            final_prompt=final_prompt_with_dimension,
-        )
+        if multiple_products:
+            base_prompt = get_prompt_from_db(
+                "images_background_change_base_multi",
+                (
+                    f"{MULTI_PRODUCT_BACKGROUND_CHANGE_DEFAULT}\n\n"
+                    f"{MULTI_PRODUCT_BACKGROUND_CHANGE_RULES}"
+                ),
+                final_prompt=final_prompt_with_dimension,
+            )
+        else:
+            base_prompt = get_prompt_from_db(
+                "images_background_change_base",
+                "{final_prompt}",
+                final_prompt=final_prompt_with_dimension,
+            )
         if dimension and dimension not in base_prompt:
             base_prompt = (
                 f"{base_prompt} Generate the image in {dimension} aspect ratio (width:height)."
             )
 
         contents = []
-        multiple_products = len(product_b64_list) > 1
         for idx, product_b64 in enumerate(product_b64_list):
             contents.append(
                 {
@@ -422,24 +483,49 @@ def change_background_task(
             )
             if multiple_products:
                 contents.append(
-                    f"This is product reference image {idx + 1} of {len(product_b64_list)}. "
-                    "Preserve this product accurately in the final image."
+                    f"This is ornaments/products reference image {idx + 1} of {len(product_b64_list)}. "
+                    "This exact ornament MUST appear in the final image. "
+                    "Use this image ONLY for exact ornament design identity "
+                    "(shape, stones, metal, details). "
+                    "Do NOT use this image for scene placement, orientation, angle, or facing direction. "
+                    "Preserve the design accurately and do not omit it."
                 )
             else:
                 contents.append(
                     "This is the product whose background must be changed. "
-                    "Preserve the product exactly; change only the background."
+                    "Use this image ONLY for exact ornament design identity "
+                    "(shape, stones, metal, details). "
+                    "Do NOT use this image for scene placement, orientation, angle, or facing direction. "
+                    "Preserve the product design exactly; place it using the reference placement only. "
+                    "Do not add any human or model."
                 )
 
         if multiple_products:
+            product_count = len(product_b64_list)
             contents.append(
-                "Generate ONE cohesive themed image that includes ALL uploaded products together "
-                "in a single composition with the new background. Do not omit any product."
+                f"MANDATORY MULTI-ORNAMENT REQUIREMENT: Exactly {product_count} ornament "
+                f"images were uploaded. The final themed image MUST include all "
+                f"{product_count} ornaments together in one cohesive composition. "
+                "Do not omit any ornament. Do not keep only the first ornament. "
+                f"If any of the {product_count} ornaments is missing, the result is invalid."
             )
+            contents.append(MULTI_PRODUCT_BACKGROUND_CHANGE_RULES)
+
+        contents.append(THEMED_NO_HUMAN_RULE)
+        contents.append(THEMED_ORNAMENT_PLACEMENT_RULE)
 
         if has_reference_analysis:
-            contents.append(REFERENCE_DESCRIPTION_USAGE_INSTRUCTION)
+            contents.append(
+                "The following text is the analyzed reference scene AND ornament placement. "
+                "Use background/lighting/atmosphere from it, and place the uploaded ornament(s) "
+                "using ONLY the placement/orientation/direction described there. "
+                "Do NOT copy jewelry design from the reference — only placement and scene. "
+                "Do NOT take placement from uploaded product photos."
+            )
             contents.append(REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE)
+            contents.append(THEMED_REFERENCE_PLACEMENT_INSTRUCTION)
+        else:
+            contents.append(THEMED_NO_REFERENCE_PLACEMENT_FALLBACK)
 
         contents.append(base_prompt)
 
@@ -457,6 +543,7 @@ def change_background_task(
             gemini_contents=contents,
             reference_paths=reference_paths,
             dimension=dimension,
+            skip_clothing_rules=True,
         )
 
         uploaded_urls = []
@@ -527,7 +614,7 @@ def change_background_task(
         logger.exception("change_background_task failed for user=%s", user_id)
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
-        if self.request.retries < self.max_retries:
+        if _should_retry_generation_error(self, e):
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         if local_generated_path and os.path.exists(local_generated_path):
             try:
@@ -700,11 +787,13 @@ def generate_model_with_ornament_task(
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
-        if self.request.retries < self.max_retries:
+        if _should_retry_generation_error(self, e):
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
             "status": "error",
+            "success": False,
             "message": str(e),
+            "error": str(e),
             "user_friendly_message": get_user_friendly_message(e),
         }
 
@@ -893,11 +982,13 @@ def generate_real_model_with_ornament_task(
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
-        if self.request.retries < self.max_retries:
+        if _should_retry_generation_error(self, e):
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
             "status": "error",
+            "success": False,
             "message": str(e),
+            "error": str(e),
             "user_friendly_message": get_user_friendly_message(e),
         }
 
@@ -1135,11 +1226,14 @@ def generate_campaign_shot_advanced_task(
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
-        if self.request.retries < self.max_retries:
+        if _should_retry_generation_error(self, e):
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
             "status": "error",
-            "message": str(e)
+            "success": False,
+            "message": str(e),
+            "error": str(e),
+            "user_friendly_message": get_user_friendly_message(e),
         }
 
 
@@ -1240,18 +1334,24 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
         )
         measurements = getattr(prev_doc, 'measurements', None) or ''
         measurements_text = f"measurements: {measurements}." if measurements else ""
+        image_type = getattr(prev_doc, "type", "") or ""
+        is_themed_regen = image_type == "background_change"
         dress_lock = (getattr(prev_doc, "dress", None) or "").strip()
-        dress_lock_text = (
-            f"DRESS/ATTIRE LOCK: {dress_lock} Keep this attire exactly unchanged "
-            "unless the user explicitly requests a clothing change."
-            if dress_lock
-            else (
+        if is_themed_regen:
+            dress_lock_text = ""
+        elif dress_lock:
+            dress_lock_text = (
+                f"DRESS/ATTIRE LOCK: {dress_lock} Keep this attire exactly unchanged "
+                "unless the user explicitly requests a clothing change."
+            )
+        else:
+            dress_lock_text = (
                 "DRESS/ATTIRE LOCK: Keep the dress/outfit in the base generated image "
                 "exactly unchanged unless the user explicitly requests a clothing change."
             )
-        )
         regeneration_instructions = build_regeneration_image_instructions(
             ornament_count=len(ornament_images),
+            image_type=image_type,
         )
         change_text = (
             f"USER REQUESTED CHANGE ONLY: {user_change}"
@@ -1277,15 +1377,23 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             regen_dir, img_bytes, "regen_ref.jpg", suffix=f"ref_{image_id}"
         )
         reference_paths.append(temp_ref_path)
+        if is_themed_regen:
+            base_lock_text = (
+                "BASE GENERATED THEMED IMAGE: Keep ornaments and background identical "
+                "except for the user's requested change. REMOVE any human, person, or "
+                "model if present. NEVER add a human or model. Keep the existing scene "
+                "placement of ornaments from this themed image (it came from the theme "
+                "reference). Do NOT re-place ornaments using the uploaded product photos."
+            )
+        else:
+            base_lock_text = (
+                "BASE GENERATED IMAGE: Keep this image identical except for the "
+                "user's requested change. Do not change dress, pose, model, "
+                "background, or ornament unless explicitly requested."
+            )
         contents.extend([
             {"inline_data": {"mime_type": "image/jpeg", "data": prev_img_b64}},
-            {
-                "text": (
-                    "BASE GENERATED IMAGE: Keep this image identical except for the "
-                    "user's requested change. Do not change dress, pose, model, "
-                    "background, or ornament unless explicitly requested."
-                )
-            },
+            {"text": base_lock_text},
         ])
 
         # 2) Original ornament image(s) — product lock only
@@ -1301,14 +1409,44 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             contents.append(
                 {"inline_data": {"mime_type": "image/jpeg", "data": ornament_b64}}
             )
-            contents.append(
-                {
-                    "text": (
-                        f"ORIGINAL ORNAMENT REFERENCE {idx + 1} of {len(ornament_images)}: "
-                        "Keep this ornament exactly identical in the output."
-                    )
-                }
-            )
+            if is_themed_regen:
+                ornament_lock_text = (
+                    f"ORIGINAL ORNAMENT REFERENCE {idx + 1} of {len(ornament_images)}: "
+                    "Use this ONLY for exact ornament design identity. "
+                    "Do NOT use this image for scene placement, orientation, or facing direction."
+                )
+            else:
+                ornament_lock_text = (
+                    f"ORIGINAL ORNAMENT REFERENCE {idx + 1} of {len(ornament_images)}: "
+                    "Keep this ornament exactly identical in the output."
+                )
+            contents.append({"text": ornament_lock_text})
+
+        if is_themed_regen:
+            contents.append({"text": THEMED_NO_HUMAN_RULE})
+            contents.append({"text": THEMED_ORNAMENT_PLACEMENT_RULE})
+            stored_reference_analysis = (
+                getattr(prev_doc, "reference_analysis", None) or ""
+            ).strip()
+            if stored_reference_analysis:
+                contents.append(
+                    {
+                        "text": (
+                            "ORIGINAL THEME REFERENCE PLACEMENT ANALYSIS: "
+                            f"{stored_reference_analysis}"
+                        )
+                    }
+                )
+                contents.append({"text": THEMED_REFERENCE_PLACEMENT_INSTRUCTION})
+            else:
+                contents.append(
+                    {
+                        "text": (
+                            "Keep ornament placement from the base themed image. "
+                            "Do not derive placement from uploaded product photos."
+                        )
+                    }
+                )
 
         contents.append({"text": full_prompt})
 
@@ -1320,6 +1458,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             dimension=dimension,
             # White BG regenerations should not request 4K
             image_size=None if prev_doc.type == "white_background" else "4K",
+            skip_clothing_rules=is_themed_regen,
         )
         local_regen_path = write_bytes_to_unique_path(
             regen_dir, generated_bytes, "regen.jpg", suffix=image_id
@@ -1388,7 +1527,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
     except Exception as e:
         traceback.print_exc()
         report_handled_exception(e, request=self.request, context={"user_id": user_id})
-        if self.request.retries < self.max_retries:
+        if _should_retry_generation_error(self, e):
             raise self.retry(exc=e, countdown=60 * (self.request.retries + 1))
         return {
             "success": False,

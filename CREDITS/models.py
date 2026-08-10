@@ -1,4 +1,4 @@
-from mongoengine import Document, ReferenceField, IntField, StringField, DateTimeField, DictField, FloatField
+from mongoengine import Document, ReferenceField, IntField, StringField, DateTimeField, DictField, FloatField, BooleanField
 from datetime import datetime
 
 
@@ -15,6 +15,8 @@ class CreditSettings(Document):
     # Credits recharge reminder thresholds (admin-controlled). Send reminder when balance <= threshold.
     credit_reminder_threshold_1 = IntField(default=20)   # e.g. remind at 20 credits
     credit_reminder_threshold_2 = IntField(default=10)   # e.g. remind at 10 credits
+    # When True, all users are blocked from starting new AI image generation jobs
+    ai_generation_disabled = BooleanField(default=False)
     updated_by = ReferenceField("User")
     updated_at = DateTimeField(default=datetime.utcnow)
     

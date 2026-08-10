@@ -181,6 +181,14 @@ def create_razorpay_order(request):
         elif plan and getattr(plan, 'currency', None) == 'USD':
             currency = 'USD'
 
+        # INR checkout is India-only — non-India IPs cannot create INR orders
+        if currency == 'INR':
+            from plans.geo import is_india_request
+            if not is_india_request(request):
+                return JsonResponse({
+                    'error': 'INR pricing is available only for customers in India. Please use USD.',
+                }, status=403)
+
         if plan:
             if currency == 'USD':
                 usd_price = getattr(plan, 'price_usd', None)

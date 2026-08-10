@@ -82,6 +82,8 @@ class Blog(Document):
     mete_title = StringField(default="")  # legacy spelling — keep for API parity
     meta_description = StringField(default="")
     meta_keyword = StringField(default="")
+    # SEO robots: published blogs are indexable on the public site
+    robots = StringField(default="index,follow")
     faqs = ListField(EmbeddedDocumentField(BlogFAQ), default=list)
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)

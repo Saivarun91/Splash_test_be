@@ -1747,10 +1747,10 @@ def generate_single_product_model_image_background(collection_id, user_id, produ
         # Prompt templates
         from .prompt_initializer import get_prompt_from_db
 
-        default_white_bg = """remove the background from the product image and replace it with a clean, elegant white studio background.
+        default_white_bg = """remove the background from the product image and replace it with a clean, elegant {bg_color} studio background.
         Do NOT modify, alter, or redesign the product in any way — its color, shape, texture, and proportions must remain exactly the same.(important dont change the product image) 
-Generate a high-quality product photo on a clean, elegant white studio background. 
-The product should appear exactly as in the input image, only placed against a professional white background. 
+Generate a high-quality product photo on a clean, elegant {bg_color} studio background. 
+The product should appear exactly as in the input image, only placed against a professional {bg_color} background. 
 Ensure balanced, soft studio lighting with natural shadows and realistic reflections. 
 Highlight product clarity and detail. 
 Follow this specific style prompt: {prompt_text}"""
@@ -1913,14 +1913,27 @@ STYLE / MOODBOARD DIRECTION:
         if not prompt_text or not prompt_text.strip():
             return {"success": False, "error": f"Prompt for key '{prompt_key}' is empty."}
 
+        # Plain BG color from product selections (default white)
+        product_selections = getattr(product, "generation_selections", None) or {}
+        bg_color = str(product_selections.get("plainBgColor") or "#ffffff").strip() or "#ffffff"
+
         # Build prompt as in bulk generator (reuse templates/logic where possible)
         custom_prompt = prompt_text
         template = prompt_templates.get(prompt_key, "")
         if template:
             try:
-                custom_prompt = template.format(prompt_text=prompt_text)
+                custom_prompt = template.format(prompt_text=prompt_text, bg_color=bg_color)
             except Exception:
-                custom_prompt = f"{template}\n\nStyle prompt:\n{prompt_text}"
+                try:
+                    custom_prompt = template.format(prompt_text=prompt_text)
+                except Exception:
+                    custom_prompt = f"{template}\n\nStyle prompt:\n{prompt_text}"
+
+        if prompt_key == "white_background":
+            custom_prompt += (
+                f"\n\nBACKGROUND COLOR (MANDATORY): Use a clean solid plain "
+                f"{bg_color} background. The entire background must be {bg_color}."
+            )
 
         # Moodboard uploads are NEVER sent to image generation.
         # They are analyzed on Moodboard save → text prompts/analyses only drive styling here.
@@ -2312,10 +2325,10 @@ def generate_all_product_model_images_background(collection_id, user_id):
         # Get prompt templates from database with fallback
         from .prompt_initializer import get_prompt_from_db
 
-        default_white_bg = """remove the background from the product image and replace it with a clean, elegant white studio background.
+        default_white_bg = """remove the background from the product image and replace it with a clean, elegant {bg_color} studio background.
         Do NOT modify, alter, or redesign the product in any way — its color, shape, texture, and proportions must remain exactly the same.(important dont change the product image) 
-Generate a high-quality product photo on a clean, elegant white studio background. 
-The product should appear exactly as in the input image, only placed against a professional white background. 
+Generate a high-quality product photo on a clean, elegant {bg_color} studio background. 
+The product should appear exactly as in the input image, only placed against a professional {bg_color} background. 
 Ensure balanced, soft studio lighting with natural shadows and realistic reflections. 
 Highlight product clarity and detail. 
 Follow this specific style prompt: {prompt_text}"""
@@ -3092,10 +3105,21 @@ Follow this specific style prompt: {prompt_text}"""
                     else:
                         # For white_background, model_image, and campaign_image: Use regular prompt flow
                         # No special theme matching logic - generate as before (unchanged behavior)
+                        product_selections = getattr(product, "generation_selections", None) or {}
+                        bg_color = str(product_selections.get("plainBgColor") or "#ffffff").strip() or "#ffffff"
                         template = prompt_templates.get(key, "")
                         if template:
-                            custom_prompt = template.format(
-                                prompt_text=prompt_text)
+                            try:
+                                custom_prompt = template.format(
+                                    prompt_text=prompt_text, bg_color=bg_color)
+                            except Exception:
+                                custom_prompt = template.format(
+                                    prompt_text=prompt_text)
+                            if key == "white_background":
+                                custom_prompt += (
+                                    f"\n\nBACKGROUND COLOR (MANDATORY): Use a clean solid plain "
+                                    f"{bg_color} background. The entire background must be {bg_color}."
+                                )
                             if key == "campaign_image":
                                 log_msg = f"[PRODUCT {product_idx}][CAMPAIGN_IMAGE] 📝 Using template for campaign_image, final prompt length: {len(custom_prompt)} chars"
                                 logger.info(log_msg)

@@ -32,6 +32,92 @@ REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE = (
     "uploaded product image(s)."
 )
 
+MULTI_PRODUCT_BACKGROUND_CHANGE_DEFAULT = (
+    "CRITICAL: You are given MULTIPLE uploaded ornaments/products images. "
+    "Create ONE cohesive themed image that MUST include EVERY uploaded ornaments "
+    "from ALL reference images in a single composition. Count the uploaded ornaments "
+    "images and place that same number of distinct ornaments in the output. "
+    "Never output only the first ornament. Never drop, hide, or skip any uploaded ornaments. "
+    "{final_prompt}"
+)
+
+MULTI_PRODUCT_BACKGROUND_CHANGE_RULES = """MULTI-PRODUCT THEMED IMAGE RULES (MANDATORY):
+
+1. USE ALL UPLOADED ORNAMENTS (HIGHEST PRIORITY — NON-NEGOTIABLE):
+   - Every uploaded ornaments/products image MUST appear in the final image
+   - If N ornament images were uploaded, the output MUST contain all N ornaments
+   - Do NOT use only the first ornament; do NOT prefer one ornament over others
+   - Do NOT omit, crop out, hide behind another item, or leave any uploaded ornaments incomplete
+   - Do NOT merge multiple ornaments into one redesigned piece
+   - Do NOT invent extra ornaments that were not uploaded
+   - Before finishing, mentally verify each uploaded ornament is clearly present
+
+2. EXACT PRESERVATION (MANDATORY):
+   - Preserve EACH ornaments EXACTLY identical to its own uploaded reference image
+   - Keep design, shape, proportions, stones, metal finish, textures, and fine details unchanged
+   - Do NOT redesign, restyle, recolor, or replace any ornament
+
+3. PLACEMENT AND ORIENTATION (MANDATORY — REFERENCE IMAGE ONLY):
+   - Ornament scene placement MUST come ONLY from the reference-image placement analysis
+   - Match position in frame, orientation, facing direction, tilt, and how pieces sit/hang/rest from the reference
+   - Uploaded product/ornament images define design identity ONLY — NEVER use them for scene placement, orientation, or facing direction
+   - Do NOT invent a different placement than the reference analysis describes
+   - Do NOT copy how the uploaded product photo was cropped, angled, or laid out
+
+4. NO HUMANS / NO MODELS (MANDATORY — NON-NEGOTIABLE):
+   - Do NOT include any human, person, model, face, body, hands, fingers, neck, or skin
+   - Product-only themed photography — ornaments and scene/background only
+   - If a human or model appears, remove them completely
+
+5. COMPOSITION (MANDATORY):
+   - Arrange ALL ornaments together as a coordinated set in one cohesive scene
+   - Every ornament must be clearly visible, fully recognizable, and not overlapping into invisibility
+   - Do NOT let a single ornament dominate 50-70% of the frame alone
+   - Balance the layout so every uploaded ornament fits fully in frame
+
+6. BACKGROUND ONLY:
+   - Create/replace the background and atmosphere around the full ornament set
+   - Background must complement all ornaments without competing with them
+   - Professional product photography quality suitable for marketing"""
+
+THEMED_NO_HUMAN_RULE = (
+    "STRICT NO-HUMAN / NO-MODEL RULE (MANDATORY — NON-NEGOTIABLE): "
+    "This is a PRODUCT-ONLY themed image. Do NOT include any human, person, fashion model, "
+    "face, body, hands, fingers, neck, skin, arms, or wearable-on-body presentation. "
+    "Never add a model. If any human or model is present in a base/reference/generated image, "
+    "REMOVE them completely from the output. Show only the ornament(s) and the scene/background."
+)
+
+THEMED_ORNAMENT_PLACEMENT_RULE = (
+    "ORNAMENT PLACEMENT RULE (MANDATORY — REFERENCE ONLY): "
+    "Scene placement of ornament(s) must come ONLY from the reference-image placement analysis. "
+    "Follow the reference for position in frame, how the piece sits/hangs/rests, orientation, "
+    "facing direction, tilt, scale in the scene, and surface support. "
+    "Uploaded product/ornament image(s) define ONLY exact design identity (look/details). "
+    "NEVER take placement, orientation, angle, or facing direction from the uploaded product photos."
+)
+
+THEMED_REFERENCE_PLACEMENT_INSTRUCTION = (
+    "REFERENCE PLACEMENT LOCK (MANDATORY): The reference analysis describes how ornament(s) "
+    "are placed in the reference image. Place the user's uploaded ornament(s) using ONLY that "
+    "reference placement: same position style, orientation, direction, and presentation. "
+    "Copy placement ONLY — never copy the reference jewelry design. "
+    "Never use uploaded product-photo orientation/placement."
+)
+
+THEMED_NO_REFERENCE_PLACEMENT_FALLBACK = (
+    "No theme reference image/placement analysis was provided. Use a clean professional "
+    "product-photography composition. Do NOT copy placement, orientation, crop, or facing "
+    "direction from the uploaded product/ornament photos — those images are design identity only."
+)
+
+REGENERATION_THEMED_INSTRUCTION = (
+    "THEMED IMAGE REGENERATION LOCK: Keep this as a PRODUCT-ONLY themed image. "
+    "Preserve the ornaments EXACTLY and keep the background/theme unless the user "
+    "explicitly requests a change. REMOVE any human, person, model, face, body, or hands "
+    "if present. NEVER add a model or human. Apply ONLY the user's requested change."
+)
+
 REGENERATION_ORIGINAL_ORNAMENT_INSTRUCTION = (
     "ORNAMENT LOCK: The ornament/product reference image(s) are the authoritative "
     "source for jewelry only. Preserve the ornament EXACTLY — identical design, "
@@ -105,14 +191,18 @@ def resolve_original_ornament_sources(doc):
     """
     root = get_root_ornament_doc(doc)
     image_type = getattr(root, "type", "") or ""
+    ornament_urls = getattr(root, "uploaded_ornament_urls", None) or []
 
     if image_type == "campaign_shot_advanced":
-        ornament_urls = getattr(root, "uploaded_ornament_urls", None) or []
         if ornament_urls:
             return list(ornament_urls)
         if getattr(root, "uploaded_image_url", None):
             return [root.uploaded_image_url]
         return []
+
+    # Multi-product themed images (background_change) store every original here
+    if image_type == "background_change" and ornament_urls:
+        return list(ornament_urls)
 
     if image_type == "real_model_with_ornament":
         if getattr(root, "uploaded_image_url", None):
@@ -217,8 +307,26 @@ def resolve_regeneration_dimension(doc, generated_image_bytes=None):
     return "1:1"
 
 
-def build_regeneration_image_instructions(*, ornament_count=1, has_model_image=False):
+def build_regeneration_image_instructions(
+    *,
+    ornament_count=1,
+    has_model_image=False,
+    image_type="",
+):
     """Prompt instructions: lock base image + ornament; apply only user change."""
+    if image_type == "background_change":
+        if ornament_count > 1:
+            original_instruction = REGENERATION_ORIGINAL_ORNAMENTS_INSTRUCTION
+        else:
+            original_instruction = REGENERATION_ORIGINAL_ORNAMENT_INSTRUCTION
+        return (
+            f"{REGENERATION_THEMED_INSTRUCTION} "
+            f"{original_instruction} "
+            f"{THEMED_NO_HUMAN_RULE} "
+            f"{THEMED_ORNAMENT_PLACEMENT_RULE} "
+            f"{REGENERATION_APPLY_MODIFICATIONS_INSTRUCTION}"
+        )
+
     if ornament_count > 1:
         original_instruction = REGENERATION_ORIGINAL_ORNAMENTS_INSTRUCTION
     else:
@@ -272,7 +380,8 @@ def build_variation_instruction(variation_index=0, total_variations=1):
         "Preserve the EXACT same ornament/product — identical design, metal, stones, "
         "size, and proportions — and preserve the EXACT same theme, background style, "
         "and color palette. "
-        "Only vary composition, camera angle, placement, pose, or subtle styling details. "
+        "Only vary composition, camera angle, placement, or subtle styling details. "
+        "Do NOT introduce any human, person, or model. "
         "Do NOT duplicate the same framing as another variation. "
         f"{hint}"
     )

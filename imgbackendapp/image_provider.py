@@ -291,6 +291,7 @@ def generate_with_gemini(
     dimension: str = "1:1",
     *,
     image_size: Optional[str] = "4K",
+    skip_clothing_rules: bool = False,
 ) -> bytes:
     from CREDITS.utils import get_image_model_name
 
@@ -307,7 +308,11 @@ def generate_with_gemini(
         else configured_model
     )
 
-    prepared_contents = _append_clothing_rules_to_contents(contents)
+    prepared_contents = (
+        list(contents or [])
+        if skip_clothing_rules
+        else _append_clothing_rules_to_contents(contents)
+    )
     aspect = map_dimension_to_gemini_aspect_ratio(dimension)
     normalized_dimension = (dimension or "1:1").strip().replace(" ", "")
     if normalized_dimension and normalized_dimension != aspect:
@@ -385,6 +390,7 @@ def generate_image_bytes(
     reference_paths: Optional[Sequence[str]] = None,
     dimension: str = "1:1",
     image_size: Optional[str] = "4K",
+    skip_clothing_rules: bool = False,
 ) -> bytes:
     tier = normalize_model_tier(model_tier)
     # Premium/OpenAI path remains in place but is unreachable while tier normalization
@@ -398,10 +404,14 @@ def generate_image_bytes(
 
     clothing_marker = "CRITICAL CLOTHING RULES:"
     enriched_prompt = prompt
-    if clothing_marker not in prompt:
+    if not skip_clothing_rules and clothing_marker not in prompt:
         enriched_prompt = f"{prompt}{CLOTHING_RULES_SUFFIX}"
 
-    prepared_contents = _append_clothing_rules_to_contents(gemini_contents)
+    prepared_contents = (
+        list(gemini_contents or [])
+        if skip_clothing_rules
+        else _append_clothing_rules_to_contents(gemini_contents)
+    )
     logger.info(
         "Using AI for image generation dimension=%s prompt_chars=%s image_size=%s",
         dimension,
@@ -412,4 +422,5 @@ def generate_image_bytes(
         prepared_contents,
         dimension,
         image_size=image_size,
+        skip_clothing_rules=True,  # already prepared above
     )

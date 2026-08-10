@@ -26,6 +26,10 @@ urlpatterns = [
     # Credit settings (admin only)
     path('admin/settings/', views.get_credit_settings, name='get_credit_settings'),
     path('admin/settings/update/', views.update_credit_settings, name='update_credit_settings'),
+
+    # AI generation kill switch
+    path('ai-generation-status/', views.get_ai_generation_status, name='get_ai_generation_status'),
+    path('admin/ai-generation/', views.admin_ai_generation_control, name='admin_ai_generation_control'),
 ]
 
 

@@ -6,6 +6,10 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
 from .models import CreditLedger, CreditSettings
+from .ai_generation import (
+    AI_GENERATION_DISABLED_MESSAGE,
+    is_ai_generation_disabled,
+)
 from organization.models import Organization
 from users.models import User, Role
 from common.middleware import authenticate
@@ -534,6 +538,7 @@ def get_credit_settings(request):
                 'default_image_model_name': getattr(settings, 'default_image_model_name', 'gemini-3-pro-image-preview'),
                 'credit_reminder_threshold_1': getattr(settings, 'credit_reminder_threshold_1', 20),
                 'credit_reminder_threshold_2': getattr(settings, 'credit_reminder_threshold_2', 10),
+                'ai_generation_disabled': bool(getattr(settings, 'ai_generation_disabled', False)),
                 'updated_at': settings.updated_at.isoformat() if settings.updated_at else None,
                 'updated_by': settings.updated_by.email if settings.updated_by else None,
             }
@@ -609,9 +614,67 @@ def update_credit_settings(request):
                 'default_image_model_name': getattr(settings, 'default_image_model_name', 'gemini-3-pro-image-preview'),
                 'credit_reminder_threshold_1': getattr(settings, 'credit_reminder_threshold_1', 20),
                 'credit_reminder_threshold_2': getattr(settings, 'credit_reminder_threshold_2', 10),
+                'ai_generation_disabled': bool(getattr(settings, 'ai_generation_disabled', False)),
                 'updated_at': settings.updated_at.isoformat() if settings.updated_at else None,
                 'updated_by': settings.updated_by.email if settings.updated_by else None,
             }
         }, status=200)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# =====================
+# AI generation kill switch (public status + admin control)
+# =====================
+@api_view(['GET'])
+@csrf_exempt
+def get_ai_generation_status(request):
+    """Public read-only status for user portals before starting generation."""
+    disabled = is_ai_generation_disabled()
+    return JsonResponse(
+        {
+            'success': True,
+            'disabled': disabled,
+            'message': AI_GENERATION_DISABLED_MESSAGE if disabled else '',
+        },
+        status=200,
+    )
+
+
+@api_view(['GET', 'PUT'])
+@csrf_exempt
+@authenticate
+def admin_ai_generation_control(request):
+    """Admin-only toggle to disable AI image generation for all users."""
+    if not is_admin(request.user):
+        return JsonResponse({'error': 'Only admin can manage AI generation'}, status=403)
+
+    try:
+        if request.method == 'GET':
+            return JsonResponse(
+                {
+                    'success': True,
+                    'disabled': is_ai_generation_disabled(),
+                },
+                status=200,
+            )
+
+        data = json.loads(request.body or '{}')
+        if 'disabled' not in data:
+            return JsonResponse({'error': 'disabled field is required'}, status=400)
+
+        settings = CreditSettings.get_settings()
+        settings.ai_generation_disabled = bool(data.get('disabled'))
+        settings.updated_by = request.user
+        settings.updated_at = datetime.utcnow()
+        settings.save()
+
+        return JsonResponse(
+            {
+                'success': True,
+                'disabled': bool(settings.ai_generation_disabled),
+            },
+            status=200,
+        )
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)

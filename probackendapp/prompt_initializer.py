@@ -163,8 +163,8 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
    - If the prompt suggests hanging (necklace, pendant, earrings), display the ornament hanging naturally
    - If the prompt suggests laying (bracelet, ring, decorative piece), display it laying on a clean surface (ground, table, or elegant platform)
    - The positioning must match the context of the style prompt while keeping the product identical
-4. Generate a high-quality product photo on a clean, elegant white studio background.
-5. The product should appear exactly as in the input image, only placed against a professional white background with appropriate positioning based on context.
+4. Generate a high-quality product photo on a clean, elegant {bg_color} studio background.
+5. The product should appear exactly as in the input image, only placed against a professional {bg_color} background with appropriate positioning based on context.
 6. Ensure balanced, soft studio lighting with natural shadows and realistic reflections that enhance product visibility.
 7. Highlight product clarity and detail - every stone, pendant, chain link, and design element must be clearly visible and identical to the original.
 8. Follow this specific style prompt: {prompt_text}""",
@@ -192,8 +192,8 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
    - The product must be the MAIN FOCUS and PRIMARY SUBJECT of the image
    - Center the product in the frame or use rule-of-thirds for elegant composition
    - Ensure the product occupies a significant portion of the frame (at least 40-60% of visible area)
-   - Background should be completely white with no distractions, patterns, or elements that compete for attention
-   - Use shallow depth of field if needed to ensure product is sharp while background is pure white
+   - Background should be a clean solid {bg_color} with no distractions, patterns, or elements that compete for attention
+   - Use shallow depth of field if needed to ensure product is sharp while background is pure {bg_color}
 
 4. LIGHTING REQUIREMENTS:
    - Use balanced, soft studio lighting that evenly illuminates the product
@@ -476,6 +476,60 @@ Modifications: {new_prompt}""",
             "prompt_content": "Remove the background from this ornament image and replace it with a plain {bg_color} background.{extra_prompt}",
             "category": "images",
             "prompt_type": "white_background",
+            "is_active": True,
+        },
+        {
+            "prompt_key": "images_background_change_base_multi",
+            "title": "Background Change Multi-Product Base Prompt",
+            "description": "Base prompt for themed images with multiple uploaded products/ornaments",
+            "prompt_content": (
+                "CRITICAL: You are given MULTIPLE uploaded ornaments/products images. "
+                "Create ONE cohesive themed image that MUST include EVERY uploaded ornaments "
+                "from ALL reference images in a single composition. Count the uploaded ornaments "
+                "images and place that same number of distinct ornaments in the output. "
+                "Never output only the first ornament. Never drop, hide, or skip any uploaded ornaments. "
+                "{final_prompt}"
+            ),
+            "rules": """MULTI-PRODUCT THEMED IMAGE RULES (MANDATORY):
+
+1. USE ALL UPLOADED ORNAMENTS (HIGHEST PRIORITY — NON-NEGOTIABLE):
+   - Every uploaded ornaments/products image MUST appear in the final image
+   - If N ornaments images were uploaded, the output MUST contain all N ornaments
+   - Do NOT use only the first ornament; do NOT prefer one ornament over others
+   - Do NOT omit, crop out, hide behind another item, or leave any uploaded ornaments incomplete
+   - Do NOT merge multiple ornaments into one redesigned piece
+   - Do NOT invent extra ornaments that were not uploaded
+   - Before finishing, mentally verify each uploaded ornament is clearly present
+
+2. EXACT PRESERVATION (MANDATORY):
+   - Preserve EACH ornament EXACTLY identical to its own uploaded reference image
+   - Keep design, shape, proportions, stones, metal finish, textures, and fine details unchanged
+   - Do NOT redesign, restyle, recolor, or replace any ornaments
+
+3. PLACEMENT AND ORIENTATION (MANDATORY — REFERENCE IMAGE ONLY):
+   - Ornament scene placement MUST come ONLY from the reference-image placement analysis
+   - Match position in frame, orientation, facing direction, tilt, and how pieces sit/hang/rest from the reference
+   - Uploaded product/ornament images define design identity ONLY — NEVER use them for scene placement, orientation, or facing direction
+   - Do NOT invent a different placement than the reference analysis describes
+   - Do NOT copy how the uploaded product photo was cropped, angled, or laid out
+
+4. NO HUMANS / NO MODELS (MANDATORY — NON-NEGOTIABLE):
+   - Do NOT include any human, person, model, face, body, hands, fingers, neck, or skin
+   - Product-only themed photography — ornaments and scene/background only
+   - If a human or model appears, remove them completely
+
+5. COMPOSITION (MANDATORY):
+   - Arrange ALL ornaments together as a coordinated set in one cohesive scene
+   - Every ornament must be clearly visible, fully recognizable, and not overlapping into invisibility
+   - Do NOT let a single ornament dominate 50-70% of the frame alone
+   - Balance the layout so every uploaded ornament fits fully in frame
+
+6. BACKGROUND ONLY:
+   - Create/replace the background and atmosphere around the full ornaments set
+   - Background must complement all ornaments without competing with them
+   - Professional product photography quality suitable for marketing""",
+            "category": "images",
+            "prompt_type": "background_replace",
             "is_active": True,
         },
         {

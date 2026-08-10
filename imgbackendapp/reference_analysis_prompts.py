@@ -33,14 +33,30 @@ REFERENCE_TYPE_ALIASES = {
 
 REFERENCE_ANALYSIS_PROMPTS = {
     "background": f"""
-Analyze this reference image and write one optimized paragraph describing the BACKGROUND and scene environment for image generation.
+Analyze this reference image and write one optimized paragraph for themed product image generation.
 
-Focus on:
+You MUST cover BOTH:
+A) BACKGROUND / SCENE:
 - backdrop elements, surfaces, and materials
 - spatial layout and depth
 - lighting quality, direction, and shadow behavior
 - color palette and tonal mood
 - props, decor, and atmospheric details (without naming brands)
+
+B) ORNAMENT PLACEMENT IN THE REFERENCE (MANDATORY — analyze carefully):
+- Where the ornament/jewelry sits in the frame (center, left, right, foreground, midground)
+- How it is placed or presented (flat lay, hanging, resting on surface, draped, angled, standing)
+- Orientation and facing direction (which way it points/faces, tilt, rotation)
+- Scale and prominence relative to the scene
+- Spacing/arrangement if multiple jewelry pieces are visible
+- Surface contact and support (on fabric, stone, tray, velvet, table, etc.)
+
+STRICT RULES:
+• IGNORE people/models completely — describe only scene + how jewelry is placed in space
+• Do NOT describe humans, faces, bodies, hands, or fashion models
+• Do NOT copy or describe ornament/jewelry DESIGN details (stones, metal type, brand look)
+• DO describe placement, position, orientation, direction, and presentation style of jewelry in the reference
+• If no jewelry is visible, still describe ideal product placement zones implied by the composition
 
 {UNIVERSAL_SAFETY_RULES}
 {_OUTPUT_FORMAT_RULES}

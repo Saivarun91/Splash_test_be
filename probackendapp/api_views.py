@@ -33,6 +33,10 @@ from imgbackendapp.file_utils import (
     to_media_db_path,
 )
 from common.user_friendly_errors import get_user_friendly_message
+from CREDITS.ai_generation import (
+    block_if_ai_generation_disabled_drf,
+    is_ai_generation_disabled,
+)
 import json
 import os
 from datetime import datetime, timezone, timedelta
@@ -497,6 +501,12 @@ def api_project_setup_description(request, project_id):
         # Description is now optional - only validate target_audience and campaign_season
         # (These are still required for step 2 to be considered complete)
         # Note: We allow saving without description, in which case suggestions won't be generated
+
+        # Block AI suggestion generation when kill switch is on (saving without description still works)
+        if description:
+            blocked = block_if_ai_generation_disabled_drf()
+            if blocked:
+                return blocked
 
         # Get or create project (supports both ID and slug)
         try:
@@ -1022,42 +1032,68 @@ def api_upload_workflow_image(request, project_id, collection_id):
             )
             cloud_url = upload_result.get("secure_url")
 
-            # Analyze the image based on its category (prefer local file)
-            print(f"DEBUG: Analyzing {category} image: {filename}")
-            analysis_result = analyze_uploaded_image(
-                cloud_url, category, local_path=absolute_path
-            )
+            analysis_text = ""
+            ornament_type = ""
+            angle_shot = ""
+            theme_description = ""
 
-            # Handle both old format (string) and new format (dict)
-            if isinstance(analysis_result, dict):
-                analysis_text = analysis_result.get("analysis", "")
-                ornament_type = analysis_result.get("ornament_type", "")
-                angle_shot = analysis_result.get("angle_shot", "")
-                theme_description = analysis_result.get(
-                    "theme_description", analysis_text)
+            # Skip AI analysis when kill switch is on — upload itself still succeeds
+            if is_ai_generation_disabled():
+                print(f"DEBUG: Skipping AI analysis for {filename} (AI generation disabled)")
             else:
-                # Legacy format (string)
-                analysis_text = analysis_result if analysis_result else ""
-                ornament_type = ""
-                angle_shot = ""
-                theme_description = analysis_text
+                # Analyze the image based on its category (prefer local file)
+                print(f"DEBUG: Analyzing {category} image: {filename}")
+                analysis_result = analyze_uploaded_image(
+                    cloud_url, category, local_path=absolute_path
+                )
 
-            if analysis_text:
-                print(f"DEBUG: Analysis completed for {filename}")
-                if category == 'theme' and ornament_type:
-                    print(
-                        f"DEBUG: Extracted ornament_type: {ornament_type}, angle_shot: {angle_shot}")
-            else:
-                print(f"DEBUG: Analysis returned empty for {filename}")
-
-            # For theme images: Store analysis as JSON with type and description (angle shot included in description)
-            if category == 'theme':
-                # The analysis from extract_theme_analysis is already a JSON string with type and description
-                # where description includes the angle shot
+                # Handle both old format (string) and new format (dict)
                 if isinstance(analysis_result, dict):
                     analysis_text = analysis_result.get("analysis", "")
-                    if not analysis_text:
-                        # Fallback: create JSON structure if extraction failed
+                    ornament_type = analysis_result.get("ornament_type", "")
+                    angle_shot = analysis_result.get("angle_shot", "")
+                    theme_description = analysis_result.get(
+                        "theme_description", analysis_text)
+                else:
+                    # Legacy format (string)
+                    analysis_text = analysis_result if analysis_result else ""
+                    ornament_type = ""
+                    angle_shot = ""
+                    theme_description = analysis_text
+
+                if analysis_text:
+                    print(f"DEBUG: Analysis completed for {filename}")
+                    if category == 'theme' and ornament_type:
+                        print(
+                            f"DEBUG: Extracted ornament_type: {ornament_type}, angle_shot: {angle_shot}")
+                else:
+                    print(f"DEBUG: Analysis returned empty for {filename}")
+
+                # For theme images: Store analysis as JSON with type and description (angle shot included in description)
+                if category == 'theme':
+                    # The analysis from extract_theme_analysis is already a JSON string with type and description
+                    # where description includes the angle shot
+                    if isinstance(analysis_result, dict):
+                        analysis_text = analysis_result.get("analysis", "")
+                        if not analysis_text:
+                            # Fallback: create JSON structure if extraction failed
+                            import json
+                            ornament_readable = ornament_type.replace(
+                                '_', ' ').replace('-', ' ') if ornament_type else ""
+                            angle_readable = angle_shot.replace(
+                                '_', ' ').replace('-', ' ') if angle_shot else ""
+                            description_with_angle = theme_description
+                            if angle_readable and angle_readable.lower() not in theme_description.lower():
+                                description_with_angle = f"{theme_description} The overall angle shot is {angle_readable}."
+                            analysis_json = {
+                                "type": ornament_readable,
+                                "description": description_with_angle
+                            }
+                            analysis_text = json.dumps(analysis_json)
+                        print(
+                            f"DEBUG: Stored theme analysis as JSON with type and description (angle shot included in description)")
+                    else:
+                        # Legacy format: create JSON structure
                         import json
                         ornament_readable = ornament_type.replace(
                             '_', ' ').replace('-', ' ') if ornament_type else ""
@@ -1071,25 +1107,8 @@ def api_upload_workflow_image(request, project_id, collection_id):
                             "description": description_with_angle
                         }
                         analysis_text = json.dumps(analysis_json)
-                    print(
-                        f"DEBUG: Stored theme analysis as JSON with type and description (angle shot included in description)")
-                else:
-                    # Legacy format: create JSON structure
-                    import json
-                    ornament_readable = ornament_type.replace(
-                        '_', ' ').replace('-', ' ') if ornament_type else ""
-                    angle_readable = angle_shot.replace(
-                        '_', ' ').replace('-', ' ') if angle_shot else ""
-                    description_with_angle = theme_description
-                    if angle_readable and angle_readable.lower() not in theme_description.lower():
-                        description_with_angle = f"{theme_description} The overall angle shot is {angle_readable}."
-                    analysis_json = {
-                        "type": ornament_readable,
-                        "description": description_with_angle
-                    }
-                    analysis_text = json.dumps(analysis_json)
-                    print(
-                        f"DEBUG: Created JSON analysis for theme image (type and description with angle shot)")
+                        print(
+                            f"DEBUG: Created JSON analysis for theme image (type and description with angle shot)")
 
             # Create UploadedImage object with analysis
             uploaded_image = UploadedImage(
@@ -1235,6 +1254,10 @@ def api_remove_workflow_image(request, project_id, collection_id):
 @csrf_exempt
 def api_project_setup_select(request, project_id, collection_id):
     """API wrapper for project setup select - saves user selections and generates prompts"""
+    blocked = block_if_ai_generation_disabled_drf()
+    if blocked:
+        return blocked
+
     try:
         from .utils import (
             call_gemini_api,
@@ -2021,6 +2044,10 @@ Generate prompts for the following 4 types. Respond ONLY in valid JSON:
 @authenticate
 def api_generate_ai_images(request, collection_id):
     """API wrapper for generate AI images - now uses Celery"""
+    blocked = block_if_ai_generation_disabled_drf()
+    if blocked:
+        return blocked
+
     from .tasks import generate_ai_images_task
     from .utils import enqueue_task_with_load_balancing
 
@@ -2082,6 +2109,10 @@ def api_generate_all_product_model_images(request, collection_id):
     }
     If not provided, generates all 4 types for all products (backward compatibility).
     """
+    blocked = block_if_ai_generation_disabled_drf()
+    if blocked:
+        return blocked
+
     from .tasks import generate_single_image_task
     from .models import Collection
     from .utils import get_queue_for_user
@@ -2156,6 +2187,7 @@ def api_generate_all_product_model_images(request, collection_id):
                         'bgReplace': product.generation_selections.get('bgReplace', False),
                         'model': product.generation_selections.get('model', False),
                         'campaign': product.generation_selections.get('campaign', False),
+                        'plainBgColor': product.generation_selections.get('plainBgColor') or '#ffffff',
                         'modelTiers': product.generation_selections.get('modelTiers') or {},
                         'aspectRatios': product.generation_selections.get('aspectRatios') or {},
                     }
@@ -2280,6 +2312,11 @@ def api_generate_all_product_model_images(request, collection_id):
                     'bgReplace': bool(req_sel.get('bgReplace', current.get('bgReplace', False))),
                     'model': bool(req_sel.get('model', current.get('model', False))),
                     'campaign': bool(req_sel.get('campaign', current.get('campaign', False))),
+                    'plainBgColor': str(
+                        req_sel.get('plainBgColor')
+                        or current.get('plainBgColor')
+                        or '#ffffff'
+                    ).strip() or '#ffffff',
                     'modelTiers': req_sel.get('modelTiers') or current.get('modelTiers') or {},
                     'aspectRatios': aspect_ratios,
                 })
@@ -2551,6 +2588,9 @@ def api_collection_images_status(request, collection_id):
 @authenticate
 def api_regenerate_product_model_image(request, collection_id):
     """API wrapper for regenerate product model image"""
+    blocked = block_if_ai_generation_disabled_drf()
+    if blocked:
+        return blocked
     return regenerate_product_model_image(request, collection_id)
 
 
@@ -3899,6 +3939,7 @@ def api_update_product_generation_selections(request, collection_id):
                     "bgReplace": bool(selections.get("bgReplace", False)),
                     "model": bool(selections.get("model", False)),
                     "campaign": bool(selections.get("campaign", False)),
+                    "plainBgColor": str(selections.get("plainBgColor") or "#ffffff").strip() or "#ffffff",
                     "modelTiers": selections.get("modelTiers") or {},
                     "aspectRatios": aspect_ratios,
                 }

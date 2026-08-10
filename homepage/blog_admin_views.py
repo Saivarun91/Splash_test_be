@@ -4,15 +4,17 @@ Admin blog APIs aligned with /admin/blog/* contract.
 from __future__ import annotations
 
 import math
+import os
 import re
 from datetime import datetime
 
-import cloudinary.uploader
+from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view
 
 from common.middleware import authenticate
+from imgbackendapp.file_utils import save_uploaded_file, to_media_db_path
 from users.models import Role
 
 from .models import Blog, BlogFAQ, IdCounter
@@ -81,6 +83,7 @@ def _serialize_blog(blog: Blog):
         "mete_title": blog.mete_title or "",
         "meta_description": blog.meta_description or "",
         "meta_keyword": blog.meta_keyword or "",
+        "robots": BLOG_ROBOTS_DEFAULT,
         "faqs": faqs,
         "created_at": blog.created_at.isoformat() if blog.created_at else None,
         "updated_at": blog.updated_at.isoformat() if blog.updated_at else None,
@@ -95,12 +98,32 @@ def _slugify(value: str) -> str:
 
 
 def _upload_file(file_obj, folder="homepage/blogs"):
-    result = cloudinary.uploader.upload(file_obj, folder=folder, overwrite=True)
-    return result.get("secure_url") or ""
+    """Save cover image under MEDIA_ROOT and return a root-relative ``/media/...`` path."""
+    parts = [p for p in str(folder or "homepage/blogs").replace("\\", "/").split("/") if p]
+    base_dir = os.path.join(str(settings.MEDIA_ROOT), *parts)
+    absolute_path = save_uploaded_file(file_obj, base_dir)
+    return to_media_db_path(absolute_path)
+
+
+def _save_inline_blog_image(file_obj, cid: str) -> str:
+    """Save an inline blog image under MEDIA_ROOT and return ``/media/...`` URL."""
+    base_dir = os.path.join(str(settings.MEDIA_ROOT), "homepage", "blogs", "inline")
+    os.makedirs(base_dir, exist_ok=True)
+
+    safe_cid = re.sub(r"[^a-zA-Z0-9_-]", "", cid) or "inline"
+    ext = os.path.splitext(getattr(file_obj, "name", "") or "")[1].lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+        ext = ".webp"
+
+    dest_path = os.path.join(base_dir, f"{safe_cid}{ext}")
+    with open(dest_path, "wb+") as dest:
+        for chunk in file_obj.chunks():
+            dest.write(chunk)
+    return to_media_db_path(dest_path)
 
 
 def _replace_cid_images(html: str, request) -> str:
-    """Replace cid:xxx placeholders with Cloudinary URLs from images[xxx] files."""
+    """Replace cid:xxx placeholders with local media URLs from images[xxx] files."""
     if not html:
         return html or ""
     content = html
@@ -112,7 +135,7 @@ def _replace_cid_images(html: str, request) -> str:
         file_obj = request.FILES.get(key)
         if not file_obj:
             continue
-        url = _upload_file(file_obj, folder="homepage/blogs/inline")
+        url = _save_inline_blog_image(file_obj, cid)
         content = content.replace(f"cid:{cid}", url)
     return content
 
@@ -124,6 +147,9 @@ def _parse_int(value, default=None):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+BLOG_ROBOTS_DEFAULT = "index,follow"
 
 
 def _parse_faqs_from_request(request):
@@ -249,8 +275,9 @@ def blog_add(request):
         mete_title = (_get_post_value(request, "mete_title") or "").strip()
         meta_description = (_get_post_value(request, "meta_description") or "").strip()
         meta_keyword = (_get_post_value(request, "meta_keyword") or "").strip()
-        is_trending_raw = _get_post_value(request, "is_trending", "0")
+        is_trending_raw = (_get_post_value(request, "is_trending", "0"))
         is_trending = str(is_trending_raw) in ("1", "true", "True", "yes", "on")
+        robots = BLOG_ROBOTS_DEFAULT
 
         missing = []
         if not mete_title:
@@ -295,6 +322,7 @@ def blog_add(request):
             mete_title=mete_title,
             meta_description=meta_description,
             meta_keyword=meta_keyword,
+            robots=robots,
             faqs=faqs,
         )
         blog.save()
@@ -342,6 +370,8 @@ def blog_update(request, blog_id):
         else:
             is_trending = str(is_trending_raw) in ("1", "true", "True", "yes", "on")
 
+        robots = BLOG_ROBOTS_DEFAULT
+
         missing = []
         if not mete_title:
             missing.append("mete_title")
@@ -385,6 +415,7 @@ def blog_update(request, blog_id):
         blog.mete_title = mete_title
         blog.meta_description = meta_description
         blog.meta_keyword = meta_keyword
+        blog.robots = robots
         blog.faqs = faqs
         blog.save()
 
@@ -444,6 +475,8 @@ def _serialize_public_list_item(blog: Blog):
         "read_time": _estimate_read_time(blog.full_content or ""),
         "meta_title": blog.mete_title or "",
         "meta_description": blog.meta_description or "",
+        "meta_keyword": getattr(blog, "meta_keyword", "") or "",
+        "robots": BLOG_ROBOTS_DEFAULT,
     }
 
 
@@ -462,6 +495,7 @@ def _serialize_public_post(blog: Blog):
         "short_content": blog.short_content or "",
         "faqs": faqs,
         "meta_keyword": blog.meta_keyword or "",
+        "robots": BLOG_ROBOTS_DEFAULT,
         "updated_at": blog.updated_at.isoformat() if blog.updated_at else None,
         "created_at": blog.created_at.isoformat() if blog.created_at else None,
     }
@@ -525,7 +559,7 @@ def public_blog_detail(request, slug):
 
 
 # =====================
-# Admin download blog as HTML
+# Admin download blog as PDF
 # =====================
 @api_view(["GET"])
 @csrf_exempt
@@ -535,6 +569,8 @@ def blog_download(request, blog_id):
         return _fail("Only admin can download blogs", 403)
     try:
         from django.http import HttpResponse
+        from io import BytesIO
+        from xhtml2pdf import pisa
 
         blog = Blog.objects(blog_id=int(blog_id)).first()
         if not blog:
@@ -549,8 +585,17 @@ def blog_download(request, blog_id):
         title = blog.title or "Blog"
         author = blog.author or ""
         picture = blog.picture or ""
+        cover_src = picture
+        if picture.startswith("/media/"):
+            from imgbackendapp.file_utils import resolve_media_path
+
+            fs_path = resolve_media_path(picture)
+            if os.path.isfile(fs_path):
+                cover_src = fs_path.replace("\\", "/")
+            elif request:
+                cover_src = request.build_absolute_uri(picture)
         cover = (
-            f'<img class="cover" src="{picture}" alt="" />'
+            f'<img class="cover" src="{cover_src}" alt="" />'
             if picture
             else ""
         )
@@ -561,71 +606,57 @@ def blog_download(request, blog_id):
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{title}</title>
   <style>
+    @page {{ margin: 1.5cm; }}
     body {{
       margin: 0;
-      padding: 24px 16px 48px;
-      background: #f3f4f6;
+      padding: 0;
       color: #111827;
+      font-family: Helvetica, Arial, sans-serif;
+      font-size: 12pt;
+      line-height: 1.55;
     }}
-    .sheet {{
-      max-width: 896px;
-      margin: 0 auto;
-      background: #fff;
-      border: 1px solid #e5e7eb;
-      padding: 1.75rem 2rem;
-      box-sizing: border-box;
+    h1 {{
+      font-size: 22pt;
+      margin: 0 0 8pt;
     }}
-    .sheet > h1 {{
-      font-family: ui-sans-serif, system-ui, sans-serif;
-      font-size: 1.875rem;
-      margin: 0 0 0.35rem;
-    }}
-    .meta {{ color: #6b7280; font-size: 0.95rem; margin-bottom: 1.25rem; }}
-    .cover {{ max-width: 100%; height: auto; max-height: 420px; object-fit: cover; width: 100%; margin: 0 0 1.25rem; border-radius: 0; }}
-    .blog-rendered-content {{
-      box-sizing: border-box;
-      color: #111827;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      font-size: 16px;
-      line-height: 1.65;
-      word-wrap: break-word;
-    }}
-    .blog-rendered-content p {{ margin: 0.5em 0; line-height: 1.65; }}
+    .meta {{ color: #6b7280; font-size: 10pt; margin-bottom: 14pt; }}
+    .cover {{ max-width: 100%; height: auto; max-height: 320px; margin: 0 0 14pt; }}
+    .blog-rendered-content {{ word-wrap: break-word; }}
+    .blog-rendered-content p {{ margin: 0.45em 0; }}
     .blog-rendered-content h1, .blog-rendered-content h2, .blog-rendered-content h3, .blog-rendered-content h4 {{
-      font-weight: 600; margin: 0.75em 0 0.4em; line-height: 1.3;
+      font-weight: bold; margin: 0.65em 0 0.35em;
     }}
-    .blog-rendered-content h1 {{ font-size: 1.75rem; }}
-    .blog-rendered-content h2 {{ font-size: 1.4rem; }}
-    .blog-rendered-content h3 {{ font-size: 1.2rem; }}
-    .blog-rendered-content ul, .blog-rendered-content ol {{ padding-left: 1.4rem; margin: 0.5em 0; }}
+    .blog-rendered-content h1 {{ font-size: 18pt; }}
+    .blog-rendered-content h2 {{ font-size: 15pt; }}
+    .blog-rendered-content h3 {{ font-size: 13pt; }}
+    .blog-rendered-content ul, .blog-rendered-content ol {{ padding-left: 1.2em; margin: 0.45em 0; }}
     .blog-rendered-content a {{ color: #2563eb; text-decoration: underline; }}
     .blog-rendered-content img, .blog-rendered-content img.blog-img {{
-      height: auto !important; max-width: 100%; border-radius: 0.375rem; display: inline-block; vertical-align: middle;
+      height: auto; max-width: 100%; display: inline-block; vertical-align: middle;
     }}
-    .blog-rendered-content img.blog-img-top {{ display: block; float: none; clear: both; }}
     .blog-rendered-content img.blog-img-left,
-    .blog-rendered-content img.blog-img-wrap {{ float: left; margin: 0 1rem 0.85rem 0; }}
-    .blog-rendered-content img.blog-img-right {{ float: right; margin: 0 0 0.85rem 1rem; }}
+    .blog-rendered-content img.blog-img-wrap {{ float: left; margin: 0 10pt 10pt 0; }}
+    .blog-rendered-content img.blog-img-right {{ float: right; margin: 0 0 10pt 10pt; }}
     .blog-rendered-content .blog-image-row,
     .blog-rendered-content div[data-image-row] {{
-      display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; margin: 0.85rem 0; clear: both; width: 100%;
+      display: block; clear: both; margin: 10pt 0;
     }}
     .blog-rendered-content .blog-image-row img,
-    .blog-rendered-content div[data-image-row] img {{ float: none !important; margin: 0 !important; clear: none !important; }}
-    .blog-rendered-content table {{ border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0.75rem 0; }}
-    .blog-rendered-content td, .blog-rendered-content th {{
-      border: 1px solid #d1d5db; padding: 0.45rem 0.6rem; vertical-align: top; word-break: break-word;
+    .blog-rendered-content div[data-image-row] img {{
+      display: inline-block; margin: 0 8pt 8pt 0; max-width: 45%;
     }}
-    .blog-rendered-content th {{ background: #f3f4f6; font-weight: 600; }}
-    .blog-rendered-content::after {{ content: ""; display: table; clear: both; }}
-    .faq {{ margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #e5e5e5; }}
+    .blog-rendered-content table {{ border-collapse: collapse; width: 100%; margin: 10pt 0; }}
+    .blog-rendered-content td, .blog-rendered-content th {{
+      border: 1px solid #d1d5db; padding: 6pt 8pt; vertical-align: top; word-break: break-word;
+    }}
+    .blog-rendered-content th {{ background: #f3f4f6; font-weight: bold; }}
+    .faq {{ margin-top: 14pt; padding-top: 10pt; border-top: 1px solid #e5e5e5; page-break-inside: avoid; }}
   </style>
 </head>
 <body>
-  <article class="sheet">
+  <article>
     <h1>{title}</h1>
     <p class="meta">{author}{' · ' if author and date_str else ''}{date_str} · Status: {blog.status or ''}</p>
     {cover}
@@ -635,8 +666,13 @@ def blog_download(request, blog_id):
 </body>
 </html>"""
 
-        filename = f"{blog.slug or f'blog-{blog.blog_id}'}.html"
-        response = HttpResponse(html, content_type="text/html; charset=utf-8")
+        pdf_buffer = BytesIO()
+        pdf_status = pisa.CreatePDF(html, dest=pdf_buffer, encoding="utf-8")
+        if pdf_status.err:
+            return _fail("Failed to generate PDF", 500)
+
+        filename = f"{blog.slug or f'blog-{blog.blog_id}'}.pdf"
+        response = HttpResponse(pdf_buffer.getvalue(), content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
     except Exception as e:
