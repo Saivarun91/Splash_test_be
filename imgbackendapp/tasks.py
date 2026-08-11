@@ -58,13 +58,16 @@ def _fail_generation_task(self, e, user_id):
         "user_friendly_message": get_user_friendly_message(e),
     }
 from .generation_utils import (
+    append_priority_user_prompt,
     build_variation_instruction,
     build_regeneration_image_instructions,
+    format_priority_regeneration_prompt,
     load_image_bytes_from_source,
     MULTI_PRODUCT_BACKGROUND_CHANGE_DEFAULT,
     MULTI_PRODUCT_BACKGROUND_CHANGE_RULES,
     REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE,
     REFERENCE_DESCRIPTION_USAGE_INSTRUCTION,
+    THEMED_AUTO_SCENE_DEFAULT,
     THEMED_NO_HUMAN_RULE,
     THEMED_ORNAMENT_PLACEMENT_RULE,
     THEMED_REFERENCE_PLACEMENT_INSTRUCTION,
@@ -116,10 +119,9 @@ def generate_white_background_task(
 
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
-        # Build prompt
+        # Build system prompt as usual (Prompt Master / code). User prompt is appended as EXTRA.
         from probackendapp.prompt_initializer import get_prompt_from_db
 
-        extra_prompt_text = f" {extra_prompt}" if extra_prompt else ""
         dimension_text = (
             f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)."
             if dimension else ""
@@ -127,20 +129,22 @@ def generate_white_background_task(
 
         default_prompt = (
             f"Remove the background from this ornament image and replace it with a plain "
-            f"{bg_color} background.{extra_prompt_text}{dimension_text}"
+            f"{bg_color} background.{dimension_text}"
         )
 
         text_prompt = get_prompt_from_db(
             "images_white_background",
             default_prompt,
             bg_color=bg_color,
-            extra_prompt=extra_prompt_text,
+            extra_prompt="",
         )
 
         if dimension and dimension not in text_prompt:
             text_prompt += (
                 f" Generate the image in {dimension} aspect ratio (width:height)."
             )
+
+        text_prompt = append_priority_user_prompt(text_prompt, extra_prompt)
 
         generated_bytes = None
 
@@ -384,10 +388,18 @@ def change_background_task(
             buf_ornament.close()
 
         from probackendapp.prompt_initializer import get_prompt_from_db
-        user_prompt = prompt.strip() if prompt else ""
+
+        # System / scene prompt as usual — do not embed user text into system structure.
+        raw_user_prompt = prompt.strip() if prompt else ""
+        user_prompt = ""
         has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
+        # Themed images: solid color only when explicitly provided.
+        # Do not treat accidental/default white as a themed background request.
+        explicit_bg_color = (bg_color or "").strip()
+        if explicit_bg_color.lower() in {"#ffffff", "#fff", "white", "ffffff"}:
+            explicit_bg_color = ""
         if has_reference_analysis:
-            user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
+            user_prompt = reference_analysis.strip()
 
         multiple_products = len(product_b64_list) > 1
 
@@ -403,16 +415,16 @@ def change_background_task(
                     f"{user_prompt} {scene_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
                     f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
                 ).strip()
-            elif bg_color:
+            elif explicit_bg_color:
                 final_prompt = (
                     f"{user_prompt} Place ALL uploaded products together in ONE cohesive "
-                    f"composition on a clean solid {bg_color} background. "
+                    f"composition on a clean solid {explicit_bg_color} background. "
                     "Include every product; do not omit any. Preserve each product exactly."
                 ).strip()
             else:
                 final_prompt = (
                     f"{user_prompt} Place ALL uploaded products together in ONE cohesive "
-                    "themed composition with a new complementary background. "
+                    f"themed composition. {THEMED_AUTO_SCENE_DEFAULT} "
                     "Include every product; do not omit any. Preserve each product exactly."
                 ).strip()
         elif has_reference_analysis:
@@ -428,19 +440,22 @@ def change_background_task(
                 f"{user_prompt} {bg_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
                 f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}".strip()
             )
-        elif bg_color:
+        elif explicit_bg_color:
             color_prompt = get_prompt_from_db(
                 "images_background_change_with_color",
-                f"Replace the background with a clean solid {bg_color} color.",
-                bg_color=bg_color,
+                f"Replace the background with a clean solid {explicit_bg_color} color.",
+                bg_color=explicit_bg_color,
             )
             final_prompt = f"{user_prompt} {color_prompt}".strip()
         else:
             default_prompt = get_prompt_from_db(
                 "images_background_change_default",
-                "Change only the background without modifying the ornament.",
+                THEMED_AUTO_SCENE_DEFAULT,
             )
-            final_prompt = f"{user_prompt} {default_prompt}".strip()
+            final_prompt = f"{user_prompt} {default_prompt} {THEMED_AUTO_SCENE_DEFAULT}".strip()
+
+        # User-entered prompt is EXTRA on top (priority), system prompt unchanged
+        final_prompt = append_priority_user_prompt(final_prompt, raw_user_prompt)
 
         dimension_text = (
             f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)."
@@ -680,10 +695,9 @@ def generate_model_with_ornament_task(
             if measurements_text:
                 ornament_description += f"Specific measurements: {measurements_text}. "
 
-        # Get prompt from database
+        # Get system prompt from database as usual; user prompt is EXTRA priority after.
         from probackendapp.prompt_initializer import get_prompt_from_db
         measurements_text = f"measurements: {measurements}. " if measurements else ""
-        prompt_text = f"\nmandatory consideration details: {prompt}" if prompt else ""
         pose_ref_text = ""
         if has_reference_analysis:
             pose_ref_text = (
@@ -698,14 +712,13 @@ def generate_model_with_ornament_task(
             "Do not include any watermark, text, or unnatural effects. "
             f"{ornament_description}"
             f"{measurements_text}Make sure to follow the measurements strictly."
-            f"{prompt_text}"
         )
         user_prompt = get_prompt_from_db(
             'images_model_with_ornament',
             default_prompt,
             ornament_description=ornament_description,
             measurements_text=measurements_text,
-            user_prompt=prompt,
+            user_prompt="",
             pose_ref_text=pose_ref_text,
         )
         if has_reference_analysis:
@@ -717,6 +730,7 @@ def generate_model_with_ornament_task(
         user_prompt = (
             f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
         )
+        user_prompt = append_priority_user_prompt(user_prompt, prompt)
 
         contents.append({"text": user_prompt})
 
@@ -861,10 +875,9 @@ def generate_real_model_with_ornament_task(
             if measurements_text:
                 ornament_description += f"Specific measurements: {measurements_text}. "
 
-        # Get prompt from database
+        # Get system prompt from database as usual; user prompt is EXTRA priority after.
         from probackendapp.prompt_initializer import get_prompt_from_db
         measurements_text = f"Additional measurements: {measurements}. " if measurements else ""
-        prompt_text = f" Additional user instructions: {prompt}" if prompt else ""
         pose_ref_text = ""
         if has_reference_analysis:
             pose_ref_text = (
@@ -880,18 +893,15 @@ def generate_real_model_with_ornament_task(
             f"{pose_ref_text}"
             f"{ornament_description}"
             f"{measurements_text}"
-            f"{prompt_text}"
         )
         user_prompt = get_prompt_from_db(
             'images_real_model_with_ornament',
             default_prompt,
             ornament_description=ornament_description,
             measurements_text=measurements_text,
-            user_prompt=prompt,
+            user_prompt="",
             pose_ref_text=pose_ref_text,
         )
-        if prompt:
-            user_prompt = f"{user_prompt} {prompt}"
         if has_reference_analysis:
             user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
         user_prompt = _append_dress_direction(user_prompt, dress)
@@ -902,6 +912,7 @@ def generate_real_model_with_ornament_task(
         user_prompt = (
             f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
         )
+        user_prompt = append_priority_user_prompt(user_prompt, prompt)
 
         contents.append({"text": user_prompt})
 
@@ -1115,33 +1126,29 @@ def generate_campaign_shot_advanced_task(
                 }
             )
 
-        # Get prompt from database
+        # Get system prompt from database as usual; user prompt is EXTRA priority after.
         from probackendapp.prompt_initializer import get_prompt_from_db
 
         if model_type == 'real_model':
             default_prompt = (
                 "Generate a realistic image of the uploaded real model wearing all the uploaded ornaments. "
-                "Preserve the model's facial features and natural pose while making a small smile. "
-                f"Campaign instructions: {prompt}"
+                "Preserve the model's facial features and natural pose while making a small smile."
             )
             user_prompt = get_prompt_from_db(
                 'images_campaign_shot_real',
                 default_prompt,
-                user_prompt=prompt
+                user_prompt="",
             )
         else:
             default_prompt = (
                 "Generate a high-quality campaign image of a model wearing all the uploaded ornaments. "
-                "Use realistic lighting, texture, and cohesive fashion aesthetics. "
-                f"Campaign instructions: {prompt}"
+                "Use realistic lighting, texture, and cohesive fashion aesthetics."
             )
             user_prompt = get_prompt_from_db(
                 'images_campaign_shot_ai',
                 default_prompt,
-                user_prompt=prompt
+                user_prompt="",
             )
-            if prompt:
-                user_prompt = f"{user_prompt} {prompt}"
 
         if has_reference_analysis:
             user_prompt = (
@@ -1156,6 +1163,7 @@ def generate_campaign_shot_advanced_task(
         user_prompt = (
             f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
         )
+        user_prompt = append_priority_user_prompt(user_prompt, prompt)
 
         parts.append({"text": user_prompt})
         contents = [{"parts": parts}]
@@ -1324,7 +1332,7 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             f"Generate the ultra high quality image in {dimension} aspect ratio (width:height)."
         )
 
-        # Keep original prompt for history; generation uses only the user's change request
+        # Keep original prompt for history; generation prioritizes the new user change
         original_prompt = prev_doc.original_prompt or prev_doc.prompt
         user_change = (new_prompt or "").strip()
         combined_prompt = (
@@ -1353,18 +1361,15 @@ def regenerate_image_task(self, image_id, user_id, new_prompt, model_tier="regul
             ornament_count=len(ornament_images),
             image_type=image_type,
         )
-        change_text = (
-            f"USER REQUESTED CHANGE ONLY: {user_change}"
-            if user_change
-            else "USER REQUESTED CHANGE ONLY: Make no creative changes; preserve the base image."
-        )
+        change_text = format_priority_regeneration_prompt(user_change)
+        # System regen locks as usual; user regen prompt is EXTRA priority on top
         full_prompt = " ".join(
             part for part in (
                 regeneration_instructions,
                 dress_lock_text,
-                change_text,
                 measurements_text,
                 dimension_text,
+                change_text,
             ) if part
         )
 

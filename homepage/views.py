@@ -15,7 +15,9 @@ from common.middleware import authenticate
 from datetime import datetime
 from django.conf import settings
 import cloudinary.uploader
-from imgbackendapp.file_utils import resolve_media_path, to_media_db_path
+import shutil
+import uuid
+from imgbackendapp.file_utils import resolve_media_path, to_media_db_path, save_uploaded_file
 
 
 def is_admin(user):
@@ -838,6 +840,107 @@ PUBLIC_GALLERY_DEFAULT_LAYOUT = {
     'background_change': 'product',
 }
 
+# Gemini-supported aspect ratios used as homepage showcase slots (max 10).
+SHOWCASE_ASPECT_RATIOS = (
+    '1:1',
+    '4:5',
+    '5:4',
+    '3:4',
+    '4:3',
+    '2:3',
+    '3:2',
+    '9:16',
+    '16:9',
+    '21:9',
+)
+
+VALID_GALLERY_VISIBILITIES = (
+    'gallery_only',
+    'gallery_and_homepage',
+    'showcase_only',
+    'hidden',
+)
+
+
+def _normalize_aspect_ratio(value):
+    if value is None:
+        return ''
+    ratio = str(value).strip()
+    return ratio if ratio in SHOWCASE_ASPECT_RATIOS else ''
+
+
+def _visibility_to_flags(visibility):
+    """Map placement string to is_active / show_on_homepage flags."""
+    if visibility == 'hidden':
+        return 'false', 'false'
+    if visibility == 'showcase_only':
+        return 'false', 'true'
+    if visibility == 'gallery_and_homepage':
+        return 'true', 'true'
+    # gallery_only (default)
+    return 'true', 'false'
+
+
+def _flags_to_visibility(is_active, show_on_homepage):
+    active = str(is_active).lower() in ('1', 'true', 'yes')
+    on_home = str(show_on_homepage).lower() in ('1', 'true', 'yes')
+    if active and on_home:
+        return 'gallery_and_homepage'
+    if on_home and not active:
+        return 'showcase_only'
+    if active:
+        return 'gallery_only'
+    return 'hidden'
+
+
+def _save_homepage_local_image(file_obj, folder='homepage/public_gallery'):
+    """Save upload under MEDIA_ROOT and return ``/media/...`` path."""
+    parts = [p for p in str(folder or 'homepage/public_gallery').replace('\\', '/').split('/') if p]
+    base_dir = os.path.join(str(settings.MEDIA_ROOT), *parts)
+    absolute_path = save_uploaded_file(file_obj, base_dir)
+    return to_media_db_path(absolute_path)
+
+
+def _copy_local_file_to_media(local_path, folder='homepage/public_gallery'):
+    """Copy an existing local file into MEDIA_ROOT and return ``/media/...``."""
+    parts = [p for p in str(folder or 'homepage/public_gallery').replace('\\', '/').split('/') if p]
+    base_dir = os.path.join(str(settings.MEDIA_ROOT), *parts)
+    os.makedirs(base_dir, exist_ok=True)
+    ext = os.path.splitext(local_path)[1].lower() or '.jpg'
+    if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.gif'):
+        ext = '.jpg'
+    dest = os.path.join(base_dir, f"{uuid.uuid4().hex}{ext}")
+    shutil.copy2(local_path, dest)
+    return to_media_db_path(dest)
+
+
+def _delete_local_media_if_owned(stored_path):
+    """Delete a file under MEDIA_ROOT when stored_path is a local media path."""
+    if not stored_path or not str(stored_path).startswith('/media/'):
+        return
+    try:
+        abs_path = resolve_media_path(stored_path)
+        if abs_path and os.path.isfile(abs_path):
+            media_root = os.path.abspath(str(settings.MEDIA_ROOT))
+            if os.path.abspath(abs_path).startswith(media_root):
+                os.remove(abs_path)
+    except Exception:
+        pass
+
+
+def _clear_showcase_slot(aspect_ratio, except_id=None):
+    """Ensure at most one homepage showcase image per aspect ratio."""
+    ratio = _normalize_aspect_ratio(aspect_ratio)
+    if not ratio:
+        return
+    for img in PublicGalleryImage.objects(aspect_ratio=ratio, show_on_homepage='true'):
+        if except_id and str(img.id) == str(except_id):
+            continue
+        img.show_on_homepage = 'false'
+        # Keep gallery visibility if it was on gallery; otherwise leave inactive.
+        img.save()
+
+
 DEFAULT_SHOWCASE_STATIC = [
     {
         'source_key': 'default:lifestyle',
@@ -968,15 +1071,21 @@ def _resolve_live_gallery_images():
 
 
 def _resolve_live_showcase_images():
-    cms_showcase = PublicGalleryImage.objects(
-        is_active='true',
-        show_on_homepage='true',
-    ).order_by('order', '-created_at')
-    if cms_showcase.count() > 0:
-        return 'cms', [_serialize_public_gallery_image(img) for img in cms_showcase]
-    defaults = _default_showcase_catalog()
-    if defaults:
-        return 'defaults', defaults
+    """
+    Homepage marquee: at most one image per aspect ratio, ordered by SHOWCASE_ASPECT_RATIOS.
+    Empty ratios are omitted (no fallback placeholders).
+    """
+    cms_showcase = PublicGalleryImage.objects(show_on_homepage='true').order_by('order', '-created_at')
+    by_ratio = {}
+    for img in cms_showcase:
+        ratio = _normalize_aspect_ratio(getattr(img, 'aspect_ratio', None))
+        if not ratio or ratio in by_ratio:
+            continue
+        by_ratio[ratio] = img
+
+    ordered = [by_ratio[r] for r in SHOWCASE_ASPECT_RATIOS if r in by_ratio]
+    if ordered:
+        return 'cms', [_serialize_public_gallery_image(img) for img in ordered]
     return 'empty', []
 
 
@@ -989,36 +1098,40 @@ def _catalog_item_to_local_path(catalog_item):
         candidate = _frontend_public_dir() / path.lstrip('/')
         if candidate.exists():
             return str(candidate)
+        # Also try fe/public for newer landing app
+        fe_candidate = Path(settings.BASE_DIR).parent / 'fe' / 'public' / path.lstrip('/')
+        if fe_candidate.exists():
+            return str(fe_candidate)
     return None
 
 
-def _import_catalog_item_to_cms(catalog_item, visibility='gallery_only'):
+def _import_catalog_item_to_cms(catalog_item, visibility='gallery_only', aspect_ratio=''):
     local_path = _catalog_item_to_local_path(catalog_item)
     if not local_path:
         raise FileNotFoundError(f"Local file not found for {catalog_item.get('source_key')}")
 
-    show_on_homepage = visibility == 'gallery_and_homepage'
-    is_active = visibility != 'hidden'
+    is_active, show_on_homepage = _visibility_to_flags(visibility)
+    ratio = _normalize_aspect_ratio(aspect_ratio or catalog_item.get('aspect_ratio'))
 
     existing = PublicGalleryImage.objects()
     max_order = max([img.order for img in existing] or [0]) if existing else 0
 
-    upload = cloudinary.uploader.upload(
-        local_path,
-        folder="homepage/public_gallery",
-        overwrite=True,
-    )
+    image_url = _copy_local_file_to_media(local_path, folder='homepage/public_gallery')
 
     image_type = catalog_item.get('image_type') or 'product'
+    if show_on_homepage == 'true' and ratio:
+        _clear_showcase_slot(ratio)
+
     gallery_image = PublicGalleryImage(
-        image_url=upload.get('secure_url'),
+        image_url=image_url,
         image_type=image_type,
         label=catalog_item.get('label') or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, ''),
         alt_text=catalog_item.get('alt') or catalog_item.get('label') or '',
         homepage_layout=catalog_item.get('homepage_layout') or PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product'),
+        aspect_ratio=ratio or None,
         order=max_order + 1,
-        is_active='true' if is_active else 'false',
-        show_on_homepage='true' if show_on_homepage else 'false',
+        is_active=is_active,
+        show_on_homepage=show_on_homepage,
     )
     gallery_image.save()
     return gallery_image
@@ -1027,6 +1140,8 @@ def _import_catalog_item_to_cms(catalog_item, visibility='gallery_only'):
 def _serialize_public_gallery_image(img, include_admin_fields=False):
     image_type = img.image_type or 'product'
     category = 'background' if image_type == 'background_change' else image_type
+    aspect_ratio = _normalize_aspect_ratio(getattr(img, 'aspect_ratio', None)) or (getattr(img, 'aspect_ratio', None) or '')
+    visibility = _flags_to_visibility(img.is_active, img.show_on_homepage)
     data = {
         'id': str(img.id),
         'src': img.image_url,
@@ -1036,7 +1151,9 @@ def _serialize_public_gallery_image(img, include_admin_fields=False):
         'label': img.label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
         'alt': img.alt_text or img.label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, 'Jewelry visual'),
         'homepage_layout': img.homepage_layout or PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product'),
+        'aspect_ratio': aspect_ratio,
         'order': img.order,
+        'visibility': visibility,
     }
     if include_admin_fields:
         data.update({
@@ -1068,15 +1185,14 @@ def get_public_gallery_images(request):
 @api_view(['GET'])
 @csrf_exempt
 def get_homepage_showcase_images(request):
-    """Public: active gallery images flagged for homepage showcase."""
+    """Public: homepage showcase marquee (one image per aspect ratio, max 10)."""
     try:
-        images = PublicGalleryImage.objects(
-            is_active='true',
-            show_on_homepage='true',
-        ).order_by('order', '-created_at')
+        source, images = _resolve_live_showcase_images()
         return JsonResponse({
             'success': True,
-            'images': [_serialize_public_gallery_image(img) for img in images],
+            'source': source,
+            'images': images,
+            'aspect_ratios': list(SHOWCASE_ASPECT_RATIOS),
         }, status=200)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
@@ -1094,6 +1210,7 @@ def get_all_public_gallery_images(request):
         return JsonResponse({
             'success': True,
             'images': [_serialize_public_gallery_image(img, include_admin_fields=True) for img in images],
+            'aspect_ratios': list(SHOWCASE_ASPECT_RATIOS),
         }, status=200)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
@@ -1115,10 +1232,23 @@ def get_public_gallery_admin_overview(request):
         filesystem_catalog = _scan_filesystem_gallery_catalog()
         default_showcase_catalog = _default_showcase_catalog()
 
+        # Slot map for admin UI (10 fixed ratios)
+        filled = {img.get('aspect_ratio'): img for img in live_showcase if img.get('aspect_ratio')}
+        showcase_slots = [
+            {
+                'aspect_ratio': ratio,
+                'filled': ratio in filled,
+                'image': filled.get(ratio),
+            }
+            for ratio in SHOWCASE_ASPECT_RATIOS
+        ]
+
         return JsonResponse({
             'success': True,
             'frontend_public_url': _frontend_public_url(),
             'cms_images': cms_list,
+            'aspect_ratios': list(SHOWCASE_ASPECT_RATIOS),
+            'showcase_slots': showcase_slots,
             'live': {
                 'gallery_source': gallery_source,
                 'showcase_source': showcase_source,
@@ -1140,14 +1270,14 @@ def get_public_gallery_admin_overview(request):
 @csrf_exempt
 @authenticate
 def import_public_gallery_images(request):
-    """Admin: import filesystem/default images into CMS."""
+    """Admin: import filesystem/default images into CMS (copied to local media)."""
     if not is_admin(request.user):
         return JsonResponse({'error': 'Only admin can import images'}, status=403)
     try:
         data = json.loads(request.body)
         source_keys = data.get('source_keys') or []
         visibility = data.get('visibility', 'gallery_only')
-        if visibility not in ('gallery_only', 'gallery_and_homepage', 'hidden'):
+        if visibility not in VALID_GALLERY_VISIBILITIES:
             return JsonResponse({'success': False, 'error': 'Invalid visibility'}, status=400)
 
         if not source_keys:
@@ -1175,7 +1305,11 @@ def import_public_gallery_images(request):
                 errors.append({'source_key': key, 'error': 'Unknown source'})
                 continue
             try:
-                gallery_image = _import_catalog_item_to_cms(catalog_item, visibility=visibility)
+                gallery_image = _import_catalog_item_to_cms(
+                    catalog_item,
+                    visibility=visibility,
+                    aspect_ratio=data.get('aspect_ratio', ''),
+                )
                 imported.append(_serialize_public_gallery_image(gallery_image, include_admin_fields=True))
             except Exception as exc:
                 errors.append({'source_key': key, 'error': str(exc)})
@@ -1196,7 +1330,7 @@ def import_public_gallery_images(request):
 @csrf_exempt
 @authenticate
 def upload_public_gallery_image(request):
-    """Admin: upload a public gallery image."""
+    """Admin: upload a public gallery image to local media."""
     if not is_admin(request.user):
         return JsonResponse({'error': 'Only admin can upload images'}, status=403)
     try:
@@ -1211,20 +1345,31 @@ def upload_public_gallery_image(request):
         label = request.POST.get('label', '')
         alt_text = request.POST.get('alt_text', '')
         homepage_layout = request.POST.get('homepage_layout') or PUBLIC_GALLERY_DEFAULT_LAYOUT.get(image_type, 'product')
-        show_on_homepage = 'true' if str(request.POST.get('show_on_homepage', 'false')).lower() in ('1', 'true', 'yes') else 'false'
-        is_active = 'true' if str(request.POST.get('is_active', 'true')).lower() in ('1', 'true', 'yes') else 'false'
+        aspect_ratio = _normalize_aspect_ratio(request.POST.get('aspect_ratio', ''))
+
+        visibility = request.POST.get('visibility')
+        if visibility in VALID_GALLERY_VISIBILITIES:
+            is_active, show_on_homepage = _visibility_to_flags(visibility)
+        else:
+            show_on_homepage = 'true' if str(request.POST.get('show_on_homepage', 'false')).lower() in ('1', 'true', 'yes') else 'false'
+            is_active = 'true' if str(request.POST.get('is_active', 'true')).lower() in ('1', 'true', 'yes') else 'false'
+            visibility = _flags_to_visibility(is_active, show_on_homepage)
+
+        if show_on_homepage == 'true' and not aspect_ratio:
+            return JsonResponse({
+                'success': False,
+                'error': 'aspect_ratio is required when placing an image on the homepage showcase',
+            }, status=400)
 
         max_order = 0
         existing = PublicGalleryImage.objects()
         if existing:
             max_order = max([img.order for img in existing] or [0])
 
-        upload = cloudinary.uploader.upload(
-            image_file,
-            folder="homepage/public_gallery",
-            overwrite=True,
-        )
-        image_url = upload.get('secure_url')
+        image_url = _save_homepage_local_image(image_file, folder='homepage/public_gallery')
+
+        if show_on_homepage == 'true' and aspect_ratio:
+            _clear_showcase_slot(aspect_ratio)
 
         gallery_image = PublicGalleryImage(
             image_url=image_url,
@@ -1232,6 +1377,7 @@ def upload_public_gallery_image(request):
             label=label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, ''),
             alt_text=alt_text or label or PUBLIC_GALLERY_TYPE_LABELS.get(image_type, ''),
             homepage_layout=homepage_layout,
+            aspect_ratio=aspect_ratio or None,
             order=max_order + 1,
             is_active=is_active,
             show_on_homepage=show_on_homepage,
@@ -1262,10 +1408,15 @@ def update_public_gallery_image(request, image_id):
 
         if 'order' in data:
             gallery_image.order = int(data['order'])
-        if 'is_active' in data:
-            gallery_image.is_active = 'true' if data['is_active'] in (True, 'true', 'True', '1', 1) else 'false'
-        if 'show_on_homepage' in data:
-            gallery_image.show_on_homepage = 'true' if data['show_on_homepage'] in (True, 'true', 'True', '1', 1) else 'false'
+        if 'visibility' in data and data['visibility'] in VALID_GALLERY_VISIBILITIES:
+            is_active, show_on_homepage = _visibility_to_flags(data['visibility'])
+            gallery_image.is_active = is_active
+            gallery_image.show_on_homepage = show_on_homepage
+        else:
+            if 'is_active' in data:
+                gallery_image.is_active = 'true' if data['is_active'] in (True, 'true', 'True', '1', 1) else 'false'
+            if 'show_on_homepage' in data:
+                gallery_image.show_on_homepage = 'true' if data['show_on_homepage'] in (True, 'true', 'True', '1', 1) else 'false'
         if 'label' in data:
             gallery_image.label = data['label']
         if 'alt_text' in data:
@@ -1274,6 +1425,18 @@ def update_public_gallery_image(request, image_id):
             gallery_image.image_type = data['image_type']
         if 'homepage_layout' in data:
             gallery_image.homepage_layout = data['homepage_layout']
+        if 'aspect_ratio' in data:
+            gallery_image.aspect_ratio = _normalize_aspect_ratio(data['aspect_ratio']) or None
+
+        if gallery_image.show_on_homepage == 'true':
+            ratio = _normalize_aspect_ratio(gallery_image.aspect_ratio)
+            if not ratio:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'aspect_ratio is required when placing an image on the homepage showcase',
+                }, status=400)
+            gallery_image.aspect_ratio = ratio
+            _clear_showcase_slot(ratio, except_id=gallery_image.id)
 
         gallery_image.save()
 
@@ -1292,11 +1455,12 @@ def update_public_gallery_image(request, image_id):
 @csrf_exempt
 @authenticate
 def delete_public_gallery_image(request, image_id):
-    """Admin: delete public gallery image."""
+    """Admin: delete public gallery image (and local media file when applicable)."""
     if not is_admin(request.user):
         return JsonResponse({'error': 'Only admin can delete images'}, status=403)
     try:
         gallery_image = PublicGalleryImage.objects.get(id=image_id)
+        _delete_local_media_if_owned(gallery_image.image_url)
         gallery_image.delete()
         return JsonResponse({'success': True, 'message': 'Gallery image deleted successfully'}, status=200)
     except DoesNotExist:
@@ -1312,15 +1476,14 @@ def delete_public_gallery_image(request, image_id):
 @csrf_exempt
 @authenticate
 def upload_content_image(request):
-    """Admin: Upload image to Cloudinary; return URL."""
+    """Admin: Upload image to local media; return /media/... URL."""
     if not is_admin(request.user):
         return JsonResponse({'error': 'Only admin can upload images'}, status=403)
     try:
         file = request.FILES.get('image') or request.FILES.get('file')
         if not file:
             return JsonResponse({'success': False, 'error': 'No image file provided'}, status=400)
-        upload = cloudinary.uploader.upload(file, folder='homepage/content', overwrite=True)
-        url = upload.get('secure_url')
+        url = _save_homepage_local_image(file, folder='homepage/content')
         return JsonResponse({'success': True, 'url': url}, status=200)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)

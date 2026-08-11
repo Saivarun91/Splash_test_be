@@ -106,10 +106,71 @@ THEMED_REFERENCE_PLACEMENT_INSTRUCTION = (
 )
 
 THEMED_NO_REFERENCE_PLACEMENT_FALLBACK = (
-    "No theme reference image/placement analysis was provided. Use a clean professional "
-    "product-photography composition. Do NOT copy placement, orientation, crop, or facing "
-    "direction from the uploaded product/ornament photos — those images are design identity only."
+    "No theme reference image/placement analysis was provided. Invent a suitable professional "
+    "themed product-photography scene for these ornament(s): complementary background, surfaces, "
+    "lighting, atmosphere, and tasteful non-jewelry props that highlight the jewelry. "
+    "Do NOT use a plain white or solid studio-only background. "
+    "Do NOT copy placement, orientation, crop, or facing direction from the uploaded "
+    "product/ornament photos — those images are design identity only."
 )
+
+THEMED_AUTO_SCENE_DEFAULT = (
+    "Create a cohesive themed product photograph with a suitable complementary background "
+    "and tasteful props that match the ornament style, metal, and stones. "
+    "Use professional lighting, depth, and atmosphere. "
+    "Do NOT use a plain white or flat solid-color studio background."
+)
+
+USER_PROMPT_PRIORITY_PREFIX = (
+    "USER PROMPT (HIGHEST PRIORITY — MANDATORY TO FOLLOW EXACTLY): "
+)
+
+USER_PROMPT_PRIORITY_SUFFIX = (
+    " This user prompt is an EXTRA instruction on top of the system prompt. "
+    "When it conflicts with creative/styling guidance, follow the user prompt. "
+    "Hard locks still apply: preserve exact ornament design identity, "
+    "and obey no-human rules for themed product-only images."
+)
+
+
+def format_priority_user_prompt(prompt: str) -> str:
+    """Extra priority block for a user-entered prompt; system prompts stay unchanged."""
+    text = (prompt or "").strip()
+    if not text:
+        return ""
+    return f"{USER_PROMPT_PRIORITY_PREFIX}{text}{USER_PROMPT_PRIORITY_SUFFIX}"
+
+
+REGENERATION_USER_PROMPT_PRIORITY = (
+    "REGENERATION USER PROMPT (HIGHEST PRIORITY — MANDATORY TO FOLLOW EXACTLY): "
+)
+
+
+def format_priority_regeneration_prompt(prompt: str) -> str:
+    """Extra priority block for regenerate; system regen locks stay unchanged."""
+    text = (prompt or "").strip()
+    if not text:
+        return (
+            "REGENERATION USER PROMPT: Make no creative changes; preserve the base image."
+        )
+    return (
+        f"{REGENERATION_USER_PROMPT_PRIORITY}{text} "
+        "This is an EXTRA instruction on top of the regeneration system locks. "
+        "Apply this requested change. Keep everything else from the base generated image "
+        "unchanged unless this prompt explicitly asks to change it."
+    )
+
+
+def append_priority_user_prompt(system_prompt: str, prompt: str) -> str:
+    """Keep system prompt as-is; append user prompt as an extra priority block."""
+    priority = format_priority_user_prompt(prompt)
+    base = (system_prompt or "").strip()
+    if not priority:
+        return base
+    if not base:
+        return priority
+    return f"{base} {priority}".strip()
+
 
 REGENERATION_THEMED_INSTRUCTION = (
     "THEMED IMAGE REGENERATION LOCK: Keep this as a PRODUCT-ONLY themed image. "
@@ -140,11 +201,12 @@ REGENERATION_PREVIOUS_GENERATED_INSTRUCTION = (
 )
 
 REGENERATION_APPLY_MODIFICATIONS_INSTRUCTION = (
-    "CHANGE RULE (MANDATORY): Apply ONLY the user's requested regeneration change. "
-    "Do NOT change anything else. Especially do NOT change the dress/outfit, colors of "
-    "clothing, pose, model appearance, background, lighting, or composition unless the "
-    "user explicitly requests that exact change. If the request does not mention dress "
-    "or attire, the dress/attire must remain identical to the base generated image."
+    "CHANGE RULE (MANDATORY): The regeneration user prompt has HIGHEST PRIORITY. "
+    "Apply that requested change. Do NOT change anything else. Especially do NOT change "
+    "the dress/outfit, colors of clothing, pose, model appearance, background, lighting, "
+    "or composition unless the user explicitly requests that exact change. If the request "
+    "does not mention dress or attire, the dress/attire must remain identical to the base "
+    "generated image."
 )
 
 REGENERATION_MODEL_IMAGE_INSTRUCTION = (

@@ -110,12 +110,22 @@ BlogPost = Blog
 class PublicGalleryImage(Document):
     """
     Public marketing gallery images for /gallery and optional homepage showcase.
+
+    Placement (via is_active + show_on_homepage):
+      - gallery_only: is_active=true, show_on_homepage=false
+      - showcase_only: is_active=false, show_on_homepage=true
+      - both: is_active=true, show_on_homepage=true
+      - hidden: is_active=false, show_on_homepage=false
+
+    Showcase marquee uses aspect_ratio (one image per ratio, max 10).
+    image_url is a local /media/... path for new uploads (legacy Cloudinary URLs kept as-is).
     """
     image_url = StringField(required=True)
     image_type = StringField(required=True)  # lifestyle, campaign, product, model, multi_piece, background_change
     label = StringField()
     alt_text = StringField()
     homepage_layout = StringField()  # product, campaign, lifestyle, model, multipiece
+    aspect_ratio = StringField()  # e.g. 1:1, 16:9 — required for showcase slots
     order = IntField(default=0)
     is_active = StringField(default='true')
     show_on_homepage = StringField(default='false')
@@ -124,7 +134,7 @@ class PublicGalleryImage(Document):
 
     meta = {
         "collection": "public_gallery_images",
-        "indexes": ["order", "is_active", "show_on_homepage", "image_type"],
+        "indexes": ["order", "is_active", "show_on_homepage", "image_type", "aspect_ratio"],
         "ordering": ["order", "-created_at"],
         "strict": False,
     }

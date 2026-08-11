@@ -709,8 +709,14 @@ Modifications: {new_prompt}""",
         {
             "prompt_key": "images_background_change_default",
             "title": "Background Change Default Prompt",
-            "description": "Default prompt for background change without color",
-            "prompt_content": "Change only the background without modifying the ornament.",
+            "description": "Default prompt for themed background when no reference image or color is provided",
+            "prompt_content": (
+                "Create a cohesive themed product photograph with a suitable complementary "
+                "background and tasteful props that match the ornament style, metal, and stones. "
+                "Use professional lighting, depth, and atmosphere. "
+                "Do NOT use a plain white or flat solid-color studio background. "
+                "Change only the scene around the ornament — do not modify the ornament itself."
+            ),
             "rules": """RULES FOR BACKGROUND CHANGE DEFAULT IMAGE GENERATION:
 
 1. ORNAMENT PRESERVATION (MANDATORY - EXACT MATCH):
@@ -786,7 +792,7 @@ Lighting should be soft and natural, highlighting the sparkle of the jewelry and
 Use a shallow depth of field with a softly blurred background that hints at an elegant setting. 
 Do not include any watermark, text, or unnatural effects. 
 {ornament_description}{measurements_text} Make sure to follow the measurements strictly.
-mandatory consideration details: {user_prompt}""",
+{user_prompt}""",
             "category": "images",
             "prompt_type": "model_image",
             "is_active": True,
@@ -801,7 +807,7 @@ Generate a background suitable for both the model and the ornament.
 Lighting should be soft, natural, and elegant. 
 Focus tightly on the jewelry area. 
 Follow the pose from the uploaded pose image if provided. 
-{ornament_description}{measurements_text}Additional user instructions: {user_prompt}""",
+{ornament_description}{measurements_text}{user_prompt}""",
             "category": "images",
             "prompt_type": "model_image",
             "is_active": True,
@@ -812,7 +818,7 @@ Follow the pose from the uploaded pose image if provided.
             "description": "Prompt for generating campaign shots with AI models",
             "prompt_content": """Generate a high-quality campaign image of a model wearing all the uploaded ornaments. 
 Use realistic lighting, texture, and cohesive fashion aesthetics. 
-Campaign instructions: {user_prompt}""",
+{user_prompt}""",
             "category": "images",
             "prompt_type": "campaign_image",
             "is_active": True,
@@ -823,7 +829,7 @@ Campaign instructions: {user_prompt}""",
             "description": "Prompt for generating campaign shots with real uploaded models",
             "prompt_content": """Generate a realistic image of the uploaded real model wearing all the uploaded ornaments. 
 Preserve the model's facial features and natural pose while making a small smile. 
-Campaign instructions: {user_prompt}""",
+{user_prompt}""",
             "category": "images",
             "prompt_type": "campaign_image",
             "is_active": True,
