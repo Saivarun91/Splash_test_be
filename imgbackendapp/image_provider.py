@@ -61,11 +61,24 @@ GEMINI_SUPPORTED_ASPECT_RATIOS = (
 
 CLOTHING_RULES_SUFFIX = (
     " CRITICAL CLOTHING RULES: The model must be wearing modest, elegant, highly professional, "
-    "and decent apparel suitable for a luxury brand campaign (such as a high-neck blouse with "
-    "related saree, premium formal dress, or elegant corporate apparel, this all should depend "
-    "on the ornament). Absolutely no revealing, plunging, low-cut, or inappropriate clothing is "
+    "and decent apparel suitable for a luxury brand campaign. "
+    "Absolutely no revealing, plunging, low-cut, or inappropriate clothing is "
     "allowed under any circumstances. Ensure the attire is sophisticated and completely decent."
 )
+
+SAREE_BLOUSE_CLOTHING_HINT = (
+    " ATTIRE HINT (only because this ornament/context is relevant for traditional Indian wear): "
+    "a high-neck blouse with related saree may be used when it matches the ornament and any "
+    "priority reference/user attire direction. Do not force blouse+saree if the priority "
+    "reference dress or user prompt specifies a different outfit."
+)
+
+
+def resolve_clothing_rules_suffix(use_saree_blouse_hint: bool = False) -> str:
+    if use_saree_blouse_hint:
+        return f"{CLOTHING_RULES_SUFFIX}{SAREE_BLOUSE_CLOTHING_HINT}"
+    return CLOTHING_RULES_SUFFIX
+
 
 GEMINI_SAFETY_SETTINGS = [
     types.SafetySetting(
@@ -116,14 +129,19 @@ def map_dimension_to_gemini_aspect_ratio(dimension: str) -> str:
     )
 
 
-def _append_clothing_rules_to_contents(contents) -> list:
+def _append_clothing_rules_to_contents(
+    contents,
+    *,
+    clothing_suffix: Optional[str] = None,
+) -> list:
+    suffix = clothing_suffix if clothing_suffix is not None else CLOTHING_RULES_SUFFIX
     updated = []
     clothing_marker = "CRITICAL CLOTHING RULES:"
     for item in contents or []:
         if isinstance(item, dict) and "text" in item:
             text = item["text"]
             if clothing_marker not in text:
-                updated.append({**item, "text": f"{text}{CLOTHING_RULES_SUFFIX}"})
+                updated.append({**item, "text": f"{text}{suffix}"})
             else:
                 updated.append(item)
             continue
@@ -136,7 +154,7 @@ def _append_clothing_rules_to_contents(contents) -> list:
                     text = part["text"]
                     if clothing_marker not in text:
                         new_parts.append(
-                            {**part, "text": f"{text}{CLOTHING_RULES_SUFFIX}"}
+                            {**part, "text": f"{text}{suffix}"}
                         )
                     else:
                         new_parts.append(part)
@@ -292,6 +310,7 @@ def generate_with_gemini(
     *,
     image_size: Optional[str] = "4K",
     skip_clothing_rules: bool = False,
+    use_saree_blouse_hint: bool = False,
 ) -> bytes:
     from CREDITS.utils import get_image_model_name
 
@@ -308,10 +327,14 @@ def generate_with_gemini(
         else configured_model
     )
 
+    clothing_suffix = resolve_clothing_rules_suffix(use_saree_blouse_hint)
     prepared_contents = (
         list(contents or [])
         if skip_clothing_rules
-        else _append_clothing_rules_to_contents(contents)
+        else _append_clothing_rules_to_contents(
+            contents,
+            clothing_suffix=clothing_suffix,
+        )
     )
     aspect = map_dimension_to_gemini_aspect_ratio(dimension)
     normalized_dimension = (dimension or "1:1").strip().replace(" ", "")
@@ -391,6 +414,7 @@ def generate_image_bytes(
     dimension: str = "1:1",
     image_size: Optional[str] = "4K",
     skip_clothing_rules: bool = False,
+    use_saree_blouse_hint: bool = False,
 ) -> bytes:
     tier = normalize_model_tier(model_tier)
     # Premium/OpenAI path remains in place but is unreachable while tier normalization
@@ -403,24 +427,30 @@ def generate_image_bytes(
         raise RuntimeError("AI generation requires AI_contents")
 
     clothing_marker = "CRITICAL CLOTHING RULES:"
+    clothing_suffix = resolve_clothing_rules_suffix(use_saree_blouse_hint)
     enriched_prompt = prompt
     if not skip_clothing_rules and clothing_marker not in prompt:
-        enriched_prompt = f"{prompt}{CLOTHING_RULES_SUFFIX}"
+        enriched_prompt = f"{prompt}{clothing_suffix}"
 
     prepared_contents = (
         list(gemini_contents or [])
         if skip_clothing_rules
-        else _append_clothing_rules_to_contents(gemini_contents)
+        else _append_clothing_rules_to_contents(
+            gemini_contents,
+            clothing_suffix=clothing_suffix,
+        )
     )
     logger.info(
-        "Using AI for image generation dimension=%s prompt_chars=%s image_size=%s",
+        "Using AI for image generation dimension=%s prompt_chars=%s image_size=%s saree_hint=%s",
         dimension,
         len(enriched_prompt),
         image_size or "default",
+        use_saree_blouse_hint,
     )
     return generate_with_gemini(
         prepared_contents,
         dimension,
         image_size=image_size,
         skip_clothing_rules=True,  # already prepared above
+        use_saree_blouse_hint=use_saree_blouse_hint,
     )

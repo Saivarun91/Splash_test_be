@@ -58,10 +58,12 @@ def _fail_generation_task(self, e, user_id):
         "user_friendly_message": get_user_friendly_message(e),
     }
 from .generation_utils import (
+    append_priority_reference,
     append_priority_user_prompt,
     build_variation_instruction,
     build_regeneration_image_instructions,
     format_priority_regeneration_prompt,
+    is_saree_blouse_relevant,
     load_image_bytes_from_source,
     MULTI_PRODUCT_BACKGROUND_CHANGE_DEFAULT,
     MULTI_PRODUCT_BACKGROUND_CHANGE_RULES,
@@ -83,12 +85,23 @@ import uuid
 logger = logging.getLogger(__name__)
 
 
-def _append_dress_direction(user_prompt, dress):
-    """Append separate dress analysis to the generation prompt when present."""
-    dress_text = (dress or "").strip()
-    if not dress_text:
-        return user_prompt
-    return f"{user_prompt} Dress/attire direction: {dress_text}".strip()
+def _apply_priority_extras(
+    system_prompt,
+    *,
+    prompt="",
+    reference_analysis="",
+    dress="",
+):
+    """
+    Keep system prompt as-is; append reference + user prompt as priority extras
+    only when present.
+    """
+    with_reference = append_priority_reference(
+        system_prompt,
+        analysis=reference_analysis,
+        dress=dress,
+    )
+    return append_priority_user_prompt(with_reference, prompt)
 
 
 # Check for Gemini SDK
@@ -389,17 +402,14 @@ def change_background_task(
 
         from probackendapp.prompt_initializer import get_prompt_from_db
 
-        # System / scene prompt as usual — do not embed user text into system structure.
+        # System / scene prompt as usual. User prompt + reference are priority extras if present.
         raw_user_prompt = prompt.strip() if prompt else ""
-        user_prompt = ""
         has_reference_analysis = bool(reference_analysis and reference_analysis.strip())
         # Themed images: solid color only when explicitly provided.
         # Do not treat accidental/default white as a themed background request.
         explicit_bg_color = (bg_color or "").strip()
         if explicit_bg_color.lower() in {"#ffffff", "#fff", "white", "ffffff"}:
             explicit_bg_color = ""
-        if has_reference_analysis:
-            user_prompt = reference_analysis.strip()
 
         multiple_products = len(product_b64_list) > 1
 
@@ -408,22 +418,22 @@ def change_background_task(
             if has_reference_analysis:
                 scene_prompt = (
                     "Place ALL uploaded products together in ONE cohesive composition. "
-                    "Use the following scene description for background/environment only. "
+                    "Use the priority reference scene description for background/environment only. "
                     f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
                 )
                 final_prompt = (
-                    f"{user_prompt} {scene_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
+                    f"{scene_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
                     f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
                 ).strip()
             elif explicit_bg_color:
                 final_prompt = (
-                    f"{user_prompt} Place ALL uploaded products together in ONE cohesive "
+                    "Place ALL uploaded products together in ONE cohesive "
                     f"composition on a clean solid {explicit_bg_color} background. "
                     "Include every product; do not omit any. Preserve each product exactly."
                 ).strip()
             else:
                 final_prompt = (
-                    f"{user_prompt} Place ALL uploaded products together in ONE cohesive "
+                    f"Place ALL uploaded products together in ONE cohesive "
                     f"themed composition. {THEMED_AUTO_SCENE_DEFAULT} "
                     "Include every product; do not omit any. Preserve each product exactly."
                 ).strip()
@@ -437,7 +447,7 @@ def change_background_task(
                 ),
             )
             final_prompt = (
-                f"{user_prompt} {bg_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
+                f"{bg_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
                 f"{REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}".strip()
             )
         elif explicit_bg_color:
@@ -446,16 +456,21 @@ def change_background_task(
                 f"Replace the background with a clean solid {explicit_bg_color} color.",
                 bg_color=explicit_bg_color,
             )
-            final_prompt = f"{user_prompt} {color_prompt}".strip()
+            final_prompt = f"{color_prompt}".strip()
         else:
             default_prompt = get_prompt_from_db(
                 "images_background_change_default",
                 THEMED_AUTO_SCENE_DEFAULT,
             )
-            final_prompt = f"{user_prompt} {default_prompt} {THEMED_AUTO_SCENE_DEFAULT}".strip()
+            final_prompt = f"{default_prompt} {THEMED_AUTO_SCENE_DEFAULT}".strip()
 
-        # User-entered prompt is EXTRA on top (priority), system prompt unchanged
-        final_prompt = append_priority_user_prompt(final_prompt, raw_user_prompt)
+        # User prompt + reference are EXTRA priority blocks only when present
+        final_prompt = _apply_priority_extras(
+            final_prompt,
+            prompt=raw_user_prompt,
+            reference_analysis=reference_analysis if has_reference_analysis else "",
+            dress="",
+        )
 
         dimension_text = (
             f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)."
@@ -721,20 +736,28 @@ def generate_model_with_ornament_task(
             user_prompt="",
             pose_ref_text=pose_ref_text,
         )
-        if has_reference_analysis:
-            user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
-        user_prompt = _append_dress_direction(user_prompt, dress)
+        # Keep system prompt as usual; reference + user prompt are priority extras only if present
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
         user_prompt = (
             f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
         )
-        user_prompt = append_priority_user_prompt(user_prompt, prompt)
+        user_prompt = _apply_priority_extras(
+            user_prompt,
+            prompt=prompt,
+            reference_analysis=reference_analysis if has_reference_analysis else "",
+            dress=dress if has_dress else "",
+        )
 
         contents.append({"text": user_prompt})
 
         reference_paths = [ornament_absolute_path]
+        use_saree_hint = is_saree_blouse_relevant(
+            ornament_type=ornament_type,
+            dress=dress,
+            prompt=prompt,
+        )
 
         generated_bytes = generate_image_bytes(
             model_tier,
@@ -742,6 +765,7 @@ def generate_model_with_ornament_task(
             gemini_contents=contents,
             reference_paths=reference_paths,
             dimension=dimension,
+            use_saree_blouse_hint=use_saree_hint,
         )
 
         # Upload ornament to Cloudinary
@@ -902,21 +926,28 @@ def generate_real_model_with_ornament_task(
             user_prompt="",
             pose_ref_text=pose_ref_text,
         )
-        if has_reference_analysis:
-            user_prompt = f"{user_prompt} {reference_analysis.strip()}".strip()
-        user_prompt = _append_dress_direction(user_prompt, dress)
-
+        # Keep system prompt as usual; reference + user prompt are priority extras only if present
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
         user_prompt = (
             f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
         )
-        user_prompt = append_priority_user_prompt(user_prompt, prompt)
+        user_prompt = _apply_priority_extras(
+            user_prompt,
+            prompt=prompt,
+            reference_analysis=reference_analysis if has_reference_analysis else "",
+            dress=dress if has_dress else "",
+        )
 
         contents.append({"text": user_prompt})
 
         reference_paths = [model_absolute_path, ornament_absolute_path]
+        use_saree_hint = is_saree_blouse_relevant(
+            ornament_type=ornament_type,
+            dress=dress,
+            prompt=prompt,
+        )
 
         generated_bytes = generate_image_bytes(
             model_tier,
@@ -924,6 +955,7 @@ def generate_real_model_with_ornament_task(
             gemini_contents=contents,
             reference_paths=reference_paths,
             dimension=dimension,
+            use_saree_blouse_hint=use_saree_hint,
         )
 
         # Upload images to Cloudinary
@@ -1150,20 +1182,19 @@ def generate_campaign_shot_advanced_task(
                 user_prompt="",
             )
 
-        if has_reference_analysis:
-            user_prompt = (
-                f"{user_prompt} {REFERENCE_DESCRIPTION_USAGE_INSTRUCTION} "
-                f"{reference_analysis.strip()} {REFERENCE_DESCRIPTION_NO_ORNAMENT_RULE}"
-            ).strip()
-        user_prompt = _append_dress_direction(user_prompt, dress)
-
+        # Keep system prompt as usual; theme/model reference + user prompt are priority extras
         dimension_text = f" Generate the ultra high quality image in {dimension} aspect ratio (width:height)." if dimension else ""
         if dimension and dimension not in user_prompt:
             user_prompt = f"{user_prompt}{dimension_text}"
         user_prompt = (
             f"{user_prompt}{build_variation_instruction(variation_index, total_variations)}"
         )
-        user_prompt = append_priority_user_prompt(user_prompt, prompt)
+        user_prompt = _apply_priority_extras(
+            user_prompt,
+            prompt=prompt,
+            reference_analysis=reference_analysis if has_reference_analysis else "",
+            dress=dress if has_dress else "",
+        )
 
         parts.append({"text": user_prompt})
         contents = [{"parts": parts}]
@@ -1179,12 +1210,19 @@ def generate_campaign_shot_advanced_task(
             ]
         )
 
+        use_saree_hint = is_saree_blouse_relevant(
+            ornament_types=ornament_types,
+            dress=dress,
+            prompt=prompt,
+        )
+
         generated_bytes = generate_image_bytes(
             model_tier,
             prompt=user_prompt,
             gemini_contents=contents,
             reference_paths=reference_paths,
             dimension=dimension,
+            use_saree_blouse_hint=use_saree_hint,
         )
 
         # Save and upload generated image

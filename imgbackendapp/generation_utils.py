@@ -172,6 +172,106 @@ def append_priority_user_prompt(system_prompt: str, prompt: str) -> str:
     return f"{base} {priority}".strip()
 
 
+REFERENCE_PRIORITY_SUFFIX = (
+    " These reference instructions are EXTRA on top of the system prompt. "
+    "When they conflict with generic creative or clothing examples, follow the reference."
+)
+
+
+def format_priority_reference(*, analysis: str = "", dress: str = "") -> str:
+    """Extra priority block for reference analysis/dress; omitted when both empty."""
+    parts = []
+    analysis_text = (analysis or "").strip()
+    dress_text = (dress or "").strip()
+    if analysis_text:
+        parts.append(
+            "REFERENCE STYLE/POSE (HIGHEST PRIORITY — MANDATORY TO FOLLOW EXACTLY): "
+            f"{analysis_text}"
+        )
+    if dress_text:
+        parts.append(
+            "REFERENCE DRESS/ATTIRE (HIGHEST PRIORITY — MANDATORY TO FOLLOW EXACTLY): "
+            f"{dress_text} Follow this attire exactly; do not replace it with unrelated clothing."
+        )
+    if not parts:
+        return ""
+    return f"{' '.join(parts)}{REFERENCE_PRIORITY_SUFFIX}"
+
+
+def append_priority_reference(
+    system_prompt: str,
+    *,
+    analysis: str = "",
+    dress: str = "",
+) -> str:
+    """Keep system prompt as-is; append reference extras only when present."""
+    priority = format_priority_reference(analysis=analysis, dress=dress)
+    base = (system_prompt or "").strip()
+    if not priority:
+        return base
+    if not base:
+        return priority
+    return f"{base} {priority}".strip()
+
+
+_SAREE_ATTIRE_MARKERS = ("saree", "sari", "blouse")
+_OTHER_ATTIRE_MARKERS = (
+    "gown",
+    "suit",
+    "blazer",
+    "western",
+    "cocktail",
+    "shirt",
+    "jeans",
+    "lehenga",
+    "anarkali",
+    "kurta",
+    "indo-western",
+    "indo western",
+)
+_SAREE_RELEVANT_ORNAMENT_MARKERS = (
+    "necklace",
+    "pendant",
+    "haar",
+    "haram",
+    "mangalsutra",
+    "mangal sutra",
+    "choker",
+    "neckpiece",
+    "neck piece",
+    "temple",
+    "long chain",
+    "mala",
+    "set",
+)
+
+
+def is_saree_blouse_relevant(
+    *,
+    ornament_type: str = "",
+    ornament_types=None,
+    dress: str = "",
+    prompt: str = "",
+) -> bool:
+    """
+    Blouse+saree attire hint is only for relevant ornament/attire context.
+    If dress/prompt already specifies another outfit, do not force saree+blouse.
+    """
+    attire_text = f"{dress or ''} {prompt or ''}".lower()
+    if any(marker in attire_text for marker in _SAREE_ATTIRE_MARKERS):
+        return True
+    if any(marker in attire_text for marker in _OTHER_ATTIRE_MARKERS):
+        return False
+
+    types = []
+    if ornament_type:
+        types.append(str(ornament_type))
+    if ornament_types:
+        types.extend(str(t) for t in ornament_types if t)
+    ornament_text = " ".join(types).lower()
+    return any(marker in ornament_text for marker in _SAREE_RELEVANT_ORNAMENT_MARKERS)
+
+
 REGENERATION_THEMED_INSTRUCTION = (
     "THEMED IMAGE REGENERATION LOCK: Keep this as a PRODUCT-ONLY themed image. "
     "Preserve the ornaments EXACTLY and keep the background/theme unless the user "
