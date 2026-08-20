@@ -8,4 +8,6 @@ from . import sitemap_views
 urlpatterns = [
     path("blog", sitemap_views.sitemap_blog, name="sitemap_blog"),
     path("blog/", sitemap_views.sitemap_blog, name="sitemap_blog_slash"),
+    path("landing-pages", sitemap_views.sitemap_landing_pages, name="sitemap_landing_pages"),
+    path("landing-pages/", sitemap_views.sitemap_landing_pages, name="sitemap_landing_pages_slash"),
 ]

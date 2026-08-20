@@ -4,6 +4,7 @@ URL configuration for homepage app
 from django.urls import path
 from . import views
 from . import blog_admin_views
+from . import landing_views
 
 urlpatterns = [
     # Public: Get all active before/after images (for frontend display)
@@ -51,4 +52,13 @@ urlpatterns = [
     # Public blogs (Published only)
     path('blog/', blog_admin_views.public_blog_list, name='public_blog_list'),
     path('blog/<slug:slug>/', blog_admin_views.public_blog_detail, name='public_blog_detail'),
+
+    # Public landing pages
+    path('landing-pages/nav/', landing_views.public_landing_nav, name='public_landing_nav'),
+    path('landing-pages/<str:page_type>/', landing_views.public_landing_list, name='public_landing_list'),
+    path(
+        'landing-pages/<str:page_type>/<slug:slug>/',
+        landing_views.public_landing_detail,
+        name='public_landing_detail',
+    ),
 ]
