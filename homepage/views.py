@@ -760,6 +760,43 @@ def get_default_page_content(slug):
             'compliance': {'heading': 'Compliance & Best Practices', 'paragraphs': ['Splash AI Studio follows globally recognized best practices for data protection, privacy, and secure software development.', 'We continuously review and improve our security posture to stay aligned with evolving industry standards.']},
             'cta': {'title': 'Have security questions?', 'subtitle': 'Our team is happy to answer any security or compliance questions you may have.', 'button_text': 'Contact Security Team'},
         },
+        'auth': {
+            'images': {
+                'small_url': '/images/login-1.jpg',
+                'small_alt': 'Diamond heart pendant',
+                'large_url': '/images/login-2.jpg',
+                'large_alt': 'Woman wearing luxury jewelry',
+            },
+            'login': {
+                'title': 'Login',
+                'subtitle': 'Stay connected with us to see magic',
+                'email_label': 'Email',
+                'email_placeholder': 'Example@email.com',
+                'password_label': 'Password',
+                'password_placeholder': 'At least 8 characters',
+                'forgot_password_text': 'Forgot Password?',
+                'submit_text': 'Sign in',
+                'no_account_text': "Don't have an account?",
+                'signup_link_text': 'Sign Up',
+            },
+            'signup': {
+                'title': 'Sign Up',
+                'subtitle': 'Create your account to get started',
+                'full_name_label': 'Full Name',
+                'full_name_placeholder': 'John Doe',
+                'username_label': 'Username',
+                'username_placeholder': 'johndoe123',
+                'email_label': 'Email',
+                'email_placeholder': 'Example@email.com',
+                'password_label': 'Password',
+                'password_placeholder': 'At least 8 characters',
+                'confirm_password_label': 'Confirm Password',
+                'confirm_password_placeholder': 'Confirm your password',
+                'submit_text': 'Go to verification',
+                'have_account_text': 'Already have an account?',
+                'login_link_text': 'Login',
+            },
+        },
     }
     return defaults.get(slug, {})
 
@@ -770,7 +807,7 @@ def get_default_page_content(slug):
 @api_view(['GET'])
 @csrf_exempt
 def get_page_content(request, slug):
-    """Public: Get CMS content for a page (home, about, vision_mission, tutorials, security, faqs, contact)."""
+    """Public: Get CMS content for a page (home, about, vision_mission, tutorials, security, faqs, contact, auth)."""
     try:
         content = get_resolved_page_content(slug)
         return JsonResponse({'success': True, 'content': content}, status=200)
