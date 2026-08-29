@@ -515,10 +515,14 @@ def get_resolved_page_content(slug):
     defaults = get_default_page_content(slug)
     if not defaults:
         doc = PageContent.objects(page_slug=slug).first()
-        return doc.content if doc else {}
-    doc = PageContent.objects(page_slug=slug).first()
-    stored = doc.content if doc else {}
-    return _deep_merge_content(defaults, stored)
+        content = doc.content if doc else {}
+    else:
+        doc = PageContent.objects(page_slug=slug).first()
+        stored = doc.content if doc else {}
+        content = _deep_merge_content(defaults, stored)
+    if slug == 'auth':
+        return _sanitize_auth_content(content)
+    return content
 
 
 def get_default_page_content(slug):
@@ -762,10 +766,10 @@ def get_default_page_content(slug):
         },
         'auth': {
             'images': {
-                'small_url': '/images/login-1.jpg',
-                'small_alt': 'Diamond heart pendant',
-                'large_url': '/images/login-2.jpg',
-                'large_alt': 'Woman wearing luxury jewelry',
+                'small_url': '',
+                'small_alt': '',
+                'large_url': '',
+                'large_alt': '',
             },
             'login': {
                 'title': 'Login',
@@ -847,7 +851,11 @@ def update_page_content(request, slug):
         content = data.get('content')
         if content is None:
             return JsonResponse({'success': False, 'error': 'content is required'}, status=400)
+        if slug == 'auth' and isinstance(content, dict):
+            content = _sanitize_auth_content(content)
         doc = PageContent.objects(page_slug=slug).first()
+        if slug == 'auth':
+            _replace_auth_media(doc.content if doc else {}, content)
         if doc:
             doc.content = content
             doc.save()
@@ -936,6 +944,81 @@ def _save_homepage_local_image(file_obj, folder='homepage/public_gallery'):
     base_dir = os.path.join(str(settings.MEDIA_ROOT), *parts)
     absolute_path = save_uploaded_file(file_obj, base_dir)
     return to_media_db_path(absolute_path)
+
+
+STATIC_AUTH_IMAGE_URLS = frozenset({
+    '/images/login-1.jpg',
+    '/images/login-2.jpg',
+})
+
+
+def _is_static_auth_image(url):
+    path = str(url or '').strip().split('?')[0]
+    if path in STATIC_AUTH_IMAGE_URLS:
+        return True
+    return path.endswith('/login-1.jpg') or path.endswith('/login-2.jpg')
+
+
+def _sanitize_auth_content(content):
+    """Auth images are CMS-only — never fall back to the old static JPGs."""
+    if not isinstance(content, dict):
+        return {}
+    sanitized = dict(content)
+    images = dict(sanitized.get('images') or {})
+    for key in ('small_url', 'large_url'):
+        if _is_static_auth_image(images.get(key)):
+            images[key] = ''
+    sanitized['images'] = images
+    return sanitized
+
+
+def _replace_auth_media(old_content, new_content):
+    """Delete previous uploaded media files when an auth image slot is replaced."""
+    old_images = (old_content or {}).get('images') or {} if isinstance(old_content, dict) else {}
+    new_images = (new_content or {}).get('images') or {} if isinstance(new_content, dict) else {}
+    for key in ('small_url', 'large_url'):
+        old_url = old_images.get(key)
+        new_url = new_images.get(key)
+        if old_url and old_url != new_url:
+            _delete_local_media_if_owned(old_url)
+
+
+def _optimize_and_save_content_image(file_obj, folder='homepage/content', max_width=1200):
+    """Resize and convert CMS uploads to WebP so login/signup images stay small."""
+    from PIL import Image, ImageOps
+
+    try:
+        max_width = int(max_width or 1200)
+    except (TypeError, ValueError):
+        max_width = 1200
+    max_width = max(320, min(max_width, 1600))
+
+    try:
+        file_obj.seek(0)
+        with Image.open(file_obj) as src:
+            img = ImageOps.exif_transpose(src)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                rgba = img.convert('RGBA')
+                background = Image.new('RGB', rgba.size, (14, 13, 9))
+                background.paste(rgba, mask=rgba.split()[-1])
+                img = background
+            else:
+                img = img.convert('RGB')
+            if img.width > max_width:
+                height = max(1, int(round(img.height * (max_width / float(img.width)))))
+                img = img.resize((max_width, height), Image.Resampling.LANCZOS)
+            parts = [p for p in str(folder or 'homepage/content').replace('\\', '/').split('/') if p]
+            base_dir = os.path.join(str(settings.MEDIA_ROOT), *parts)
+            os.makedirs(base_dir, exist_ok=True)
+            dest = os.path.join(base_dir, f"{uuid.uuid4().hex}.webp")
+            img.save(dest, format='WEBP', quality=78, method=6)
+            return to_media_db_path(dest)
+    except Exception:
+        try:
+            file_obj.seek(0)
+        except Exception:
+            pass
+        return _save_homepage_local_image(file_obj, folder=folder)
 
 
 def _copy_local_file_to_media(local_path, folder='homepage/public_gallery'):
@@ -1520,7 +1603,14 @@ def upload_content_image(request):
         file = request.FILES.get('image') or request.FILES.get('file')
         if not file:
             return JsonResponse({'success': False, 'error': 'No image file provided'}, status=400)
-        url = _save_homepage_local_image(file, folder='homepage/content')
+        max_width = request.POST.get('max_width')
+        if not max_width and hasattr(request, 'data') and isinstance(request.data, dict):
+            max_width = request.data.get('max_width')
+        url = _optimize_and_save_content_image(
+            file,
+            folder='homepage/content',
+            max_width=max_width,
+        )
         return JsonResponse({'success': True, 'url': url}, status=200)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
